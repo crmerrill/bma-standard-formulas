@@ -1,0 +1,65 @@
+SF-16
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+2. Specifying Mortgage Default Assumptions: Standards and Definitions
+Introduction
+The prepayment calculations discussed in Section B.2. derive monthly prepayment rates
+(SMM) from a vector of pool factors (F) over time. In other words, a prepayment rate is
+derived from actual performance data.
+The Default Standards are intended to be used for projecting cash flows, not for deriving historical default rates from actual performance data. In other words, we start with a Monthly
+Default Rate (MDR) and use it to calculate New Defaults (NEW DEF) in a given month.
+Default Analysis Standards and Definitions
+a.
+
+Default analysis is intended to model defaults only, not delinquencies. Delinquent loans
+that are cured will not be part of this analysis. For this purpose, a loan in default is one
+that no longer pays principal and interest and then remains delinquent until liquidated.
+
+b.
+
+Default analysis specifies default rates, not loss rates. Loss rates (i.e., “Loss Severities”)
+are specified separately.
+
+c.
+
+The default rate in a given month is specified as a percentage of the aggregate performing balance of all loans still outstanding at the end of the prior month, before taking into
+account the current month’s scheduled amortization.
+
+d.
+
+Prepayment rates and default rates are specified separately. Total unscheduled principal
+received will then be the sum of Voluntary Prepayments and Principal Recoveries from
+liquidations.
+
+e.
+
+The prepayment rate in a given month is specified as a percentage of the aggregate performing balance of all loans still outstanding at the end of the prior month, after removing the current month’s scheduled amortization. Prepayments will still be deemed to
+have a scheduled component, whereas the default balance is computed before taking into
+account the current month’s amortization. Voluntary Prepayments are constrained by
+the following condition: Actual Amortization plus New Defaults plus Voluntary
+Prepayments cannot exceed the prior period’s Performing Balance. (If they do, then cap
+Voluntary Prepayments such that the current period’s Performing Balance is zero.)
+
+f.
+
+When performing default analysis, in addition to specifying default rates, the following
+assumptions must be specified:
+
+• Time to Liquidation after the loan first misses a payment (“0 months to
+•
+•
+
+Liquidation” means that liquidation proceeds are received in the month the loan
+first becomes delinquent).
+Loss Severity or Loss Severity curve. “Loss Severity” is defined as a loss amount
+divided by the principal balance of the loan at the time it goes into default. A
+“Loss Severity curve” is a vector of different loss severities over time.
+Whether or not P&I are advanced in the structure. If P&I are advanced, they are
+assumed to be advanced every month through to liquidation.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

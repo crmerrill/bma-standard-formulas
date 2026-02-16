@@ -1,0 +1,82 @@
+SF-44
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+If the following types of mortgage securities are issued on March 1, and if every full calendar
+month is counted as 30 days, then the delays are as follows:
+Pass-Through
+Type
+
+First Payment Assumed
+Due From Homeowners
+
+Ginnie Mae I
+Ginnie Mae II
+Fannie Mae
+Freddie Mac NONGOLD
+Freddie Mac GOLD
+
+April 1
+April 1
+April 1
+April 1
+April 1
+
+First Payment
+Due to Investors
+
+Actual
+Delay
+
+Stated
+Delay *
+
+April 15
+April 20
+April 25
+May 15
+April 15
+
+14 days
+19 days
+24 days
+44 days
+14 days
+
+45 days
+50 days
+55 days
+75 days
+45 days
+
+No conclusions can be drawn concerning the delay of a principal-only CMO bond, and
+hence the ownership period corresponding to a particular payment, absent explicit disclosure
+by the issuer. This information is generally available from the issuer for new issues.
+
+F. Settlement-Based Calculations
+1. General Rules
+For all mortgage pass-throughs and mortgage strips, prospective quotations of yield, duration and average life should be based on the actual settlement date of the transaction or, if
+not otherwise specified, The Bond Market Association standard settlement date for the quoted delivery month. However, if the quotations are made later than two business days before
+the standard settlement date, for delivery in the same month, then settlement should be
+assumed to occur either two business days later or on the last business day of the month,
+whichever is sooner. In all cases, calculations involving yields or durations should incorporate the correct amount of accrued interest.
+CMOs and Asset-Backed Securities (ABSs) should continue to follow corporate settlement
+rules.
+Comparisons between current and historical market quotations should be made on a consistent basis (first-of-month vs. first-of-month, for example, or settlement-date vs. settlementdate). The basis of comparison should be disclosed if it would otherwise be a source of
+ambiguity or confusion.
+a.
+
+Settlement Amount
+The amount payable by the buyer to the seller on the settlement date is known as the
+settlement amount, net proceeds or total cost, and is the sum of the principal amount
+and accrued interest:
+COST = [ PRINCIPAL AMOUNT ] + [ ACCRUED INTEREST ] .
+
+* These stated delays would be 44, 49, 54 and 74 days, respectively, under the alternate convention in which the accrual date itself
+is not counted.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

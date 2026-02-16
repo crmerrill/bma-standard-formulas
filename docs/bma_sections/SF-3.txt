@@ -1,0 +1,69 @@
+SF-3
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+B. Prepayments
+1. Cash Flows
+For a level-payment fixed-rate mortgage pool with gross weighted-average coupon C%, current weighted-average remaining term M months, and M0-M months elapsed since origination, the amortized loan balance (as a fraction of par) is
+BAL =
+
+1 – (1 + C 1200)
+1 – (1 + C 1200)
+
+−M
+
+−M 0
+
+and the scheduled gross monthly payment (also as a fraction of par) is
+GROSS MORTGAGE PAYMENT = PRINCIPAL + INTEREST
+= ( BAL1 − BAL 2 ) + ( BAL1 * C 1200)
+=
+
+C 1200
+1 – (1 + C 1200) −M 0 .
+
+The net payment passed through to investors consists of the scheduled gross payment above,
+plus unscheduled prepayments, minus a servicing fee of BAL1 * S/1200, where the servicing
+percentage (S) is the difference between the gross coupon (C) and the net pass-through
+coupon of the security.
+The pool factor (F) expresses the principal remaining in the pool each month as a fraction of
+the original face amount. The survival factor (F/BAL) represents the fraction of $1.00 unit
+loans remaining in the pool from those originally present at issuance:
+
+POOL FACTOR = SURVIVAL FACTOR * AMORTIZED LOAN BALANCE.
+By convention, mortgage-related security analysis assumes that all prepayments are whole
+prepayments on $1.00 unit loans within the pool.
+The cash flows of more complex mortgage securities (CMO bonds, Graduated-Payment
+Mortgages, Adjustable-Rate Mortgages, etc.) are governed by specific contractual features
+not addressed here.
+Example: A mortgage pass-through is issued with a net coupon of 9.0%, a gross coupon of
+9.5% and a term of 360 months. If prepayments for the first month are 0.00025022 (as a
+fraction of par), then the first cash flow paid to investors will consist of the following
+components:
+(1) Scheduled Amortization
+
+=
+
+0.00049188,
+
+(2) Unscheduled Prepayments =
+
+0.00025022,
+
+(3) Gross Mortgage Interest
+
+=
+
+0.00791667,
+
+(4) Servicing Fee
+
+=
+
+0.00041667,
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

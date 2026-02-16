@@ -1,0 +1,126 @@
+SF-50
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+P
+CF1
+CF2
+CF3
+CFK
+CF360
+Yield
+Mortgage Yield
+Average Life
+Duration
+Modified Duration
+Cash-Flow Convexity
+
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+
+100.0000,
+0.8242,
+0.8491,
+0.8738,
+... ,
+0.0562,
+9.10675%,
+8.93863%,
+9.77844 years,
+5.73147 years,
+5.48186 years,
+54.4326 years2 (or 0.544326).
+
+In addition, if a variable prepayment-rate model were estimating prices of 99.453 and
+100.541 for yield shifts of 10 basis points up and down, respectively, then Effective
+Duration and Effective Convexity would be the numbers satisfying the equations
+2
+
+0.10
+1
+ 0.10  
+99.453 ≈ 100.000 1 − ( Eff. Dur.)
++ ( Eff. Conv.) 
+ 
+ 100   ,
+100
+2
+
+
+2
+
+−0.10
+1
+ −0.10  
++ ( Eff. Conv.) 
+100.541 ≈ 100.000 1 − ( Eff. Dur.)
+ 
+ 100   .
+100
+2
+
+
+
+The simultaneous solution is
+Effective Duration
+Effective Convexity
+
+≈
+≈
+
+5.44 years,
+−60.0 years 2 (or − 0.600) .
+
+If the security is sold three months later at an identical yield, with an assumed bondequivalent reinvestment rate of R = 8% for the three pass-through cash flows, then
+2 ( T − T1 )
+
+PT = (Sale Price)( Pool Factor ) + CF1 (1 + R 200)
+
+2 ( T −T2 )
+
++ CF2 (1 + R 200)
+
+2 ( T −T3 )
+
++ CF3 (1 + R 200)
+
+2 (90− 44 ) /360
+
+= (99.9934)(0.99701075) + 0.8242(1.04)
+
+2 (90−74 ) /360
+
++ 0.8491(1.04)
+
+2 (90−104 ) /360
+
++ 0.8738(1.04)
+= 102.2502 ,
+
+Total Rate of Return
+
+=
+
+9.102%,
+
+Total Percentage Return
+
+=
+
+2.250%.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

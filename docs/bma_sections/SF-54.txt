@@ -1,0 +1,72 @@
+SF-54
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+Yield of Index:
+
+[
+
+2
+
+YIndex = 200 (1 + 10.1875 400) − 1
+
+]
+
+Result: 10.31723%
+
+YTM Spread:
+Y – YIndex = 10.76838% − 10.31723%
+
+Result: 45.11 basis points
+
+Discounted Margin:
+P =
+
+CF1
+CF2
++
+ I1 + DM 168 
+ I1 + DM 168   I 2 + DM 181 
+1 + 100 * 360 
+1 + 100 * 360  * 1 + 100 * 360 
+
+
+
+ 
+
+
+I1 = I 2 = 10.1875
+
+Result: 56.89 basis points
+3. Putable Project Loans
+Certain Federal Housing Administration (FHA) project loans contain provisions allowing the
+holders of the loans to put them back to the Department of Housing and Urban Development
+(HUD) in exchange for a ten-year current-coupon FHA debenture. The current coupon is
+defined as an average ten-year Treasury rate. The face amount of the debenture is the remaining balance of the loan on the put date. The put feature can be exercised for one year beginning in the month following 20 years after the final endorsement date on the loan.
+The following assumptions apply to yield and average-life calculations for putable project
+loans:
+a.
+
+Although the debentures carry a ten-year current coupon and are backed by the full
+faith and credit of the U.S. Government, it is uncertain what the market value of the
+debentures will be immediately after they are issued. The standard assumption has been
+that the debentures trade roughly 60 basis points above the ten-year Treasury, equating
+to a dollar price of 96. In lieu of a specific yield assumption, the put price of the remaining project loan balance should therefore be assumed to be 96, unless explicitly stated
+otherwise.
+
+b.
+
+The final endorsement date of a project loan may be before or after the origination of
+the loan. Therefore, a standard put date cannot be assumed (e.g., 20 years after loan
+origination). The put date used for calculations should be stated explicitly.
+
+c.
+
+Once a put is declared to FHA, the agency is responsible for paying accrued interest on
+the debentures starting from the put date itself. Therefore, the debentures should be val-
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

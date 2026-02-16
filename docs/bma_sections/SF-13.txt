@@ -1,0 +1,71 @@
+SF-13
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+If desired, one can then convert these SMM rates into CPR or PSA according to the usual
+formulas. (See Section B.2.)
+For purposes of describing an empirical prepayment pattern over a selected historical period,
+the appropriate ABS speed is the one whose monthly prepayment rates give the correct
+cumulative paydown for the period. The following formula provides the correct historical
+ABS speed for any time interval in which the loan age, pool factor and amortized loan balance (as a fraction of par) changed from AGE1, F1, BAL1 to AGE2, F2, BAL2:
+ABS = 100
+
+(F F ) − ( BAL BAL )
+AGE ( F F ) − AGE ( BAL BAL ).
+2
+
+1
+
+2
+
+1
+
+1
+
+2
+
+1
+
+2
+
+1
+
+2
+
+The size of the pool at origination is not required. BAL may be calculated as in Section B.1.
+Example: For a pool of 36-month car loans issued 1/1/89 with an original WAM of 34
+months, a prepayment speed of 2% ABS for 9/89 would correspond to
+SMM =
+
+100 * 2
+= 2.5000%.
+100 – 2 * (11 –1)
+
+If the gross WAC of the pool is 10.00% and the 10/1/89 factor is 0.64140448, then the average prepayment speed over the nine-month life of the pool is
+ 1 – (1 + 10 1200)–34 
+
+
+ 1 – (1 + 10 1200)–25 
+
+
+= 1.7000%.
+ABS = 100
+–34
+ 1 – (1 + 10 1200) 
+ 1.00000000 
+11 
+ − 2 
+–25 
+
+ 0.64140448 
+ 1 – (1 + 10 1200) 
+ 1.00000000 
+
+ −
+ 0.64140448 
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

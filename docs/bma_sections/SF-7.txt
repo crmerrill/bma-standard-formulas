@@ -1,0 +1,33 @@
+SF-7
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+This allows us to calculate
+Amortization = F1 − Fsched = 0.00047916,
+Prepayments = Fsched − F2 = 0.00370427,
+SMM = 100
+
+0.00370427
+= 0.435270%,
+0.85102709
+
+  SMM  12 
+CPR = 100 1 − 1 −
+  = 5.1000%.
+100  
+ 
+
+
+With respect to the underlying 360-month mortgages, 2/88 was month 1, so 6/89 counts
+as month 17. Therefore,
+PSA = 100 *
+
+CPR
+= 150.00%.
+min {0.2 * MONTH 6.0}
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

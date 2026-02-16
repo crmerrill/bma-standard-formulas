@@ -1,0 +1,62 @@
+SF-47
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+Example:
+Factor Dates - 1/1, 2/1, 3/1, etc.
+Record Dates - 1/14, 2/14, 3/14, etc.
+Settlement Date - 2/15 to 3/14
+Accrued Interest calculation - days from Settlement Date to 3/15
+(always at least one day of accrued interest)
+A holder of record on 2/14 (the seller) receives principal and interest from Freddie Mac
+on 3/15. The dollar amounts are determined by the following formulas, where F(m/d)
+denotes the factor as of a date, FACE denotes the original face amount, and
+COUPON(m/d) denotes the annual coupon rate in percent as of a date:
+
+[
+
+]
+
+Principal = F (1 1) − F (2 1) * FACE,
+Interest = F (1 1) * FACE * COUPON (2 15)/1200.
+
+G. Yield and Yield-Related Measures
+1. General Rules
+All mortgage-related yields, durations, convexities and holding-period returns should be calculated uniformly on a semiannual-compounding basis, regardless of the frequency of the
+actual cash flows used in computing these measures.* The correct computations are specified
+in detail below.
+a.
+
+Bond-Equivalent Yield (or Semiannual Yield or simply Yield) is the number Y, which satisfies the equation
+P =
+
+CF1
+CF2
++
++ ... ,
+2T1
+(1 + Y 200)
+(1 + Y 200) 2T2
+
+where P is the dollar price of the security (including the correct accrued interest), CFK
+is the cash flow received by the investor at time TK after settlement (measured in years,
+on a 30/360 calendar basis, including actual delay days), and the sum is over all future
+cash flows K=1,2,... . Unlike the standard definitions of yield for government, municipal
+and corporate bonds, the standard for mortgage-related securities is free of exceptional
+cases for single- or odd-coupon periods.
+b.
+
+Mortgage Yield or Monthly Yield: If clearly labeled, yield may also be quoted on a monthly compounding basis:
+Mortgage Yield = 1200
+
+[ (1+ Y 200) − 1 ] .
+16
+
+* In certain instances, semiannual computations are undefined for overnight investments. These are more appropriately analyzed
+using money-market formula standards.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

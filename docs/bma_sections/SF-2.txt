@@ -1,0 +1,21 @@
+SF-2
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+A. Computational Accuracy
+Many common calculations for mortgage-related securities (yields, durations, prepayment rates,
+etc.) require the calculation of a large number of intermediate quantities (cash flows, principal
+balances, etc.). All intermediate calculations should be carried out to their full precision, preserving at least ten significant digits of accuracy. This will generally require double-precision computer arithmetic. The only quantities that should be assigned an integer variable type are those
+that represent whole numbers of days, months or years.
+Only when all computations are complete should the final values be rounded for display. Results
+may be shown to any desired number of decimal places, provided that the last digit presented has
+been obtained by rounding and not by truncating the complete figure.
+The numerical examples that appear throughout the document are intended to provide simple
+checks against improper implementation of the Standard Formulas, not an exhaustive set of
+benchmarks that would guarantee conformance.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

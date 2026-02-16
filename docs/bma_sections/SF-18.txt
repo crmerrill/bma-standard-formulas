@@ -1,0 +1,62 @@
+SF-18
+
+
+The Bond Market Association
+
+AM DEF(i)
+
+Uniform Practices/Standard Formulas
+
+= Amortization from Defaults
+If P&I are advanced:
+= (NEW DEF(i) + FCL(i–1) – ADB(i)) * [1–SCH AM(i)/SCH AM(i–1)]
+or if P&I are not advanced:
+=0
+
+ACT AM(i)
+
+= Actual Amortization
+= (PERF BAL(i–1) – NEW DEF(i)) * [1 – SCH AM(i)/SCH AM(i–1)]
+
+EXP INT(i)
+
+= Expected Interest
+= (PERF BAL(i–1) + FCL(i–1)) * Net Mortgage Rate
+
+LOST INT(i)
+
+= Interest Lost
+= (NEW DEF(i) + FCL(i–1)) * Net Mortgage Rate
+
+ACT INT(i)
+
+= Actual Interest
+= EXP INT(i) – LOST INT(i) = (PERF BAL(i–1) – NEW DEF(i))
+
+* Net Mortgage Rate
+PRIN RECOV(i) = Principal Recovery
+= MAX [ADB(i) – PRIN LOSS(i) ; 0]
+PRIN LOSS(i)
+
+= Principal Loss
+= MIN [NEW DEF(i – months until recovery) * Severity Rate ; ADB(i)]
+
+ADB(i)
+
+= Amortized Default Balance in Recovery Month
+If P&I are advanced:
+= NEW DEF(i – months until recovery)
+
+* [SCH AM(i–1)/SCH AM(i–1–months until recovery)]
+or if P&I are not advanced:
+= NEW DEF(i – months until recovery) * 1
+MDR(i)
+
+= Monthly Default Rate
+
+SMM(i)
+
+= Monthly Prepayment Rate
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

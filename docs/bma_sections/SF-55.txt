@@ -1,0 +1,78 @@
+SF-55
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+ued as if received on the put date, regardless of scheduled loan payment dates or payment delay.
+Example: Suppose an FHA project loan pass-through has the following characteristics:
+Gross Coupon
+
+=
+
+7.50%
+
+Net Coupon
+
+=
+
+7.43%
+
+Actual Delay
+
+=
+
+24 days
+
+Original Term
+
+=
+
+40 years
+
+Origination Date
+
+=
+
+2/1/79
+
+Put Date
+
+=
+
+6/1/99
+
+Put calculations should then be based on the investor’s receiving the 6/99 principal balance (valued at 96%, paid on the put date) plus 100% of the final pass-through cash
+flow (the principal and interest for 5/99, paid on 6/25/99 according to the scheduled
+delay). These represent standard valuation assumptions, not actual cash flows. If the
+security trades at 85 for settlement on 2/1/89, then
+Yield to Put
+
+=
+
+9.77078%,
+
+Average Life to Put
+
+=
+
+9.72452 years.
+
+H. Accrual Instruments
+1. Average Life of Accrual Instruments
+For CMO Z-bonds, Graduated-Payment Mortgages (GPMs) or Adjustable-Rate Mortgages
+(ARMs) with capped payments, principal balances can increase over the life of the bonds.
+Interest accrued (but not paid out) for a payment period is treated as a negative principal
+payment, occurring on the payment date for that period. This is consistent with the accepted
+definition of the net cash flow on a payment date as the sum of
+(1) simple interest due on the principal balance for the full payment period
+and
+(2) a return of principal (positive or negative).
+No portion of the cash flow is treated as interest-on-interest. Instead, there is a formal conversion of accrued interest to loan principal on payment dates (negative amortization).
+It follows that at the end of every payment period, one should first compute the value of
+“(1)” and then subtract it from the net cash flow on the payment date to obtain the correct
+value of “(2).” The outstanding principal balance changes by amount “(2),” and only on payment dates, not daily.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

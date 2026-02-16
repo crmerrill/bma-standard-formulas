@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bma-standard-formulas"
+version = "0.3.1"
+description = "BMA Standard Formulas for mortgage cash flows, prepayments, and defaults"
+readme = "README.md"
+license = { text = "GPL-2.0-only" }
+requires-python = ">=3.12"
+authors = [
+    { name = "Daniel Akiva" },
+    { name = "Idriss Maoui" },
+    { name = "Charles R. Merrill" },
+]
+keywords = ["bma", "mortgage", "cashflow", "prepayment", "default", "standard-formulas"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "numpy",
+    "scipy",
+]
+
+[project.urls]
+Repository = "https://github.com/crmerrill/bma-standard-formulas"
+Documentation = "https://github.com/crmerrill/bma-standard-formulas#readme"
+
+[tool.setuptools.packages.find]
+where = ["src"]

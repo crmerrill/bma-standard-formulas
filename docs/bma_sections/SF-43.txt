@@ -1,0 +1,43 @@
+SF-43
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+E. Day Counts
+1. Calendar Basis
+The number of days from M1/D1/Y1 to M2/D2/Y2 on a 30/360 calendar basis is computed
+according to the following algebraic procedure:
+If M1 is 2 and D1 is 28 in a nonleap year (or 29 in a leap year), then change D1 to 30.
+If D1 is 31, change D1 to 30.
+If at this point D1 is 30 and D2 is 31, change D2 to 30.
+Then, the number of days is
+N = max {360 * (Y2 − Y1 ) + 30 *(M 2 − M1 ) + (D2 − D1 ),0}
+
+The computation draws no distinctions among business days, holidays and weekends.
+These conventions shall apply for both accrued interest and yield calculations on all fixedrate, mortgage-backed securities, unless explicitly stated otherwise.
+Floating-rate and short-term instruments may be quoted on either a Money Market or a
+Bond-Equivalent Yield basis, following Section G.2. Money Market accounting makes use of
+the actual number of days from M1/D1/Y1 to M2/D2/Y2, including the former but not the
+latter, with the day count then divided by 360.
+2. Delay Days
+
+Delay refers to the length of time from the end of an interest-accrual period to the actual
+payment of the interest due. The “stated delay” of a mortgage-backed, pass-through security
+also includes the time during which interest accrues, and sometimes the accrual date itself.
+Ginnie Mae and Freddie Mac include the accrual date in their documentation of securities;
+Fannie Mae does not.
+The yield, duration and average life of a pass-through should be calculated and expressed in
+terms of its actual cash-flow delay, defined as the difference between (1) the date a payment
+is assumed to be made to investors and (2) the date the payment is assumed to be received
+from homeowners, assuming 30-day months.
+Market practice for CMOs and derivatives has been to use actual delay. The adoption of
+actual delay as the standard for pass-throughs, and the continuation of the use of actual
+delay for CMOs and derivatives, will bring greater uniformity to the mortgage market.
+Delay days will be assumed to be “actual” unless labeled as “stated,” and stated delay should
+always be accompanied by a disclosure of the actual delay. Stated delay may also be called,
+simply, “days to first payment.”
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

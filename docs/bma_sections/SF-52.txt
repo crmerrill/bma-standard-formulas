@@ -1,0 +1,66 @@
+SF-52
+
+
+The Bond Market Association
+
+b.
+
+Uniform Practices/Standard Formulas
+
+The DM represents the increment over the index rate that causes the settlement price of
+a floating-rate security to equal the discounted present value of its cash flows, with
+yield-compounding frequency matching the security payment schedule. As in the YTM
+Spread calculation, the DM uses assumed future values for the index rate (which must
+be specified if not equal to the current level). The DM is more general than the YTM
+Spread, however, in that the DM allows for varying interest-rate scenarios and the YTM
+Spread does not. At the same time, the DM is less general than the YTM Spread in that
+DMs cannot be compared for securities with different payment frequencies, while YTM
+Spreads can. The full equation defining DM is
+CF1
+CF2
++
+ I1 + DM
+
+ I1 + DM
+  I 2 + DM
+
+1 + 100 * (T1 − T0 )
+1 + 100 * (T1 − T0 ) * 1 + 100 * (T2 − T1 )
+
+
+
+ 
+
+CF3
++
+ I1 + DM
+  I 2 + DM
+  I 3 + DM
+
+1 + 100 * (T1 − T0 ) * 1 + 100 * (T2 − T1 ) * 1+ 100 * (T3 − T2 )
+
+ 
+ 
+
+
+P =
+
++ ... ,
+
+where P is the dollar price of the security (including the correct accrued interest), CFK is
+the cash flow received by the investor at time TK (measured in years, and where T0 is
+settlement day), IK is the assumed index rate from time TK -1 to time TK (with gross-up
+calendar conversion as described in (2) above, as appropriate, but without semiannual
+compounding conversion), and the sum is over all future cash flows K = 1,2,... .
+Ordinarily, the TK will be computed on the same calendar basis as the cash flows.
+However, it is sometimes necessary to compare two securities whose payment frequencies are the same but whose cash flows are determined by different calendar bases. The
+TK must be computed on the same calendar basis for both. Quotations should always
+specify which calendar basis is being used.
+Example: Each March 1 and September 1, a hypothetical FRCMO pays the interest
+accrued during the six-month period ending one month prior to the payment date, computed on an ACTUAL/ACTUAL calendar basis, using a rate that resets monthly to 50 basis
+points above the three-month LIBOR level on the second business day prior to the first of
+that month. Assume that the security trades at 99 for settlement on 3/17/89, with threemonth LIBOR at 10-3/16%. Assume further that LIBOR was 9-3/8% on 1/30/89 and 1015/16% on 2/27/89, and that half the principal is repaid on 9/1/89 and half on 3/1/90.
+All calculations will use the same cash flows:
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

@@ -1,0 +1,71 @@
+SF-21
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+100% SDA is represented graphically as follows:
+
+Annualized Default Rate
+Peak
+
+Annual Default Rate (%)
+
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+
+Tail
+0.0
+
+0
+
+2
+
+4
+
+6
+
+8
+
+10
+
+12
+
+14
+
+16
+
+18
+
+20
+
+22
+
+24
+
+26
+
+28 * 30
+
+Year of Mortgage Life
+* Last 12 months are at a 0% default rate assuming 12 months to liquidation for 30-year loans. (See Section C.3.j.)
+
+5. Use of the SDA for Products Other Than 30-Year Conventional Mortgages
+The SDA was designed for use with fully amortizing residential mortgages with a term of at
+least 15 years. It was not intended to be used with other securitized products, e.g., balloon
+mortgages, commercial mortgages, home equity loans or any nonmortgage assets such as
+auto loans and credit card receivables.
+6. Numerical Examples of SDA
+Sample Cash Flows
+The following two sample cash-flow tables were computed using new 30-year loans with an
+8% WAC, 12-month recovery period, 20 percent loss severity and servicer advances. Further,
+Cash Flow A illustrates 1% Monthly Prepayments (1% SMM) with a 1% Monthly Default
+Rate (1% MDR), and Cash Flow B illustrates 150% PSA Prepayments with 100% SDA.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

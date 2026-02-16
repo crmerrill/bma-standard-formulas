@@ -1,0 +1,62 @@
+SF-39
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+In some cases, the WAM that is released exceeds the time to final maturity of the pool. In
+these cases, the WAM should be set to MIN (updated WAM, time to maturity), where time to
+maturity is defined as the time between the as-of date and the pool maturity date.
+For Fannie Mae pools with “same-month” loan concentrations greater than 50%, the original
+WAM may be reported as one month greater than the original loan term for a given pool
+type. For consistency with other mortgage calculations, the first month of amortization
+should be based on the reported WAM.
+2. Mortgage Age
+As noted in Section B.3., prepayment calculations should be based on the most recently
+updated weighted-average loan age information (WALA) provided by the issuer or guarantor
+at the time the calculation is performed. The published WALA for a pool is the WALA as of a
+particular date. If the calculation is being performed as of a month other than the month to
+which the WALA applies, the WALA should be incremented or decremented by the number
+of months subsequent or prior to the WALA as-of month, respectively.
+Ginnie Mae releases updated WALA information on a quarterly basis, and as is the case with
+Ginnie Mae WAM updates, this information is reported with a lag. For pools issued before
+the third month prior to the month of the most recent WALA update, the WALA is as of four
+months prior to the month of the quarterly release, as shown in the table below:
+Month of Data Release
+January
+April
+July
+October
+
+For Pools Issued Prior To
+Previous October
+Previous January
+Previous April
+Previous July
+
+WAM Information Is As Of
+September
+December
+March
+June
+
+For pools issued during or subsequent to the third month prior to the start of the current
+quarter, the WALA is as of the pool’s issue date.
+To adjust the most recently updated WALA on a Ginnie Mae pool to the current month, the
+WALA should be incremented by the number of months subsequent to the as-of month for
+the WALA, as described below:
+Current WALA
+
+=
+
+most recent WALA update + (number of months between the as-of
+month of the WALA and the current date)
+
+For example, to adjust the WALA for the October 1993 tape for pools issued prior to July
+1993 to be consistent with the October 1993 factor, add four months to the WALA. For pools
+issued in July, August and September 1993, add three months, two months and one month,
+respectively.
+
+10/01/2000
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.
