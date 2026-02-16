@@ -1,0 +1,65 @@
+SF-38
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+D. Assumptions for Generic Pools
+l.
+
+Mortgage Maturity
+As noted in Section B.3., amortization of fixed-rate mortgage pools should be based on the
+most recent weighted-average maturity information (WAM or WARM) provided by the
+issuer or guarantor at the time the calculation is performed. The published WAM for a pool
+is the WAM as of a particular date. If the calculation is being performed as of a month other
+than the month to which the WAM applies, the WAM should be incremented or decremented by the number of months prior or subsequent to the WAM as-of month, respectively.
+If the issuer or guarantor of a particular pass-through security has not released an updated
+WAM, the most recently released WAM may be used as described in the preceding paragraph, adjusted as described therein for the time elapsed since the as-of date of the WAM.
+If the issuer or guarantor of a particular pass-through security has released neither updated
+nor original WAM information, then the remaining term to maturity should be used as a
+proxy.
+Fannie Mae and Freddie Mac provide updated WAM information on a monthly basis. Fannie
+Mae’s and Freddie Mac’s monthly WAM updates are as of the current month. Freddie Mac’s
+monthly WAM updates appear on its “quartile” tapes.
+Ginnie Mae provides updated WAM information on a quarterly basis. The as-of date for the
+reported WAM depends on when the pool was issued. For pools issued before the third
+month prior to the start of the current quarter, the WAM is as of four months prior to the
+month of the quarterly release, as described in the table below:
+Month of Data Release
+January
+April
+July
+October
+
+For Pools Issued Prior To
+Previous October
+Previous January
+Previous April
+Previous July
+
+WAM Information Is As Of
+September
+December
+March
+June
+
+For pools issued during or subsequent to the third month prior to the start of the current
+quarter, the WAM is as of the pool’s issue date.
+To adjust the most recently updated WAM on a Ginnie Mae pool to the current month, the
+WAM should be decremented by the number of months subsequent to the as-of month for
+the WAM, as described below:
+Current WAM
+
+=
+
+most recent WAM update – (number of months between the as-of
+month of the WAM and the current date)
+
+For example, to adjust the WAM for the October 1993 tape for pools issued prior to July
+1993 to be consistent with the October 1993 factor, subtract four months from the WAM.
+For pools issued in July, August and September 1993, subtract three months, two months and
+one month, respectively.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.
