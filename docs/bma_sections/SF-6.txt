@@ -1,0 +1,72 @@
+SF-6
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+For expositional purposes, AGE is defined as a point in time, whereas MONTH is
+defined as a span of time. Pool factors therefore are reported as of an AGE whereas
+prepayment rates are reported for a MONTH. When a mortgage loan is originated,
+AGE= 0. After MONTH=1, AGE = 1. The diagram below illustrates the distinction.
+Month 1
+Age: 0
+
+Month 2
+1
+
+Month 3
+2
+
+Month 4
+3
+
+. . .
+
+4
+
+. . .
+
+Mortgages in their first 30 months are commonly referred to as “new”; mortgages older
+than 30 months are considered “seasoned.”
+If the prepayment rate resulting from any of these calculations is either negative or
+unusually large, then there may be an error in one or both of the pool factors, or possibly in the coupon rate or term to maturity assumed for amortizing the mortgage balance. Such results must be taken with caution.
+Example: Suppose that for a Ginnie Mae I 9.0% pass-through issued 3/1/88 with a
+remaining term of 359 months, the 6/1/89 and 7/1/89 pool factors were
+F1 = 0.85150625
+
+and
+F2 = 0.84732282 ,
+
+respectively. How would one compute the prepayment speed for 6/89 using PSA?
+The amortized loan balance was
+BAL1 =
+
+1 − (1 + 9.5 1200)
+1 − (1 + 9.5 1200)
+
+−344
+−359
+
+= 0.99213300
+
+on 6/1/89, and was
+BAL 2 =
+
+1 − (1 + 9.5 1200)
+1 − (1 + 9.5 1200)
+
+−343
+−359
+
+= 0.99157471
+
+on 7/1/89, so with no June prepayments the 7/1/89 pool factor would have been
+Fsched = F1
+
+BAL 2
+= 0.85102709.
+BAL1
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

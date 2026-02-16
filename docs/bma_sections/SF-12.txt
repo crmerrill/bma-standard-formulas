@@ -1,0 +1,60 @@
+SF-12
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+To determine the average prepayment rate of the two pools over the first six months of 1989, first
+compute the actual final balance,
+1,000,000 (0.84732282) + 2,000,000 (0.98290230) = 2,813,127.42 ,
+
+and the scheduled final balance,
+1,000,000 (0.86925218)
+
++ 2,000,000 (0.99950812)
+
+1 – (1 + 9.5 1200)–343
+1 – (1 + 9.5 1200)–349
+1 – (1 + 9.5 1200)–353
+= 2,859, 330.23.
+1 – (1 + 9.5 1200)–359
+
+Then,
+1
+
+
+ 2,813,127.42  6 
+
+SMM avg = 100 1 – 
+= 0.271142% ,
+  2,859, 330.23  
+
+
+12
+
+
+ 2,813,127.42  6 
+
+CPR avg = 100 1 – 
+= 3.2056% ,
+  2,859, 330.23  
+
+
+
+and, by iterative trial-and-error,
+PSA avg = 212.02% .
+
+4. ABS Prepayment Rates for Asset Pools
+The ABS model defines an increasing sequence of monthly prepayment rates (SMM, the percentage
+of remaining loans that prepay each month), which corresponds to a constant absolute level of loan
+prepayments in all future periods. For a pool of new loans, the SMM sequence for X% ABS is equivalent to the prepayment each month of X% of the loans originally in the pool. For a pool of seasoned
+loans, however, this interpretation of the SMM sequence is generally not valid. To avoid possible confusion, the ABS speed and the age of the underlying loans (not the pool) should always be converted
+directly into a sequence of SMM rates according to the formula
+SMM =
+
+100 * ABS
+100 – ABS * ( MONTH –1).
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

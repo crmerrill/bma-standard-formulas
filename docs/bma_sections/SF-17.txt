@@ -1,0 +1,69 @@
+SF-17
+
+
+The Bond Market Association
+
+g.
+
+Uniform Practices/Standard Formulas
+
+The Loss Severity is applied to the balance of the loan as of the month it first went into
+default. The loss rate should include all costs: foreclosure costs, servicer interest
+advances and principal advances.
+If P&I are being advanced, the maximum principal amount that can be passed through
+to investors when the loan is finally liquidated is the balance of the loan when it became
+delinquent minus any principal that has been advanced.
+If P&I are not being advanced, then 0% loss severity (i.e., 100% recovery) will not
+include recovery of unpaid interest unless explicitly specified to the contrary.
+Note: With this definition and “Time to Liquidation” as defined above, 0 months to
+liquidation with 0% Loss Severity will produce the same total principal cash flow as
+Voluntary Prepayment, except that Scheduled Amortization is not broken out separately.
+(Also, if P&I are not being advanced, the default cash flow will not include the final
+month’s interest.)
+
+h.
+
+Because defaults are being specified as a percentage of the then outstanding Performing
+Balance, a higher prepayment assumption at a given default rate will result in lower
+cumulative defaults. Therefore, a table must be produced that shows cumulative defaults
+in a matrix format using the different default and prepayment rates employed in the
+analysis.
+
+i.
+
+A similar matrix of loss amounts should also be produced using the Loss Severity
+assumption.
+
+3. Standard Formulas for Computing Mortgage Cash Flows with Defaults
+The following formulas detail the calculations:
+PERF BAL(i)
+
+= Performing Balance in month i
+= PERF BAL(i–1) – NEW DEF(i) – VOL PREPAY(i) – ACT AM (i)
+
+NEW DEF(i)
+
+= New Defaults
+= PERF BAL(i–1) * MDR(i)
+
+FCL(i)
+
+= Loans in Foreclosure
+= (NEW DEF(i) + FCL(i–1) – ADB(i)) – AM DEF(i)
+
+SCH AM(i)
+
+= Amortization Schedule assuming no prepayments
+
+EXP AM(i)
+
+= Expected Amortization
+= (PERF BAL(i–1) + FCL(i–1) – ADB(i)) * [1–SCH AM(i)/SCH AM(i–1)]
+
+VOL PREPAY(i)
+
+= Voluntary Prepayments
+= PERF BAL(i–1) * [SCH AM(i)/SCH AM(i–1)] * SMM(i)
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

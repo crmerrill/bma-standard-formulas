@@ -1,0 +1,80 @@
+SF-19
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+Notes for clarification:
+a.
+
+“New Defaults” are the product of the default rate and prior period’s Performing
+Balance.
+
+b.
+
+“Voluntary Prepayments” are the product of the prepayment rate and the prior period’s
+Performing Balance, minus expected amortization from performing balance.
+
+c.
+
+Voluntary Prepayments and New Defaults are constrained by the following condition:
+Actual Amortization + New Defaults + Voluntary Prepayments cannot exceed the prior
+period’s Performing Balance. (See Section C. 2.e.)
+
+d.
+
+“Expected Amortization” is computed from the sum of the prior period’s Performing
+Balance and Loans in Foreclosure.
+
+e.
+
+Loans in Foreclosure do not include any loans that are liquidated in the current month.
+
+f.
+
+Expected Amortization and Amortization from Defaults are not computed for loans in
+their liquidation month. (This is a consequence of (d) and (e).)
+
+g.
+
+“Actual Amortization” is computed based on the prior period’s Performing Balance
+minus New Defaults.
+
+h.
+
+Principal Recovery is constrained by the following condition:
+If Amortization from Defaults is advanced, the maximum Principal Recovery amount is
+the loan balance when the loan went into foreclosure minus the cumulative amortization advanced until the loan was liquidated (i.e., the Amortized Default Balance in the
+liquidation month). (See Section C. 2.g.)
+
+i.
+
+Principal Loss is constrained by the following condition:
+If Amortization from Defaults is advanced, the maximum Principal Loss is the
+Amortized Default Balance in the liquidation month.
+
+j.
+
+Default rate is set to 0 for the last n months before the scheduled final maturity of the
+pool where n = Time to Liquidation.
+
+4. The Standard Default Assumption (SDA)
+A Standard Default Assumption (“100% SDA”) for performing default analysis will have the
+following characteristics:
+a.
+
+Rise from 0 to “peak” during the first 30 months of mortgage age;
+
+b.
+
+Remain constant at peak value for the next 30 months (i.e., months 30 to 60 are at peak
+value);
+
+c.
+
+Decline from “peak” to “tail” over the next 60 months (i.e., decline begins in month 61
+and reaches tail value in month 120);
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

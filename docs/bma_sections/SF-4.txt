@@ -1,0 +1,72 @@
+SF-4
+
+
+The Bond Market Association
+
+Pass-Through Principal
+Pass-Through Interest
+Pass-Through Cash Flow
+
+Uniform Practices/Standard Formulas
+
+=
+
+(1) + (2)
+
+=
+
+0.00074210,
+
+=
+
+(3) – (4)
+
+=
+
+0.00750000,
+
+=
+
+(1) + (2) + (3) – (4)
+
+=
+
+0.00824210.
+
+2. Mortgage Prepayment Models
+The prepayment rate of a mortgage pool may be expressed in a number of different ways.
+These measures are equally valid, although a particular method may be more useful in a
+given instance.
+a.
+
+The SMM (Single Monthly Mortality) rate of a mortgage pool is the percentage of the
+mortgage loans outstanding at the beginning of a month assumed to terminate during
+the month. That is, if in some month the initial and final pool factors are F1 and F2,
+respectively (as fractions of the original face amount), and the amortized loan balances
+are BAL1 and BAL2 (as fractions of par), then
+ BAL 2   SMM 
+F2 = F1 * 
+
+ * 1 −
+100  .
+ BAL1  
+
+An equivalent means of specifying a one-month prepayment rate is to separate the factor drop for the month (F1–F2) into scheduled and unscheduled principal payments. If
+there were no unscheduled prepayments during the month, then the factor for the end
+of the month would have been
+
+Fsched = F1
+
+BAL 2
+BAL1 .
+
+The quantity F1–Fsched represents amortization for the month, and Fsched–F2 represents
+early prepayment of principal. The one-month prepayment rate can then be defined as
+
+SMM = 100
+
+Fsched − F2
+Fsched .
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

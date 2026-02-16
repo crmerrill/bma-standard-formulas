@@ -1,0 +1,2 @@
+# Development dependencies (unittest is in the standard library)
+# Optional: no extra dev deps required for running tests

@@ -1,0 +1,61 @@
+SF-5
+
+
+The Bond Market Association
+
+b.
+
+Uniform Practices/Standard Formulas
+
+The CPR (Conditional Prepayment Rate or Constant Prepayment Rate) model is similar
+to SMM, except that it expresses the prepayment percentage as an annually compounded rate:
+12
+
+CPR
+ SMM 
+1 –
+ =1−
+
+100 
+100 .
+
+The terms “CPR” and “Monthly CPR” have sometimes been used to express prepayment
+rates on a monthly basis equivalent to the SMM. This is not recommended, and in the
+present document, “CPR” will refer exclusively to the annualized prepayment rate
+defined in the equation above.
+c.
+
+The Standard Prepayment Model of The Bond Market Association specifies a prepayment
+percentage for each month in the life of the underlying mortgages, expressed on an
+annualized basis. Thus, 100% PSA (Prepayment Speed Assumptions) assumes prepayment rates of 0.2% CPR in the first month following origination of the mortgage loans
+(not the pool) and an additional 0.2% CPR in each succeeding month until the 30th
+month. In the 30th month and beyond, 100% PSA assumes a fixed annual prepayment
+rate of 6.0% CPR. To calculate the prepayment rate for any specific multiple of PSA,
+adjust the annual prepayment rate at 100% PSA by that multiple. (For example, 200%
+PSA assumes prepayment rates equal to twice the CPRs from the 100% PSA model, on a
+pool-by-pool basis.) In general,
+ PSA
+
+CPR = min 
+* 0.2 * max 1,min {MONTH, 30} , 100  ,
+ 100
+
+
+{
+
+}
+
+where MONTH refers to the accrual period during which the age of the mortgage loans
+increases from MONTH – 1 to MONTH. If the loan age is computed as zero subsequent
+to pool-issue date, then for the purposes of the PSA calculations, MONTH equals 1 for
+all prior months. In the case of Freddie Mac and Fannie Mae pools with “same-month”
+loan concentrations greater than 50%, MONTH would equal 1 for the first two months
+of the pool. For Freddie Macs, these pools are identified by the WALA remaining at 0 for
+the first two months of the pool. For Fannie Maes, these pools are identified by the original WAM being one month greater than the original loan term for a given pool type.
+For example, an original WAM of 361 would be reported for a “CL” pool that has an
+original loan term of 360 months.
+These CPRs can then be converted into SMMs according to the formula from part (b.)
+above.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

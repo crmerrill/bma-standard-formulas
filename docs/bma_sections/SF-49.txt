@@ -1,0 +1,72 @@
+SF-49
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+where P0 and Y0 are the price and yield today, respectively, and P and Y are the corresponding new price and yield.
+When duration and convexity values are computed which do account for interest-sensitive
+cash flows in the above equation, reasonable care should be taken to distinguish these measures from their static cash-flow counterparts. (An adjective such as Option-Adjusted,
+Empirical, Effective or Implied would be appropriate.) For example, the Cash-Flow Convexity
+of a mortgage pass-through is always positive, while the Effective Convexity is frequently
+negative. Effective Duration should never be called Duration or Modified Duration.
+h.
+
+An investment of P0 today, resulting in a market value of PT after T years on the 30/360
+calendar, constitutes a Bond-Equivalent Total Rate of Return equal to
+
+[ (P P ) ( ) − 1 ] .
+1 2T
+
+200
+
+T
+
+0
+
+On a nonannualized basis, the Total Percentage Return (or Actual or Simple Total
+Return) is
+
+[
+
+]
+
+100 ( PT P0 ) − 1 .
+
+All cash flows to which the holder would be entitled, as the owner of record during the
+holding period, are included. Cash flows not coinciding with the first or last day of the
+holding period should be compounded (or discounted, as appropriate) according to a
+specified reinvestment rate assumption. In particular, cash flows received on a delayed
+basis after the end of the holding period are discounted back to the end of the holding
+period using the assumed reinvestment rate.
+The Bond-Equivalent Total Rate of Return is equal to the Bond-Equivalent Yield if the
+investment is held to final maturity and the intermediate cash flows are reinvested at a
+rate equal to the Bond-Equivalent Yield.
+The phrase Total Return may be used to designate either the Rate of Return or the
+Percentage Return, but the choice of method should be made clear. Quotations that provide annualized rates other than on a bond-equivalent basis should be avoided.
+Example: For a Ginnie Mae I 9.0% pass-through with 14-day actual delay, settled on the
+issue date, the correct price/yield equation is
+P =
+
+CF1
+
+(1 + Y 200)
+
+2 ( 44 360 )
+
++
+
+CF2
+
+(1 + Y 200) (
+
+2 74 360 )
+
++ ... .
+
+If the security is priced at par with a term of 360 months and an assumed prepayment
+speed of 150% PSA, then
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

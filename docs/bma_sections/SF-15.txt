@@ -1,0 +1,46 @@
+SF-15
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+C. Defaults
+The following description of default analysis is intended only for the analysis of credit-sensitive
+securities (e.g., subordinated securities such as B-pieces, mezzanines, etc.). Standard prepayment
+analysis projects cash flows assuming that unscheduled payoffs are composed of both voluntary
+prepayments and defaults. When the following default methodology is being used, voluntary prepayments and defaults are projected separately.
+1. Mortgage Cash Flows with Defaults: Description of Basic Concepts
+A loan in default is defined as one that no longer pays principal and interest and then
+remains delinquent until liquidated. Thus, delinquencies that cure are not included in this
+computation.
+When a loan first goes into default, it is included in New Defaults for the given month. New
+Defaults are projected forward using the Monthly Default Rate and the prior month’s
+Performing Balance before subtracting the current month’s scheduled amortization.
+The prior month’s Performing Balance is the total balance of all loans that have continued to
+make full monthly payments through the prior month. These, plus Loans in Foreclosure, are
+the loans that survive into the current month. In the current month, they will either default
+(New Defaults), prepay (Voluntary Prepayments), or merely amortize. As with New Defaults,
+Voluntary Prepayments are also projected forward using the prior month’s Performing
+Balance. However, Voluntary Prepayments are computed after the current month’s Scheduled
+Amortization is subtracted.
+Expected Amortization in a given month is the amortized principal that is expected to be
+received from all existing loans, including those currently in default that have not yet been liquidated (Loans in Foreclosure). If there are New Defaults, then Amortization from Defaults is
+the amount of principal that is not received from the borrowers, and Actual Amortization is
+the amount of principal that is actually received from the borrowers. (A loan’s original amortization schedule continues to be computed even while it is in foreclosure.)
+Analogously, Expected Interest in a given month is interest due on the balance of all existing
+loans (including Loans in Foreclosure). Interest Lost is the amount of interest not received,
+and Actual Interest is Expected Interest minus Interest Lost.
+Usually (but not always), Servicer Advances are made. If principal and interest are advanced,
+the amount of principal advanced each month is equal to Amortization from Defaults, and
+the amount of interest advanced exactly compensates for Lost Interest. The result is that
+investors receive all Expected Amortization and Expected Interest regardless of the amount
+of New Defaults and Loans in Foreclosure. New Defaults, however, are still calculated based
+on the prior month’s Performing Balance only.
+Liquidation of New Defaults is assumed to occur after a fixed user-specified number of
+months (Months to Liquidation). If the liquidation results in a loss, the loss is taken in the
+month of liquidation, treated as a loss of principal (Principal Loss), and the amount of the
+loss is based on the Loss Severity and the unpaid principal balance of New Defaults when the
+loan first went into default.
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

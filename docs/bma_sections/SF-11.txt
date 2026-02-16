@@ -1,0 +1,92 @@
+SF-11
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+With the Standard Prepayment Model, these calculations will generally require an iterative
+trial-and-error procedure, even for a single pool; the aggregate PSA speed should not be
+computed as a weighted average of individual pool speeds. Likewise, it is generally not accurate to apply an average prepayment speed to a hypothetical single pool having the aggregate
+WAC and WAM of the pools to be analyzed. At best, these calculations can provide a first
+iteration toward the correct value. Average prepayment rates that do not meet the precise
+specifications of the preceding paragraphs should be acknowledged as nonstandard approximations.
+Iteration is not necessary for computing average prepayment rates in terms of SMM or CPR.
+Instead, one should sum the scheduled balances for the loans at the end of the period, computed as if there were no prepayments during the period. The average prepayment rate for
+the aggregation is then
+1
+
+
+ FINAL AGGREG. BAL actual  months in period 
+
+SMM avg = 100 1 – 
+  FINAL AGGREG. BAL sched 
+
+
+ ,
+
+or
+12
+
+
+months in period
+
+
+FINAL
+AGGREG.
+BAL
+
+
+actual
+CPR avg = 100 1 – 
+  FINAL AGGREG. BAL sched 
+
+
+ .
+
+Finally, for the special case in which all the mortgages in the sample being considered are
+fully seasoned at the start of the period, even the aggregate PSA speed can be computed
+without iteration:
+PSA avg = 100 *
+
+CPR avg
+.
+6.0
+
+Example: Consider two Ginnie Mae I 9.0% pass-throughs with the following characteristics:
+Pool 1
+
+Pool 2
+
+Original Face:
+
+$1,000,000
+
+$2,000,000
+
+Original Remaining Term:
+
+358 mo
+
+360 mo
+
+Origination Date:
+
+4/1/88
+
+12/1/88
+
+1/1/89 Factor:
+
+0.86925218
+
+0.99950812
+
+7/1/89 Factor:
+
+0.84732282
+
+0.98290230
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

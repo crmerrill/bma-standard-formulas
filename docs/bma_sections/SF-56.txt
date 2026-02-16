@@ -1,0 +1,90 @@
+SF-56
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+Long-standing market practices have resulted in different methods for calculating average life
+for pass-through securities (notably GPMs and payment-capped ARMs) and for CMOs.
+Because of widespread acceptance of these methods within their respective market segments,
+the Standard Formulas for average life are product-specific.
+For GPMs and ARMs, all periodic principal payments, positive or negative, should be included in both the numerator and denominator of the average-life calculation (see Section
+G.1.c.), so that the denominator equals the principal balance in effect for the period of the
+settlement date (exclusive of accrued interest). For Z-bonds, the numerator and denominator
+should include only the positive principal payments (amount “(2)” if positive, 0 otherwise),
+and the denominator will generally be larger than the principal balance at settlement.
+Example: To illustrate these points, consider the following hypothetical accrual instrument:
+Time
+
+Net
+Cash Flow
+
+10% Periodic
+Interest
+
+Principal Repayment
+(= Cash Flow – Interest)
+
+Principal
+Balance
+
+0
+1
+2
+3
+
+–100
+0
+11
+121
+
+10
+11
+11
+
+–10
+0
+110
+
+100
+110
+110
+0
+
+If there is no cash-flow delay, then the average life under the GPM/ARM convention is
+1( −10) + 2 (0) + 3 (110)
+−10 + 0 + 110
+
+=
+
+320
+= 3.20 periods.
+100
+
+Under the Z-bond convention, the average life is
+1(0) + 2 (0) + 3 (110)
+0 + 0
+
++ 10
+
+=
+
+330
+= 3.00 periods.
+110
+
+The GPM/ARM definition has the advantage of preserving the intended relationship
+between average life and interest-rate risk. In particular, the average life of a fixed-income
+security should roughly equal the term to maturity for which a bullet with the same coupon
+would have the same price-sensitivity per purchase dollar. This is the purpose for which average life is used in the absence of duration measures. In general, negative principal payments
+lead to longer average lives, in some cases longer than the final maturity.
+It should be noted that the Z-bond definition of average life can substantially understate the
+true interest-rate sensitivity of a security, and that the combined average life of the bond
+classes of a CMO containing Z-bonds can be inconsistent with the average life of the underlying collateral. Analysts and traders should be aware of these facts when average-life comparisons are being made.
+2. Accrual Calculations for CMO Z-Bonds
+The special calculation method for the settlement of accrual bonds has been discontinued for
+trades made on or after July 15, 1991, with settlement on or after October 1, 1991.
+Henceforth, these trades will follow the standards set forth in Sections F.1. and F.2.
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

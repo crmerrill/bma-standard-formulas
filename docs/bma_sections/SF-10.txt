@@ -1,0 +1,95 @@
+SF-10
+
+Find the column corresponding to the ONE-MONTH PSA, and the row corresponding to the number of months after origination of the underlying mortgages.
+The intersection of column and row gives the one-month equivalent SMM.
+Do not use this table for 3-month, 1-year, or to-date PSA, as results will be inaccurate.
+Results will be imprecise to the extent that mortgages in a pool have differing ages.
+
+Uniform Practices/Standard Formulas
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+
+PSA:50
+
+The Bond Market Association
+
+02/01/99
+
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.
+
+Months
+After
+Origination
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+3. Average Prepayment Rates for Mortgage Pools
+Often it is necessary to calculate an average prepayment rate for a single mortgage pool or an
+aggregation of pools (such as those backing a particular CMO) over a specific historical period.* Regardless of which particular prepayment model is chosen, the proper speed is that
+which, if applied separately to the underlying mortgages over the entire period, would result
+in the actual aggregate balance recorded at the end of the period. Pools which were not present at the start of the period should be excluded from the calculation entirely, as should any
+pools with incorrect or missing factors at the start or end of the period.**
+For certain security types, including many CMOs backed by classes of two or more other
+CMOs, and many whole loan pass-throughs with principal/interest stripping, the cash flows
+and principal balances are not derived from pro rata shares of mortgage pass-throughs, and
+no single prepayment rate or aggregate balance is sufficient to characterize the security cash
+flows. In these cases, it is generally not meaningful to define an average prepayment rate, and
+none should be reported. Instead, the average prepayment rate for each underlying CMO
+class should be reported individually, or if not practical, then summarized together as a range
+(lowest and highest).
+Unless otherwise specified, amortization of updated fixed-rate mortgage pools should be
+based exclusively on the most recent weighted average maturity information (WAM or
+WARM) and prepayment calculations on the most recent weighted average loan age (WALA)
+information provided by the issuer or guarantor at the time the calculation is performed.
+(See Section D.) Thus, it is not necessary to save prior information for these pools once
+updated values become available, nor is it necessary to recompute previously calculated prepayment rates. This method, while computationally simple, will produce different results for
+the same time period when calculations are made at different times. Thus, the January 1991
+PSA rate for a pool may be different when calculated in February 1992 than when first computed in February 1991, because the WAM and/or the WALA may not have decreased and/or
+increased, respectively, by exactly 12 months. Individual firms may use either method to
+report historical prepayment rates. This decision affects only calculations of historical prepayment rates; projected cash flows, yields, average lives, and other measures are not affected,
+since forward projections always use the most recently available data.
+For certain security types, such as Fannie Mae Trust strips and Megapools, multiple passthrough pools are actually combined into a new pass-through security (an aggregate pool for
+which the issuer reports monthly factors). Even in these cases, historical and projected prepayments should be calculated on the basis of the most detailed pool information available
+for the underlying mortgages.
+
+* For a mortgage security (including but not limited to CMOs, REMICs, Megapools and strips), the phrase “prepayment rate since
+issue” can refer to the time since issuance of either the underlying pass-through pools or the mortgage security itself. Market participants should therefore distinguish between “prepayment rate since pool issue” and “prepayment rate since deal issue.” The precise
+wording is left to the user’s discretion, so long as the intent is clear.
+** Note that an aggregate calculation for “prepayment rate since pool issue” generally does not refer to a historical period with a uniform
+starting date. Therefore, the only pools that should be excluded from this particular calculation are those with incorrect or missing
+factors at the end of the period.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

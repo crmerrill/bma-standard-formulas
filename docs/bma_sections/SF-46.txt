@@ -1,0 +1,57 @@
+SF-46
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+[
+
+]
+
+Fest = F0 * 1 + (COUPON/100) * ( N 0/360) ,
+
+where F0 is the most recently published factor, COUPON is the annual coupon rate of the
+security in percent and N0 is the number of days from the “as-of” date for F0 to the “asof” date for the current settlement factor F, measured according to the 30/360 calendar.
+3. Freddie Mac Multiclass PCs (REMICs)
+Unlike most other mortgage-related securities, Freddie Mac REMICs have record dates that
+are in the middle of the month, while the tranche factors are updated at the beginning of the
+month. This practice requires special considerations for the computation of settlement balances and accrued interest. (Parties to transactions may agree on terms other than those set
+out here.)
+a.
+
+Fixed-Rate REMIC Classes
+Principal and accrued interest are determined using the factor as of the last Record Date
+prior to the Settlement Date. Accrued interest will be paid to the seller for the time from
+the day following that Record Date to the Settlement Date.
+Example:
+Factor Dates - 1/1, 2/1, 3/1, etc.
+Record Dates - 1/14, 2/14, 3/14, etc.
+Settlement Date - 2/15 to 3/14
+Accrued Interest calculation - days from 2/15 to Settlement Date (no accrued interest if
+Settlement Date is 2/15)
+A holder of record on 3/14 (the buyer) receives principal and interest from Freddie Mac
+on 4/15. The dollar amounts are determined by the following formulas, where F(m/d)
+denotes the factor as of a date, FACE denotes the original face amount and COUPON
+denotes the annual coupon rate in percent:
+
+[
+
+]
+
+Principal = F(2 1) − F( 3 1) * FACE,
+Interest = F(2 1) * FACE * COUPON/1200.
+
+b.
+
+Variable-Rate REMIC Classes
+Principal is determined using the factor as of the last Record Date prior to the
+Settlement Date. Accrued interest is determined using the factor as of the second Record
+Date prior to the Settlement Date, however, because the accrual period follows the
+Record Date for variable-rate classes whereas it precedes the Record Date for fixed-rate
+classes. Therefore, at settlement, one should deduct from the cost the accrued interest for
+the time from the Settlement Date to the day following the first Record Date on or after
+the Settlement Date, at the coupon rate in effect as of the Settlement Date.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

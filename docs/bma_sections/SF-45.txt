@@ -1,0 +1,73 @@
+SF-45
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+For most mortgage-related securities, the principal amount and accrued interest are
+computed as described in parts b and c below. Special procedures for CMO bonds
+whose settlement factors have not been released by the time of settlement, and for
+Freddie Mac Multiclass PCs (REMICs), are the subjects of Sections F.2. and F.3. below.
+b.
+
+Principal Amount
+For most mortgage-related securities, the principal amount (or “current face amount,”
+or “current balance”) is equal to the product of the original face amount and the current
+factor:
+PRINCIPAL AMOUNT = FACE * (PRICE/100) * F,
+where
+
+c.
+
+FACE
+PRICE
+F
+
+=
+=
+=
+
+original face amount of bond
+price, as a percentage of current face amount
+current factor (factor at start of the payment period containing
+the settlement date).
+
+Accrued Interest
+For most mortgage-related securities, interest accrues according to the following standard calculation:
+ACCRUED INTEREST = FACE * F * (COUPON/100) * (N/360),
+where
+
+COUPON
+N
+
+=
+=
+
+annual coupon rate of the security, in percent
+number of days from the first day of the accrual period
+(the “as-of ” date for the factor F) to the settlement date
+itself. (The day count is computed according to the
+30/360 calendar, as specified in Section E.1.)
+
+2. CMO Bonds with Unknown Settlement Factors
+a.
+
+General Rule
+If settlement occurs in a payment period whose factor is not yet available at the time of
+settlement, settlement may proceed using the most recently published factor (F0) in
+place of the current factor (F) in the settlement formulas of Section F.1., to be corrected
+once the current factor is released. This general rule does not apply to accrual bonds in
+an accretion period (any payment period immediately following a payment date on
+which no cash payments were made).
+
+b.
+
+CMO Accrual Bonds
+For CMO accrual bonds that are traded during their accretion period and settled in a
+payment period whose current factor is not available at the time of settlement, settlement may proceed using an estimated current factor (Fest) in place of the current factor
+(F) in the settlement formulas of Section F.1., to be corrected once the current factor is
+released. The estimated current factor is computed as follows:
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

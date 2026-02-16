@@ -1,0 +1,62 @@
+SF-41
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+If there is a dispersion of loan terms within a given pool, the CAGE calculation will give a
+loan age estimate that is too long.
+If the original WAM of the loans is not available, the average loan age should be estimated as
+the average original maturity of the loans minus the remaining WAM; if the remaining WAM
+is not available, the average loan age should be estimated as the average original maturity of
+the loans minus time to final maturity.
+As noted in Section B, the Standard Prepayment Model of The Bond Market Association and
+the ABS model both specify prepayment percentages based on the age of the underlying
+loans, not the age of the pool itself. The age of the pool should only be used if there is insufficient information to estimate loan age by any of the above-mentioned methods, subject to
+the exception noted below. All WAMs and ages should be rounded to the nearest full month
+for use in calculations.
+The examples that follow illustrate the determination of WAM and age for selected Freddie
+Mac GOLD, Freddie Mac 75-day, Fannie Mae and Ginnie Mae pools.
+Freddie Mac 75-Day or Gold Freddie Mac*
+WAM reported on quartile tape received March 1993:
+Age reported on quartile tape received March 1993:
+Factor reported on factor tape received March 1993:
+Factor reported on factor tape received February 1993:
+Gross Coupon:
+
+342 months
+seven months
+0.9708674
+0.9785748
+9.69%
+
+WAM used with factor of 0.9708674 is 342 months (as reported on quartile tape).
+Age used with factor of 0.9708674 is seven months (as reported on quartile tape).
+WAM used with factor of 0.9785748 is 343 months (increment the most recently available
+WAM by one month).
+Age used with factor of 0.9785748 is six months (decrement the most recently available age
+by one month).
+The one-month PSA rate is 604. The value used for MONTH in the PSA formula is 7.
+Fannie Mae
+Issue month reported on factor tape received March 1992:
+Original WAM reported on factor tape received March 1992:
+WAM reported on factor tape received March 1992:
+Factor reported on factor tape received March 1992:
+Factor reported on factor tape received February 1992:
+Gross Coupon:
+
+Sept. 1991
+350 months
+341 months
+0.96783524
+0.96891577
+10.03%
+
+* Prior to March 1993, the WAMs reported on Freddie Mac’s quartile tape were for the prior month, although the factor reported on
+the GOLD factor tape reflected scheduled principal advanced through the current settlement month. This made it necessary to
+decrement the GOLD quartile tape WAM by one month to calculate the prepayment rate. As of March 1993, this calculation will
+have already been incorporated in the Freddie Mac quartile tape, so no adjustment is necessary.
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

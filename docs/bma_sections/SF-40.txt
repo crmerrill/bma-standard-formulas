@@ -1,0 +1,74 @@
+SF-40
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+In some cases, a pool’s WAM plus its WALA may add up to more than 360 months for a 30year pool, or 180 months in the case of a 15-year pool. In those cases, a pool’s age should be
+defined as 360 – WAM for a 30-year pool, or 180 – WAM for a 15-year pool.
+In some cases, the reported WALA may be less than the age of the pool itself. For Ginnie
+Maes, the age should be set to MAX (updated WALA, pool age), where pool age is defined as
+the time between pool-issue date and as-of date. For Freddie Mac, the loans in a pool may
+have an age that is less than the pool age. For any month that the loan age is being calculated
+for a month prior to the as-of date of the reported WALA, the minimum loan age is zero.
+For Fannie Mae MBS calculations prior to December 7, 2000, or when a WALA for any
+agency security is not reported, the age of the mortgages should be estimated as the average
+original maturity of the loans (assumed to be 180 or 360 months for 15- and 30-year pools;
+120 or 240 months for 10- and 20-year pools), minus the original WAM of the loans (at the
+time of the pool formation), plus the time elapsed since pool formation. This method is
+referred to as a Calculated Loan Age, or “CAGE.”
+In the case of "same-month" loan concentrations greater than 50%, the original WAM may
+be reported as one month greater than the original loan term for a given pool type. For
+example, an original WAM of 361 would be reported for a "CL" pool that has an original
+loan term of 360 months. The CAGE should be set to 0 for the first month of these pools,
+instead of –1, which would be the result of the calculation. The second month of these pools
+would also have a CAGE of 0, while the third month would have a CAGE of 1.
+Example of CAGE calculation:
+Original Maturity:
+
+360 months
+
+Original WAM:
+
+348 months
+
+Issue Date:
+
+7/1/91
+
+Current Date:
+
+7/1/92
+
+CAGE is calculated as (360 – 348) + 12 = 24.
+In some cases, this calculation will result in an age estimate that is too long. If the age
+as calculated above is greater than the original maturity minus the current WAM,
+then CAGE should be defined as the original maturity minus the current WAM.
+Example:
+
+Original Maturity:
+
+360 months
+
+Original WAM:
+
+300 months
+
+Current WAM:
+
+348 months
+
+Issue Date:
+
+7/1/91
+
+Current Date:
+
+7/1/92
+
+The age estimate (360 – 300) + 12 = 72 is greater than 360 – 348 = 12, so the average
+loan age should be set to 12.
+
+10/01/2000
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

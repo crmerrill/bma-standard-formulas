@@ -1,0 +1,106 @@
+SF-53
+
+
+The Bond Market Association
+
+P
+
+Uniform Practices/Standard Formulas
+
+[
+
+]
+
+= 99 +100 (28/365) 0.098750 + (16/365) 0.114375
+= 100.2589,
+
+[
+
+]
+
+CF1 = 50 +100 (28/365) 0.098750 + ( 31/365) 0.114375 + (122/365) 0.106875
+= 55.3012,
+
+[
+
+]
+
+CF2 = 50 + 50 (184/365) 0.106875
+= 52.6938.
+
+Bond-Equivalent basis (30/360)
+
+Yield of FRCMO:
+P =
+
+CF1
+
+(1 + Y 200)
+
+2 (164 360 )
+
++
+
+CF2
+
+(1 + Y 200) (
+
+2 344 360 )
+
+Result: 10.96675%
+
+Yield of Index:
+YIndex = 200
+
+{ [1 + (365 360) 10.1875 400] − 1 }
+2
+
+Result: 10.46235%
+
+YTM Spread:
+Y – YIndex = 10.96675% − 10.46235%
+
+Result: 50.44 basis points
+
+Discounted Margin:
+P =
+
+CF1
+CF2
++
+ I1 + DM 164 
+ I1 + DM 164   I 2 + DM 180 
+1 + 100 * 360 
+1 + 100 * 360  * 1 + 100 * 360 
+
+
+
+ 
+
+
+I1 = I 2 = ( 365 360) 10.1875
+
+Result: 62.05 basis points
+Money-Market basis (ACTUAL/360)
+
+Yield of FRCMO:
+P =
+
+CF1
+
+(1 + Y 200)
+
+2 (168 360 )
+
++
+
+CF2
+
+(1 + Y 200) (
+
+2 349 360 )
+
+Result: 10.76838%
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

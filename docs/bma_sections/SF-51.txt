@@ -1,0 +1,86 @@
+SF-51
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+Example: If the same Ginnie Mae I 9.0% pass-through (360-month term, 150% PSA) is
+purchased at par, but for settlement seven days after the issue date, then the 360 cash
+flows are the same as in the previous example, but now (with accrued interest)
+P
+
+=
+
+Yield
+
+=
+
+100.1750,
+9.10644%.
+
+2. Calculations for Floating-Rate MBS
+Definitions follow for two of the most common measures of the value of a floating-rate
+security: Yield-to-Maturity Spread (YTM Spread) and Discounted Margin (DM). The consistency of calendar assumptions is particularly important for these calculations.
+a.
+
+The YTM Spread is the difference between (1) the yield of a floating-rate security and
+(2) the yield of the index rate itself, assuming in both cases that the index rate takes on a
+certain fixed value for the indefinite future. (Unless otherwise specified, this should be
+the current level of the index rate.)
+(1)
+
+Cash flows for the floater are computed strictly according to the specifics of the
+security (calendar basis, accrued interest, payment delay, reset frequency, reset
+margin, caps, floors, prepayment rates, etc.). The cash-flow yield of the floater is
+computed on a 30/360 Bond-Equivalent basis (as specified in Section G.1.) or else
+on an ACTUAL/360 Money-Market basis (following the same yield formula but
+defining the exponents TK according to ACTUAL/360 calendar accounting).
+Ordinarily, the TK will be computed on the same calendar basis as the cash flows.
+However, it is sometimes necessary to compare two securities whose cash flows are
+determined by different calendar bases. The TK must be computed on the same
+calendar basis for both. Quotations should always specify which calendar basis is
+being used.
+
+(2)
+
+The cash-flow yield of the benchmark index is simply the index itself, converted if
+necessary to a 30/360 Bond-Equivalent basis or an ACTUAL/360 Money-Market
+basis, depending on the basis used to compute the cash-flow yield of the floater in
+(1) above. To convert ACTUAL/360 yields to 30/360 yields (or vice versa), the
+index rate should be multiplied (or divided, as appropriate) by a gross-up factor
+of 365/360. No gross-up conversion is necessary between ACTUAL/ACTUAL and
+30/360 yields. After converting the index rate to the desired calendar basis (30/360
+or ACTUAL/360), index rates expressed on a monthly, quarterly or annual compounding basis should be converted to semiannual compounding.
+Calendar conventions for the most common reset indexes are as follows:
+Index
+
+Term
+
+LIBOR
+under 1 year
+LIBOR
+1 year & over
+T-Bills
+TSY/CMT
+1 year & over
+11th District COFI
+
+Calendar
+
+Payment/Compounding
+
+ACT/360
+ACT/ACT
+ACT/360
+30/360
+ACT/ACT
+
+monthly, quarterly, semiannual
+annual
+quarterly, semiannual, annual
+semiannual
+monthly
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.

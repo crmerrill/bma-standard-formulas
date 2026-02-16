@@ -1,0 +1,64 @@
+SF-42
+
+
+The Bond Market Association
+
+Uniform Practices/Standard Formulas
+
+Age not reported by Fannie Mae.
+Average original loan term not reported by Fannie Mae.
+WAM used with factor of 0.96783524 is 341 months (as reported on factor tape).
+Age used with factor of 0.96783524 is 16 months (assume from pool type that average original maturity of loans is 360 months, subtract original WAM of 350 months and add six
+months elapsed since pool issuance).
+WAM used with factor of 0.96891577 is 342 months (increment the most recently available
+WAM by one month).
+Age used with factor of 0.96891577 is 15 months (decrement the most recently available age
+by one month).
+The one-month PSA rate is 22. The value of MONTH in the PSA formula is 16.
+Ginnie Mae Pool
+Pool Issue Month:
+WAM as reported on tape received October 1993:
+Age reported on tape received October 1993:
+Factor reported on factor tape received October 1993:
+Factor reported on factor tape received September 1993:
+Gross Coupon:
+
+May 1993
+359 months
+one month
+0.960000
+0.970000
+7.50%
+
+WAM used with factor of 0.960000 is 355 months (October reported WAM minus four
+months to adjust for reporting lag).
+Age used with factor of 0.9600000 is five months (October reported WALA plus four months
+to adjust for reporting lag).
+WAM used with factor of 0.9700000 is 356 months (increment WAM used with the October
+factor by one).
+Age used with factor of 0.9700000 is four months (decrement WALA used with the October
+factor by one).
+The one-month PSA rate is 1087. The value of MONTH in the PSA formula is 5.
+3. Mortgage Coupon
+If the issuing agency has not released the gross weighted-average coupon (WAC) of the
+mortgages underlying a fixed-rate, single-family pool, or if no particular WAC assumption is
+specified, then a fixed servicing spread above the pass-through rate must be assumed. For
+recently issued pools, the spread should be as follows:
+Ginnie Mae I
+
++ 50 bp
+
+Ginnie Mae II
+
++ 75 bp
+
+Fannie Mae
+
++ 65 bp
+
+Freddie Mac
+
++ 65 bp
+
+02/01/99
+All rights reserved. Reproduction in any form is strictly forbidden. © 1999 The Bond Market Association.
