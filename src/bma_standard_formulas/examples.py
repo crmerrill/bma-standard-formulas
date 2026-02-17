@@ -748,13 +748,13 @@ SF12 = BMAExample(
         perf_bal=0.93770914,                            # = surv_fac2 (no defaults)
         
         # Amortization ($ amounts, not factors)
-        sch_am=9005.61,                                 # = P1_sch ($2,894.33) + P2_sch ($6,111.28)
-        exp_am=9005.61,                                 # = sch_am (no defaults)
-        act_am=9005.61,                                 # = sch_am (no defaults)
+        sch_am=8938.19,                                 # = P1_sch ($2,869.96) + P2_sch ($6,068.23) = bal1 - bal2
+        exp_am=8938.19,                                 # = sch_am (no defaults)
+        act_am=8938.19,                                 # = sch_am (no defaults)
         tot_am=55141.00,                                # = P1_tot ($21,929.36) + P2_tot ($33,211.64) = pt_prin
         
         # Prepayment (back-calculated from observed balances)
-        vol_prepay=46135.39,                            # = tot_am - sch_am = 55141.00 - 9005.61
+        vol_prepay=46202.81,                            # = tot_am - sch_am = 55141.00 - 8938.19
         smm=0.0027114200,                               # Given: 6-month average SMM (decimal)
         cpr=3.20560000,                                 # Given: = (1-(1-SMM/100)^12)*100 = 3.2056%
         psa=212.0200000,                                # Given: back-calculated PSA multiple
@@ -892,227 +892,378 @@ SF31_CASHFLOW_B = BMAExample(
 )
 
 # =============================================================================
-# SF-42: FANNIE MAE POOL - WAM/WALA ADJUSTMENT EXAMPLE
+# SF-41: FREDDIE MAC 75-DAY OR GOLD - WAM/WALA ADJUSTMENT EXAMPLE
 # =============================================================================
-SF42_FNMA = BMAExample(
-    id="SF-42-FNMA",
+# Source: SF-41. WAM and Age reported directly on Freddie Mac quartile tape.
+# No CAGE needed -- Freddie Mac reports both WAM and age.
+# OTerm inferred as WAM + Age = 342 + 7 = 349.
+# BMA states PSA = 604; our solver recovers 603.86.
+# =============================================================================
+SF41_FHLMC = BMAExample(
+    id="SF-41-FHLMC",
     description=(
-        "Fannie Mae pool issued July 1993. WAM/WALA not directly reported, "
-        "must be inferred from pool type and elapsed time. "
-        "Original WAM was 350mo, assumed orig term 360mo, 6mo elapsed → age=16."
+        "Freddie Mac 75-Day or Gold pool. WAM=342mo and Age=7mo reported "
+        "directly on quartile tape (March 1993). Gross coupon 9.69% (SF-41). "
+        "Freddie Mac servicing = +65bp (SF-42)."
     ),
     
+    # (1) ORIGINATION
     origination=OriginationParams(
         original_balance=1.0,                           # Normalized
-        gross_coupon=8.0,                               # Not specified, assumed typical
-        original_term=360,                              # Assumed standard 30-year
-        origination_date=dt.date(1993, 7, 1),           # Given: issued July 1993
+        gross_coupon=9.69,                              # Given: SF-41 "Gross Coupon: 9.69%"
+        original_term=349,                              # Inferred: WAM(342) + Age(7) = 349
+        origination_date=dt.date(1992, 8, 1),              # Inferred: age=7 at March 1993 → 7mo prior
     ),
     
+    # (2) CURRENT STATE - February 1993 factor tape
     current=CurrentState(
-        asof_date=dt.date(1993, 9, 1),                  # September 1993
-        loan_age=15,                                    # WALA at start: 15 (before month 16)
-        current_balance=0.96891577,                     # = factor_begin
-        current_factor=0.96891577,                        # Given: September 1993 factor
-        remaining_term=341,                             # Given: WAM = 341 months
+        asof_date=dt.date(1993, 2, 1),                  # SF-41: factor tape received February 1993
+        loan_age=6,                                     # Age at start: 7 - 1 = 6 (SF-41)
+        current_balance=0.9785748,                      # = factor_begin
+        current_factor=0.9785748,                       # SF-41: factor received February 1993
+        remaining_term=343,                             # SF-41: WAM = 343 (incremented from 342)
     ),
     
+    # (3) CASH FLOW ASSUMPTIONS
     assumptions=CashFlowAssumptions(
-        end_date=dt.date(1993, 10, 1),                  # October 1993
-        end_period=16,                                  # Loan age at end: 16
+        end_date=dt.date(1993, 3, 1),                   # SF-41: factor tape received March 1993
+        end_period=7,                                   # Age at end: 7 (SF-41)
         prepay_type=PrepayType.PSA,
-        prepay_speed=22.0,                              # Given: back-calculated PSA
+        prepay_speed=604.0,                             # SF-41: "The one-month PSA rate is 604"
         default_type=DefaultType.MDR,
         default_speed=0.0,
-        servicing_fee=0.50,
+        servicing_fee=0.65,                             # SF-42: Freddie Mac = +65bp
         recovery_months=12,
         loss_severity=0.20,
     ),
     
-    # (4) CASH FLOWS - back-calculated PSA from observed factors
+    # (4) CASH FLOWS - single period, month 7
+    # Scheduled balance factors at 9.69% gross, 349mo OTerm:
+    #   bal1 = sch_balance_factor(9.69, 349, 343) = 0.99682226
+    #   bal2 = sch_balance_factor(9.69, 349, 342) = 0.99627757
+    #   sch_ratio = bal2/bal1 = 0.99945372
+    # Key: (asof_period=7, window_length=1) = single period, month 7
+    cashflows={(7, 1): PeriodCashFlows(
+        # Period/Temporal Info
+        asof_date=dt.date(1993, 3, 1),                  # End: March 1993 factor tape
+        beg_date=dt.date(1993, 2, 1),                   # Begin: February 1993 factor tape
+        asof_period=7,                                  # End period: month 7
+        beg_period=6,                                   # Beginning period: month 6
+        loan_age=7,                                     # SF-41: MONTH = 7 for PSA
+        remaining_term=342,                             # 349 - 7 = 342 remaining
+        
+        # Balances & Factors
+        bal1=0.99682226,                                # Scheduled balance factor at age 6
+        bal2=0.99627757,                                # Scheduled balance factor at age 7
+        surv_fac1=0.9785748,                            # SF-41: February 1993 factor
+        surv_fac2=0.9708674,                            # SF-41: March 1993 factor
+        surv_fac2_sched=0.97804008,                     # = surv_fac1 * (bal2/bal1)
+        perf_bal=0.9708674,                             # = surv_fac2 (no defaults)
+        
+        # Amortization (factor-based, normalized to original face = 1.0)
+        sch_am=0.00053472,                              # = surv_fac1 * (1 - bal2/bal1)
+        exp_am=0.00053472,                              # = sch_am (no defaults)
+        act_am=0.00053472,                              # = sch_am (no defaults)
+        tot_am=0.00770740,                              # = surv_fac1 - surv_fac2
+        
+        # Prepayment (back-calculated from observed factors)
+        vol_prepay=0.00717268,                          # = tot_am - sch_am
+        smm=0.00733373,                                 # Back-calculated from factors
+        cpr=8.45403700,                                 # = (1-(1-SMM)^12)*100
+        psa=604.000000,                                 # SF-41: "The one-month PSA rate is 604"
+        
+        # Defaults
+        new_def=0.0,                                    # No defaults
+        fcl=0.0,                                        # No defaults
+        am_def=0.0,                                     # No defaults
+        mdr=0.0,                                        # No defaults
+        cdr=0.0,                                        # No defaults
+        
+        # Interest (single month, based on beginning factor)
+        gross_int=0.00790199,                           # = surv_fac1 * 9.69%/12
+        svc_fee=0.00053006,                             # = surv_fac1 * 0.65%/12
+        net_int=0.00737193,                             # = surv_fac1 * 9.04%/12
+        exp_int=0.00737193,                             # = net_int (no defaults)
+        lost_int=0.0,                                   # No defaults
+        act_int=0.00737193,                             # = net_int (no defaults)
+        
+        # Pass-through
+        pt_prin=0.00770740,                             # = tot_am
+        pt_int=0.00737193,                              # = net_int
+        pt_cf=0.01507933,                               # = pt_prin + pt_int
+        
+        # Recovery/Loss
+        prin_recov=0.0,                                 # No defaults
+        prin_loss=0.0,                                  # No defaults
+        adb=0.0,                                        # No defaults
+        
+        # Yield/Duration - not focus of SF-41 (WAM/WALA example)
+        price=0.0,                                      # Not computed
+        yield_pct=0.0,                                  # Not computed
+        mortgage_yield=0.0,                             # Not computed
+        avg_life=0.0,                                   # Not computed
+        duration=0.0,                                   # Not computed
+        mod_duration=0.0,                               # Not computed
+        convexity=0.0,                                  # Not computed
+        eff_duration=0.0,                               # Not computed
+        eff_convexity=0.0,                              # Not computed
+    )},
+)
+
+
+# =============================================================================
+# SF-42: FANNIE MAE POOL - WAM/WALA ADJUSTMENT EXAMPLE
+# =============================================================================
+# Source: SF-41 (pool data) and SF-42 (CAGE calculation and PSA result).
+# SF-42 demonstrates Calculated Loan Age ("CAGE") for FNMA pools where
+# age/WALA are not directly reported. CAGE = OTerm - OrigWAM + months_elapsed.
+# BMA states PSA = 22 (likely rounded); our solver recovers 22.95 with the
+# exact gross coupon of 10.03% from SF-41.
+# =============================================================================
+SF42_FNMA = BMAExample(
+    id="SF-42-FNMA",
+    description=(
+        "Fannie Mae pool issued Sept 1991 (SF-41). WAM/WALA not directly reported, "
+        "inferred via CAGE: OTerm(360) - OrigWAM(350) + months_elapsed(6) = age 16. "
+        "Gross coupon 10.03% (SF-41). FNMA servicing = +65bp (SF-42)."
+    ),
+    
+    # (1) ORIGINATION
+    origination=OriginationParams(
+        original_balance=1.0,                           # Normalized
+        gross_coupon=10.03,                             # Given: SF-41 "Gross Coupon: 10.03%"
+        original_term=360,                              # Assumed 30-year (SF-42 CAGE calc)
+        origination_date=dt.date(1991, 9, 1),           # Given: SF-41 "Issue month: Sept. 1991"
+    ),
+    
+    # (2) CURRENT STATE - February 1992 factor tape
+    current=CurrentState(
+        asof_date=dt.date(1992, 2, 1),                  # SF-41: factor tape received February 1992
+        loan_age=15,                                    # CAGE at start: 16 - 1 = 15 (SF-42)
+        current_balance=0.96891577,                     # = factor_begin
+        current_factor=0.96891577,                      # SF-41: factor received February 1992
+        remaining_term=342,                             # SF-42: WAM = 342 (incremented from 341)
+    ),
+    
+    # (3) CASH FLOW ASSUMPTIONS
+    assumptions=CashFlowAssumptions(
+        end_date=dt.date(1992, 3, 1),                   # SF-41: factor tape received March 1992
+        end_period=16,                                  # CAGE at end: 16 (SF-42)
+        prepay_type=PrepayType.PSA,
+        prepay_speed=22.0,                              # SF-42: "The one-month PSA rate is 22"
+        default_type=DefaultType.MDR,
+        default_speed=0.0,
+        servicing_fee=0.65,                             # SF-42: FNMA = +65bp
+        recovery_months=12,
+        loss_severity=0.20,
+    ),
+    
+    # (4) CASH FLOWS - single period, month 16
+    # Scheduled balance factors at 10.03% gross, 360mo OTerm:
+    #   bal1 = sch_balance_factor(10.03, 360, 345) = 0.99300651
+    #   bal2 = sch_balance_factor(10.03, 360, 344) = 0.99250850
+    #   sch_ratio = bal2/bal1 = 0.99949867
     # Key: (asof_period=16, window_length=1) = single period, month 16
     cashflows={(16, 1): PeriodCashFlows(
         # Period/Temporal Info
-        asof_date=dt.date(1993, 10, 1),                 # End of window: October 1993
-        beg_date=dt.date(1993, 9, 1),                   # Beginning of window: September 1993
-        asof_period=16,                                 # End period: month 16
-        beg_period=15,                                  # Beginning period: end of month 15
-        loan_age=16,                                    # Given: loan age for PSA calc
+        asof_date=dt.date(1992, 3, 1),                  # End: March 1992 factor tape
+        beg_date=dt.date(1992, 2, 1),                   # Begin: February 1992 factor tape
+        asof_period=16,                                 # End period: CAGE month 16
+        beg_period=15,                                  # Beginning period: CAGE month 15
+        loan_age=16,                                    # SF-42: MONTH = 16 for PSA
         remaining_term=344,                             # 360 - 16 = 344 remaining
         
         # Balances & Factors
-        bal1=0.0,                                       # N/A - scheduled balance not focus of SF-42
-        bal2=0.0,                                       # N/A - scheduled balance not focus of SF-42
-        surv_fac1=0.96891577,                           # Actual factor at start (September 1993)
-        surv_fac2=0.96783524,                           # Actual factor at end (October 1993)
-        surv_fac2_sched=0.0,                             # N/A - not computed in example
-        perf_bal=0.0,                                   # N/A - not computed in example
+        bal1=0.99300651,                                # Scheduled balance factor at age 15
+        bal2=0.99250850,                                # Scheduled balance factor at age 16
+        surv_fac1=0.96891577,                           # SF-41: February 1992 factor
+        surv_fac2=0.96783524,                           # SF-41: March 1992 factor
+        surv_fac2_sched=0.96842984,                     # = surv_fac1 * (bal2/bal1)
+        perf_bal=0.96783524,                            # = surv_fac2 (no defaults)
         
-        # Amortization
-        sch_am=0.0,                                     # N/A - not computed in example
-        exp_am=0.0,                                     # N/A - not computed in example
-        act_am=0.0,                                     # N/A - not computed in example
-        tot_am=0.96891577 - 0.96783524,                 # = factor change = 0.00108053
+        # Amortization (factor-based, normalized to original face = 1.0)
+        sch_am=0.00048593,                              # = surv_fac1 * (1 - bal2/bal1)
+        exp_am=0.00048593,                              # = sch_am (no defaults)
+        act_am=0.00048593,                              # = sch_am (no defaults)
+        tot_am=0.00108053,                              # = surv_fac1 - surv_fac2
         
         # Prepayment (back-calculated from observed factors)
-        vol_prepay=0.96891577 - 0.96783524,             # = factor_begin - factor_end = 0.00108053
-        smm=0.00000000,                                 # N/A - computed via PSA
-        cpr=0.00000000,                                 # N/A - computed via PSA
-        psa=22.0000000,                                 # Given: back-calculated PSA
+        vol_prepay=0.00059460,                          # = tot_am - sch_am
+        smm=0.00061398,                                 # Back-calculated from factors
+        cpr=0.73429563,                                 # = (1-(1-SMM)^12)*100
+        psa=22.0000000,                                 # SF-42: "The one-month PSA rate is 22"
         
         # Defaults
-        new_def=0.0,                                    # Not specified (no defaults)
-        fcl=0.0,                                        # Not specified (no defaults)
-        am_def=0.0,                                     # Not specified (no defaults)
-        mdr=0.0,                                        # Not specified (no defaults)
-        cdr=0.0,                                        # Not specified (no defaults)
+        new_def=0.0,                                    # No defaults
+        fcl=0.0,                                        # No defaults
+        am_def=0.0,                                     # No defaults
+        mdr=0.0,                                        # No defaults
+        cdr=0.0,                                        # No defaults
         
-        # Interest
-        gross_int=0.0,                                  # N/A - not focus of SF-42
-        svc_fee=0.0,                                    # N/A - not focus of SF-42
-        net_int=0.0,                                    # N/A - not focus of SF-42
-        exp_int=0.0,                                    # N/A - not focus of SF-42
-        lost_int=0.0,                                   # N/A - not focus of SF-42
-        act_int=0.0,                                    # N/A - not focus of SF-42
+        # Interest (single month, based on beginning factor)
+        gross_int=0.00809852,                           # = surv_fac1 * 10.03%/12
+        svc_fee=0.00052483,                             # = surv_fac1 * 0.65%/12
+        net_int=0.00757369,                             # = surv_fac1 * 9.38%/12
+        exp_int=0.00757369,                             # = net_int (no defaults)
+        lost_int=0.0,                                   # No defaults
+        act_int=0.00757369,                             # = net_int (no defaults)
         
         # Pass-through
-        pt_prin=0.0,                                    # N/A - not focus of SF-42
-        pt_int=0.0,                                     # N/A - not focus of SF-42
-        pt_cf=0.0,                                      # N/A - not focus of SF-42
+        pt_prin=0.00108053,                             # = tot_am
+        pt_int=0.00757369,                              # = net_int
+        pt_cf=0.00865422,                               # = pt_prin + pt_int
         
         # Recovery/Loss
-        prin_recov=0.0,                                 # Not specified (no defaults)
-        prin_loss=0.0,                                  # Not specified (no defaults)
-        adb=0.0,                                        # Not specified (no defaults)
+        prin_recov=0.0,                                 # No defaults
+        prin_loss=0.0,                                  # No defaults
+        adb=0.0,                                        # No defaults
         
-        # Yield/Duration
-        price=0.0,                                      # N/A - not focus of SF-42
-        yield_pct=0.0,                                  # N/A - not focus of SF-42
-        mortgage_yield=0.0,                             # N/A - not focus of SF-42
-        avg_life=0.0,                                   # N/A - not focus of SF-42
-        duration=0.0,                                   # N/A - not focus of SF-42
-        mod_duration=0.0,                               # N/A - not focus of SF-42
-        convexity=0.0,                                  # N/A - not focus of SF-42
-        eff_duration=0.0,                               # N/A - not focus of SF-42
-        eff_convexity=0.0,                              # N/A - not focus of SF-42
+        # Yield/Duration - not focus of SF-42 (CAGE example)
+        price=0.0,                                      # Not computed
+        yield_pct=0.0,                                  # Not computed
+        mortgage_yield=0.0,                             # Not computed
+        avg_life=0.0,                                   # Not computed
+        duration=0.0,                                   # Not computed
+        mod_duration=0.0,                               # Not computed
+        convexity=0.0,                                  # Not computed
+        eff_duration=0.0,                               # Not computed
+        eff_convexity=0.0,                              # Not computed
     )},
 )
 
 # =============================================================================
 # SF-42: GINNIE MAE POOL - WAM/WALA ADJUSTMENT EXAMPLE
 # =============================================================================
+# Source: SF-42. Ginnie Mae reports WAM and WALA, but there is a 4-month
+# reporting lag. Adjusted age = reported WALA + 4 = 1 + 4 = 5.
+# Adjusted WAM = reported WAM - 4 = 359 - 4 = 355.
+# OTerm = adjusted WAM + adjusted age = 355 + 5 = 360.
+# BMA states PSA = 1087; our solver recovers 1088.05.
+# =============================================================================
 SF42_GNMA = BMAExample(
     id="SF-42-GNMA",
     description=(
-        "Ginnie Mae pool issued May 1993. WAM 359mo, WALA 1mo reported Oct 1993. "
-        "Adjusted for 4-month reporting lag → effective age=5."
+        "Ginnie Mae pool issued May 1993 (SF-42). WAM=359mo, WALA=1mo reported "
+        "Oct 1993, adjusted for 4-month reporting lag → effective age=5, WAM=355. "
+        "Gross coupon 7.50% (SF-42). GNMA I servicing = +50bp (SF-42)."
     ),
     
+    # (1) ORIGINATION
     origination=OriginationParams(
-        original_balance=1.0,
-        gross_coupon=7.5,                               # Given in example
-        original_term=360,                              # Standard 30-year
-        origination_date=dt.date(1993, 5, 1),           # Given: issued May 1993
+        original_balance=1.0,                           # Normalized
+        gross_coupon=7.50,                              # Given: SF-42 "Gross Coupon: 7.50%"
+        original_term=360,                              # Inferred: adj_WAM(355) + adj_Age(5) = 360
+        origination_date=dt.date(1993, 5, 1),           # Given: SF-42 "Pool Issue Month: May 1993"
     ),
     
+    # (2) CURRENT STATE - September 1993 factor tape
     current=CurrentState(
-        asof_date=dt.date(1993, 9, 1),                  # September 1993 factor date
-        loan_age=4,                                     # WALA at start: 4 (before month 5)
+        asof_date=dt.date(1993, 9, 1),                  # SF-42: factor tape received September 1993
+        loan_age=4,                                     # Adjusted age at start: 5 - 1 = 4
         current_balance=0.970000,                       # = factor_begin
-        current_factor=0.970000,                          # Given: September 1993 factor
-        remaining_term=355,                             # = 359 - 4 (adjusted for reporting lag)
+        current_factor=0.970000,                        # SF-42: factor received September 1993
+        remaining_term=356,                             # SF-42: WAM = 356 (incremented from 355)
     ),
     
+    # (3) CASH FLOW ASSUMPTIONS
     assumptions=CashFlowAssumptions(
-        end_date=dt.date(1993, 10, 1),                  # October 1993
-        end_period=5,                                   # Loan age at end: 5 (adjusted for reporting lag)
+        end_date=dt.date(1993, 10, 1),                  # SF-42: factor tape received October 1993
+        end_period=5,                                   # Adjusted age at end: 5
         prepay_type=PrepayType.PSA,
-        prepay_speed=1087.0,                            # Given: back-calculated PSA (very high!)
+        prepay_speed=1087.0,                            # SF-42: "The one-month PSA rate is 1087"
         default_type=DefaultType.MDR,
         default_speed=0.0,
-        servicing_fee=0.50,
+        servicing_fee=0.50,                             # SF-42: GNMA I = +50bp
         recovery_months=12,
         loss_severity=0.20,
     ),
     
-    # (4) CASH FLOWS - back-calculated PSA from observed factors
+    # (4) CASH FLOWS - single period, month 5
+    # Scheduled balance factors at 7.50% gross, 360mo OTerm:
+    #   bal1 = sch_balance_factor(7.50, 360, 356) = 0.99700347
+    #   bal2 = sch_balance_factor(7.50, 360, 355) = 0.99624260
+    #   sch_ratio = bal2/bal1 = 0.99923717
     # Key: (asof_period=5, window_length=1) = single period, month 5
     cashflows={(5, 1): PeriodCashFlows(
         # Period/Temporal Info
-        asof_date=dt.date(1993, 10, 1),                 # End of window: October 1993
-        beg_date=dt.date(1993, 9, 1),                   # Beginning of window: September 1993
-        asof_period=5,                                  # End period: month 5 (adjusted for reporting lag)
-        beg_period=4,                                   # Beginning period: end of month 4
-        loan_age=5,                                     # Given: adjusted loan age (WALA + 4mo lag)
+        asof_date=dt.date(1993, 10, 1),                 # End: October 1993 factor tape
+        beg_date=dt.date(1993, 9, 1),                   # Begin: September 1993 factor tape
+        asof_period=5,                                  # End period: adjusted month 5
+        beg_period=4,                                   # Beginning period: adjusted month 4
+        loan_age=5,                                     # SF-42: MONTH = 5 for PSA
         remaining_term=355,                             # 360 - 5 = 355 remaining
         
         # Balances & Factors
-        bal1=0.0,                                       # N/A - scheduled balance not focus of SF-42
-        bal2=0.0,                                       # N/A - scheduled balance not focus of SF-42
-        surv_fac1=0.970000,                             # Actual factor at start (September 1993)
-        surv_fac2=0.960000,                             # Actual factor at end (October 1993)
-        surv_fac2_sched=0.0,                             # N/A - not computed in example
-        perf_bal=0.0,                                   # N/A - not computed in example
+        bal1=0.99700347,                                # Scheduled balance factor at age 4
+        bal2=0.99624260,                                # Scheduled balance factor at age 5
+        surv_fac1=0.970000,                             # SF-42: September 1993 factor
+        surv_fac2=0.960000,                             # SF-42: October 1993 factor
+        surv_fac2_sched=0.96925973,                     # = surv_fac1 * (bal2/bal1)
+        perf_bal=0.960000,                              # = surv_fac2 (no defaults)
         
-        # Amortization
-        sch_am=0.0,                                     # N/A - not computed in example
-        exp_am=0.0,                                     # N/A - not computed in example
-        act_am=0.0,                                     # N/A - not computed in example
-        tot_am=0.970000 - 0.960000,                     # = factor change = 0.01
+        # Amortization (factor-based, normalized to original face = 1.0)
+        sch_am=0.00074027,                              # = surv_fac1 * (1 - bal2/bal1)
+        exp_am=0.00074027,                              # = sch_am (no defaults)
+        act_am=0.00074027,                              # = sch_am (no defaults)
+        tot_am=0.01000000,                              # = surv_fac1 - surv_fac2
         
         # Prepayment (back-calculated from observed factors)
-        vol_prepay=0.970000 - 0.960000,                 # = factor_begin - factor_end = 0.01
-        smm=0.00000000,                                 # N/A - computed via PSA
-        cpr=0.00000000,                                 # N/A - computed via PSA
-        psa=1087.000000,                                # Given: back-calculated PSA (very high!)
+        vol_prepay=0.00925973,                          # = tot_am - sch_am
+        smm=0.00955341,                                 # Back-calculated from factors
+        cpr=10.88050000,                                # = (1-(1-SMM)^12)*100
+        psa=1087.00000,                                 # SF-42: "The one-month PSA rate is 1087"
         
         # Defaults
-        new_def=0.0,                                    # Not specified (no defaults)
-        fcl=0.0,                                        # Not specified (no defaults)
-        am_def=0.0,                                     # Not specified (no defaults)
-        mdr=0.0,                                        # Not specified (no defaults)
-        cdr=0.0,                                        # Not specified (no defaults)
+        new_def=0.0,                                    # No defaults
+        fcl=0.0,                                        # No defaults
+        am_def=0.0,                                     # No defaults
+        mdr=0.0,                                        # No defaults
+        cdr=0.0,                                        # No defaults
         
-        # Interest
-        gross_int=0.0,                                  # N/A - not focus of SF-42
-        svc_fee=0.0,                                    # N/A - not focus of SF-42
-        net_int=0.0,                                    # N/A - not focus of SF-42
-        exp_int=0.0,                                    # N/A - not focus of SF-42
-        lost_int=0.0,                                   # N/A - not focus of SF-42
-        act_int=0.0,                                    # N/A - not focus of SF-42
+        # Interest (single month, based on beginning factor)
+        gross_int=0.00606250,                           # = surv_fac1 * 7.50%/12
+        svc_fee=0.00040417,                             # = surv_fac1 * 0.50%/12
+        net_int=0.00565833,                             # = surv_fac1 * 7.00%/12
+        exp_int=0.00565833,                             # = net_int (no defaults)
+        lost_int=0.0,                                   # No defaults
+        act_int=0.00565833,                             # = net_int (no defaults)
         
         # Pass-through
-        pt_prin=0.0,                                    # N/A - not focus of SF-42
-        pt_int=0.0,                                     # N/A - not focus of SF-42
-        pt_cf=0.0,                                      # N/A - not focus of SF-42
+        pt_prin=0.01000000,                             # = tot_am
+        pt_int=0.00565833,                              # = net_int
+        pt_cf=0.01565833,                               # = pt_prin + pt_int
         
         # Recovery/Loss
-        prin_recov=0.0,                                 # Not specified (no defaults)
-        prin_loss=0.0,                                  # Not specified (no defaults)
-        adb=0.0,                                        # Not specified (no defaults)
+        prin_recov=0.0,                                 # No defaults
+        prin_loss=0.0,                                  # No defaults
+        adb=0.0,                                        # No defaults
         
-        # Yield/Duration
-        price=0.0,                                      # N/A - not focus of SF-42
-        yield_pct=0.0,                                  # N/A - not focus of SF-42
-        mortgage_yield=0.0,                             # N/A - not focus of SF-42
-        avg_life=0.0,                                   # N/A - not focus of SF-42
-        duration=0.0,                                   # N/A - not focus of SF-42
-        mod_duration=0.0,                               # N/A - not focus of SF-42
-        convexity=0.0,                                  # N/A - not focus of SF-42
-        eff_duration=0.0,                               # N/A - not focus of SF-42
-        eff_convexity=0.0,                              # N/A - not focus of SF-42
+        # Yield/Duration - not focus of SF-42 (WAM/WALA example)
+        price=0.0,                                      # Not computed
+        yield_pct=0.0,                                  # Not computed
+        mortgage_yield=0.0,                             # Not computed
+        avg_life=0.0,                                   # Not computed
+        duration=0.0,                                   # Not computed
+        mod_duration=0.0,                               # Not computed
+        convexity=0.0,                                  # Not computed
+        eff_duration=0.0,                               # Not computed
+        eff_convexity=0.0,                              # Not computed
     )},
 )
 
 
 # =============================================================================
-# SF-49/50: YIELD CALCULATION EXAMPLE - SETTLED ON ISSUE DATE
+# SF-49/50/51: YIELD CALCULATION EXAMPLE - SETTLED ON ISSUE DATE
+# =============================================================================
+# Source: SF-49 (price/yield equation), SF-50 (numerical results, effective
+# duration/convexity, total return), SF-51 (7-day-after-issue settlement variant).
+# Same GNMA I 9.0% security used across all three pages.
 # =============================================================================
 SF49_YIELD = BMAExample(
-    id="SF-49",
+    id="SF-49/50",
     description=(
         "Ginnie Mae I 9.0% pass-through, 360mo term, 150% PSA, 14-day actual delay, "
-        "settled on issue date at par. Full yield/duration example."
+        "settled on issue date at par. Yield/duration from SF-49/50."
     ),
     
     origination=OriginationParams(
@@ -1215,10 +1366,13 @@ SF49_YIELD = BMAExample(
 # =============================================================================
 # SF-51: YIELD CALCULATION EXAMPLE - SETTLED 7 DAYS AFTER ISSUE
 # =============================================================================
+# Source: SF-51. Same GNMA I 9.0% security as SF-49/50, but settled 7 days
+# after the issue date. Demonstrates accrued interest effect on price/yield.
+# =============================================================================
 SF51_YIELD = BMAExample(
     id="SF-51",
     description=(
-        "Same Ginnie Mae I 9.0% as SF-49, but settled 7 days after issue date. "
+        "Same Ginnie Mae I 9.0% as SF-49/50, but settled 7 days after issue date. "
         "Price includes 7 days accrued interest."
     ),
     
@@ -1450,12 +1604,13 @@ BMA_EXAMPLES = {
     # Cash flow with defaults - PSA/SDA (SF-31 to SF-38)
     "SF31": SF31_CASHFLOW_B,
     
-    # Loan age calculation (SF-42)
+    # Loan age calculation (SF-41/SF-42)
+    "SF41_FHLMC": SF41_FHLMC,
     "SF42_FNMA": SF42_FNMA,
     "SF42_GNMA": SF42_GNMA,
     
-    # Yield/Duration (SF-49 to SF-51)
-    "SF49": SF49_YIELD,
+    # Yield/Duration (SF-49/50/51)
+    "SF49_50": SF49_YIELD,
     "SF51": SF51_YIELD,
     
     # Average life conventions (SF-56)
