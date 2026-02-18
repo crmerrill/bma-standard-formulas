@@ -715,7 +715,7 @@ class TestCashflowModule(unittest.TestCase):
                 self.assertAlmostEqual(
                     act.vol_prepay[i] / orig, cf.vol_prepay, places=5,
                 )
-                # gross interest (act_int = gross when no defaults)
+                # gross interest (act_int uses gross rate; = gross_int when no defaults)
                 self.assertAlmostEqual(
                     act.act_int[i] / orig, cf.gross_int, places=4,
                 )
@@ -750,8 +750,8 @@ class TestCrossModuleConsistency(unittest.TestCase):
                     continue
                 loan = _build_loan(ex)
                 sch = scheduled_cashflow_from_loan(loan)
-                # Survival ratio from cashflows module
-                cf_ratio = sch.pool_factor[1] / sch.pool_factor[0]
+                # Survival ratio from cashflows module (BAL path)
+                cf_ratio = sch.amortized_balance_fraction[1] / sch.amortized_balance_fraction[0]
                 # Survival ratio from scheduled_payments
                 sp_ratio = cf.bal2 / cf.bal1
                 self.assertAlmostEqual(cf_ratio, sp_ratio, places=8)

@@ -21,6 +21,7 @@ from pathlib import Path
 from bma_standard_formulas.cashflows import (
     run_bma_scheduled_cashflow,
     run_bma_actual_cashflow,
+    BMAScheduledCashflow,
 )
 
 
@@ -90,7 +91,7 @@ class TestBMAReferenceC3Cashflows(unittest.TestCase):
         scheduled = run_bma_scheduled_cashflow(
             original_balance=CFA_ORIG_BAL,
             current_balance=CFA_ORIG_BAL,
-            coupon=CFA_WAC,
+            rate_margin=CFA_WAC,
             original_term=CFA_WAM,
             remaining_term=CFA_WAM,
         )
@@ -172,7 +173,7 @@ class TestBMAReferenceC3Cashflows(unittest.TestCase):
         scheduled = run_bma_scheduled_cashflow(
             original_balance=ORIG_BAL,
             current_balance=ORIG_BAL,
-            coupon=WAC,
+            rate_margin=WAC,
             original_term=WAM,
             remaining_term=WAM,
         )
@@ -238,6 +239,105 @@ class TestBMAReferenceC3Cashflows(unittest.TestCase):
             f"BMA Reference vs Cash Flow B has {len(errors)} discrepancies:\n" +
             "\n".join(errors[:20]) +
             (f"\n... and {len(errors) - 20} more" if len(errors) > 20 else ""))
+
+
+class TestAddScheduledCashflows(unittest.TestCase):
+    """Test BMAScheduledCashflow.add_cashflows() and repr/to_dataframe."""
+
+    def test_add_two_scheduled_cashflows(self):
+        cf1 = run_bma_scheduled_cashflow(
+            original_balance=100.0,
+            current_balance=100.0,
+            rate_margin=0.08,
+            original_term=12,
+            remaining_term=12,
+        )
+        cf2 = run_bma_scheduled_cashflow(
+            original_balance=200.0,
+            current_balance=200.0,
+            rate_margin=0.08,
+            original_term=12,
+            remaining_term=12,
+        )
+        combined = cf1.add_cashflows(cf2)
+        self.assertEqual(len(combined.period), 13)
+        # Balance identity: beginning_balance - principal_paid = ending_balance (period 0 is initial state)
+        np.testing.assert_array_almost_equal(
+            combined.beginning_balance[1:] - combined.principal_paid[1:],
+            combined.ending_balance[1:],
+        )
+        self.assertAlmostEqual(combined.ending_balance[0], 300.0)
+        self.assertTrue(np.all(combined.pool_factor <= 1.0))
+        self.assertTrue(np.all(combined.gross_rate >= 0))
+
+    def test_add_via_dunder(self):
+        cf1 = run_bma_scheduled_cashflow(100.0, 100.0, 0.08, 12, 12)  # rate_margin=0.08
+        cf2 = run_bma_scheduled_cashflow(50.0, 50.0, 0.08, 12, 12)
+        combined = cf1 + cf2
+        np.testing.assert_array_almost_equal(combined.ending_balance[0], 150.0)
+
+    def test_repr_uses_dataframe_when_pandas_available(self):
+        cf = run_bma_scheduled_cashflow(100.0, 100.0, 0.08, 12, 12)
+        r = repr(cf)
+        try:
+            import pandas as pd
+            self.assertIn("period", r)
+            self.assertIn("beginning_balance", r)
+        except ImportError:
+            self.assertIn("BMAScheduledCashflow", r)
+
+    def test_subtract_cashflows(self):
+        cf1 = run_bma_scheduled_cashflow(100.0, 100.0, 0.08, 12, 12)  # rate_margin=0.08
+        cf2 = run_bma_scheduled_cashflow(30.0, 30.0, 0.08, 12, 12)
+        diff = cf1.subtract_cashflows(cf2)
+        np.testing.assert_array_almost_equal(diff.ending_balance[0], 70.0)
+        diff2 = cf1 - cf2
+        np.testing.assert_array_almost_equal(diff2.ending_balance[0], 70.0)
+
+    def test_multiply_divide_by_scalar(self):
+        cf = run_bma_scheduled_cashflow(100.0, 100.0, 0.08, 12, 12)
+        scaled = cf * 2.0
+        np.testing.assert_array_almost_equal(scaled.ending_balance[0], 200.0)
+        np.testing.assert_array_almost_equal(scaled.pool_factor, cf.pool_factor)
+        scaled_rmul = 3.0 * cf
+        np.testing.assert_array_almost_equal(scaled_rmul.ending_balance[0], 300.0)
+        half = cf / 2.0
+        np.testing.assert_array_almost_equal(half.ending_balance[0], 50.0)
+
+    def test_add_10000_loans_balance_check(self):
+        """add_cashflows with 10k loans passes balance check (atol=1e-6)."""
+        np.random.seed(42)
+        cfs = [
+            run_bma_scheduled_cashflow(
+                original_balance=np.random.uniform(50_000, 500_000),
+                current_balance=100.0,
+                rate_margin=np.random.uniform(0.04, 0.08),
+                original_term=360,
+                remaining_term=360,
+            )
+            for _ in range(10000)
+        ]
+        combined = cfs[0].add_cashflows(*cfs[1:])
+        diff = np.abs(
+            (combined.beginning_balance[1:] - combined.principal_paid[1:])
+            - combined.ending_balance[1:]
+        )
+        self.assertLess(np.max(diff), 1e-6)
+
+    def test_add_cashflows_different_lengths_align_on_period_zero(self):
+        """add_cashflows aligns on period 0; shorter cashflows contribute zeros beyond maturity."""
+        cf_100 = run_bma_scheduled_cashflow(100.0, 100.0, 0.08, 12, 12)   # 13 periods
+        cf_50 = run_bma_scheduled_cashflow(50.0, 50.0, 0.08, 6, 6)         # 7 periods
+        combined = cf_100.add_cashflows(cf_50)
+        self.assertEqual(len(combined.period), 13)  # max of 13, 7
+        self.assertAlmostEqual(combined.ending_balance[0], 150.0)
+        # Periods 0-6: both contribute. Period 7-12: only cf_100 contributes
+        self.assertAlmostEqual(combined.ending_balance[6], cf_100.ending_balance[6] + cf_50.ending_balance[6])
+        self.assertAlmostEqual(combined.ending_balance[12], cf_100.ending_balance[12])
+        np.testing.assert_array_almost_equal(
+            combined.beginning_balance[1:] - combined.principal_paid[1:],
+            combined.ending_balance[1:],
+        )
 
 
 if __name__ == "__main__":
