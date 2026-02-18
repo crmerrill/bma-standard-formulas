@@ -1,2 +1,4 @@
 numpy
 scipy
+# Optional (soft): used for BMAScheduledCashflow.to_dataframe() and repr; code falls back if missing
+pandas
