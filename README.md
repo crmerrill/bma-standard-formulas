@@ -51,7 +51,7 @@ bal = sch_balance_factor_fixed_rate(9.5, 360, 348)
 cf = run_bma_scheduled_cashflow(
     original_balance=1_000_000,
     current_balance=1_000_000,
-    coupon=0.08,
+    rate_margin=0.08,
     original_term=360,
     remaining_term=360,
 )
