@@ -7,8 +7,6 @@ from scipy.optimize import brentq
 
 from . import scheduled_payments as bma_schpmt
 
-__version__ = "0.3.1"
-
 # =============================================================================
 # BMA Section B.2: Mortgage Prepayment Models (CPR, SMM, PSA): SF-5 to SF-10
 # =============================================================================
@@ -235,24 +233,14 @@ def project_act_end_factor(
     remaining_term_beginning = original_term - beginning_age
     remaining_term_ending = remaining_term_beginning - num_months
 
-    # Determine if fixed-rate or floating-rate
-    is_fixed_rate = (
-            isinstance(coupon_vector, (int, float)) or
-            len(coupon_vector) == 1 or
-            len(set(coupon_vector)) == 1
-    )
+    is_fixed_rate = isinstance(coupon_vector, (int, float)) or len(coupon_vector) <= 1
 
     if is_fixed_rate:
         coupon = float(coupon_vector) if isinstance(coupon_vector, (int, float)) else float(coupon_vector[0])
         sch_beg_factor = bma_schpmt.sch_balance_factor_fixed_rate(coupon, original_term, remaining_term_beginning)
         sch_end_factor = bma_schpmt.sch_balance_factor_fixed_rate(coupon, original_term, remaining_term_ending)
     else:
-        # Floating-rate: sch_balance_factors delegates to sch_payment_factor_vector
-        # which extends the coupon vector as needed:
-        #   - len == 1: fixed-rate convention, extended silently to all periods
-        #   - len < history needed and len > 1: extended BACKWARD with oldest rate (warning)
-        #   - len >= history but < full life: extended FORWARD with most recent rate
-        _, _, _, survival_factors = bma_schpmt.sch_balance_factors(coupon_vector, original_term, remaining_term_ending)
+        _, _, _, _, survival_factors = bma_schpmt.sch_balance_factors(coupon_vector, original_term)
         sch_beg_factor = survival_factors[beginning_age]
         sch_end_factor = survival_factors[beginning_age + num_months]
 
@@ -781,9 +769,7 @@ def historical_smm(
 
     # Step 3: Compute survival factors through ending_age
     # survival_factors[n] = BAL(Mₙ) = scheduled balance at age n (directly indexed)
-    _, _, _, survival_factors = bma_schpmt.sch_balance_factors(
-        coupon_vector, original_term, remaining_term_end
-    )
+    _, _, _, _, survival_factors = bma_schpmt.sch_balance_factors(coupon_vector, original_term)
 
     # Step 4: Extract scheduled balances by direct age indexing
     sch_beg_factor = survival_factors[beginning_age]
@@ -952,13 +938,8 @@ def historical_smm_pool(
         remaining_term_beginning = loan['original_term'] - loan['beginning_age']
         remaining_term_ending = remaining_term_beginning - pool_age
 
-        # Determine if fixed-rate (single coupon) or floating-rate (coupon vector)
         coupon_vec = loan['coupon_vector']
-        is_fixed_rate = (
-                isinstance(coupon_vec, (int, float)) or
-                len(coupon_vec) == 1 or
-                len(set(coupon_vec)) == 1
-        )
+        is_fixed_rate = isinstance(coupon_vec, (int, float)) or len(coupon_vec) <= 1
 
         if is_fixed_rate:
             coupon = float(coupon_vec) if isinstance(coupon_vec, (int, float)) else float(coupon_vec[-1])
@@ -969,14 +950,7 @@ def historical_smm_pool(
                 coupon, loan['original_term'], remaining_term_ending
             )
         else:
-            # Floating-rate: sch_balance_factors delegates to sch_payment_factor_vector
-            # which extends the coupon vector as needed:
-            #   - len == 1: fixed-rate convention, extended silently to all periods
-            #   - len < history needed and len > 1: extended BACKWARD with oldest rate (warning)
-            #   - len >= history but < full life: extended FORWARD with most recent rate
-            _, _, _, survival_factors = bma_schpmt.sch_balance_factors(
-                coupon_vec, loan['original_term'], remaining_term_ending
-            )
+            _, _, _, _, survival_factors = bma_schpmt.sch_balance_factors(coupon_vec, loan['original_term'])
             sch_beg_factor = survival_factors[loan['beginning_age']]
             sch_end_factor = survival_factors[loan['beginning_age'] + pool_age]
 
@@ -1209,11 +1183,81 @@ def abs_to_smm(abs_speed: float, month: int) -> float:
 
 
 def smm_to_abs(smm: float, month: int) -> float:
-    return NotImplementedError
+    """
+    Convert SMM to ABS speed for a given month (inverse of abs_to_smm).
+
+    BMA Reference: Section B.4, SF-13
+
+    Derivation (solving abs_to_smm for ABS):
+        SMM = (100 × ABS) / [100 - ABS × (n - 1)]
+        SMM × [100 - ABS × (n - 1)] = 100 × ABS
+        100 × SMM = ABS × [100 + SMM × (n - 1)]
+        ABS = (100 × SMM) / [100 + SMM × (n - 1)]
+
+    Args:
+        smm: Monthly prepayment rate as percentage (e.g., 1.0 for 1% SMM).
+        month: Loan age in months (1 = after first month). Must be >= 1.
+
+    Returns:
+        ABS speed as percentage. Returns 0.0 for month <= 0.
+
+    Example:
+        >>> abs_to_smm(1.0, 10)   # 1% ABS at month 10
+        1.0989...
+        >>> smm_to_abs(1.0989, 10)  # recover ABS speed
+        1.0000...
+    """
+    if month <= 0:
+        return 0.0
+    denominator = 100.0 + smm * (month - 1)
+    if denominator == 0.0:
+        return 0.0
+    return (100.0 * smm) / denominator
 
 
 def generate_smm_curve_from_abs(abs_speed: float, term: int) -> np.ndarray:
-    return NotImplementedError
+    """
+    Generate an SMM curve (decimal) from an ABS speed assumption.
+
+    BMA Reference: Section B.4, SF-13
+
+    Mirrors generate_smm_curve_from_psa in structure: returns a vector of
+    length term + 1 indexed by period (period 0 = origination snapshot,
+    SMM = 0). Each entry is the SMM for that period, converted to decimal.
+
+    Args:
+        abs_speed: ABS prepayment speed as percentage (e.g., 1.5 for 1.5% ABS).
+        term: Number of monthly periods (typically remaining_term of the loan).
+
+    Returns:
+        numpy array of SMM values as decimals (0-1), length = term + 1.
+        result[0] = 0.0 (origination period, no prepayment).
+        result[t] = abs_to_smm(abs_speed, t) / 100  for t = 1 .. term.
+
+    Example:
+        >>> smm_curve = generate_smm_curve_from_abs(1.5, 36)
+        >>> smm_curve[1]   # SMM at month 1 for 1.5% ABS
+        0.015...
+        >>> smm_curve[36]  # SMM rises as outstanding balance shrinks
+        0.0375...
+    """
+    # Build period index [0, 1, ..., term] and apply the ABS -> SMM formula
+    # vectorized over the full curve.  Period 0 is clamped to 0 (no prepayment
+    # at origination).  Periods where denominator <= 0 are clamped to 1.0
+    # (all remaining loans prepay), matching the abs_to_smm scalar logic.
+    # errstate suppresses the divide-by-zero numpy warning that arises when
+    # denominator contains zeros: np.where evaluates both branches before
+    # selecting, so the safe branch (100.0) must be guarded explicitly.
+    periods = np.arange(term + 1, dtype=float)
+    denominator = 100.0 - abs_speed * (periods - 1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        raw = (100.0 * abs_speed) / denominator
+    smm_pct = np.where(
+        periods <= 0,
+        0.0,
+        np.where(denominator <= 0, 100.0, raw),
+    )
+    return smm_pct / 100.0
 
 
 def historical_abs(
@@ -1341,16 +1385,34 @@ def sda_to_cdr(
 def generate_sda_curve(
     sda_speed: float, term: int, months_to_liquidation: int = 12
 ) -> np.ndarray:
-    """Generate a full SDA CDR curve for a given term (1-indexed months)."""
-    return np.array(
-        [
-            sda_to_cdr(
-                sda_speed,
-                i,
-                term=term,
-                months_to_liquidation=months_to_liquidation,
-            )
-            for i in range(term + 1)
-        ]
+    """Generate a full SDA CDR curve for a given term (vectorized).
+
+    Uses numpy piecewise evaluation of the SDA model:
+      Months 1-30:   CDR ramps 0.02% to 0.60%
+      Months 31-60:  CDR flat at 0.60%
+      Months 61-120: CDR ramps 0.60% to 0.03%
+      Months 121+:   CDR flat at 0.03%
+    Scaled by sda_speed/100.  Final months_to_liquidation periods zeroed.
+    """
+    months = np.arange(term + 1, dtype=float)
+    scale = sda_speed / 100.0
+    base_cdr = np.where(
+        months <= 30,
+        0.02 * months,
+        np.where(
+            months <= 60,
+            0.60,
+            np.where(
+                months <= 120,
+                0.60 - 0.0095 * (months - 60),
+                0.03,
+            ),
+        ),
     )
+    base_cdr[0] = 0.0
+    curve = base_cdr * scale
+    if months_to_liquidation > 0:
+        cutoff = max(0, term - months_to_liquidation)
+        curve[cutoff + 1:] = 0.0
+    return curve
 
