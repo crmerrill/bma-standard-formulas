@@ -23,7 +23,7 @@ All functions are documented with BMA section and formula references. The code i
 pip install bma-standard-formulas
 ```
 
-Requirements: Python 3.12+, NumPy, SciPy.
+Requirements: Python 3.12+, NumPy, SciPy, pandas, pyarrow.
 
 From source (development):
 
@@ -35,8 +35,11 @@ pip install -e .
 
 ## Quick start
 
+The package is split into two sub-packages that reflect the natural layering:
+
 ```python
-from bma_standard_formulas import (
+# BMA math — factors, speeds, cashflow runners
+from bma_standard_formulas.formulas import (
     sch_balance_factor_fixed_rate,
     run_bma_scheduled_cashflow,
     smm_to_cpr,
@@ -47,11 +50,11 @@ from bma_standard_formulas import (
 bal = sch_balance_factor_fixed_rate(9.5, 360, 348)
 # => ~0.9942
 
-# Scheduled cash flow (no prepay/default)
+# Scheduled cash flow (no prepay/default); coupon_vector in PERCENT (8.0 = 8%)
 cf = run_bma_scheduled_cashflow(
     original_balance=1_000_000,
     current_balance=1_000_000,
-    rate_margin=0.08,
+    coupon_vector=8.0,
     original_term=360,
     remaining_term=360,
 )
@@ -65,19 +68,34 @@ cpr = smm_to_cpr(smm)  # annualized CPR %
 cpr_curve = generate_psa_curve(100, 360)  # 100% PSA, 360 months
 ```
 
+Loading a loan tape from CSV and running a portfolio:
+
+```python
+# Application layer — Loan, tape reader, portfolio runners
+from bma_standard_formulas.engine import read_loan_tape, run_scheduled_portfolio
+import numpy as np
+
+# Read a CSV tape → list[Loan]; asof_date inferred from tape or supplied here
+loans = read_loan_tape("tape.csv", asof_date=np.datetime64("2024-01-01"))
+
+# Run scheduled cashflows and aggregate to pool level
+portfolio = run_scheduled_portfolio(loans)
+df = portfolio.to_dataframe()  # pandas DataFrame, one row per period
+```
+
 Using the `Loan` object and wrappers:
 
 ```python
-from bma_standard_formulas import Loan, scheduled_cashflow_from_loan
+from bma_standard_formulas.engine import Loan, scheduled_cashflow_from_loan
 import numpy as np
 
 loan = Loan(
+    loan_id=1,
     origination_date=np.datetime64("2020-01-01"),
     asof_date=np.datetime64("2024-01-01"),
     original_balance=1_000_000,
     current_balance=950_000,
-    rate_margin=8.0,
-    rate_index=None,  # fixed rate
+    rate_margin=8.0,        # fixed-rate: full coupon in % (reset_frequency=0 default)
     servicing_fee=0.25,
     original_term=360,
     remaining_term=312,
@@ -85,14 +103,46 @@ loan = Loan(
 scheduled_cf = scheduled_cashflow_from_loan(loan)
 ```
 
-## Module layout
+## Numeric conventions
+
+All rates and speeds follow the conventions in the BMA Standard Formulas document. The table below summarizes the values as stored and passed throughout this library:
+
+| Quantity | Convention | Example |
+|----------|-----------|---------|
+| Coupon / WAC / rate_margin | **PERCENT** | `8.0` = 8% annual |
+| CPR | **PERCENT** | `6.0` = 6% annualized prepayment |
+| PSA | **PERCENT** | `100.0` = 100% PSA standard ramp |
+| CDR | **PERCENT** | `2.0` = 2% annualized default rate |
+| ABS | **PERCENT** | `1.5` = 1.5% ABS speed |
+| SDA | **PERCENT** | `100.0` = 100% SDA standard curve |
+| SMM | **decimal fraction** | `0.005` = 0.5% monthly prepayment |
+| MDR | **decimal fraction** | `0.002` = 0.2% monthly default rate |
+| Loss severity | **decimal fraction** | `0.35` = 35% loss given default |
+| Servicing fee (`servicing_fee`) | **PERCENT** | `0.25` = 25 bps annual |
+| Servicing rate (`svc_rate_performing`) | **decimal fraction** | `0.0025` = 25 bps annual |
+
+The cashflow runners convert internally: `monthly_rate = coupon / 1200.0`. Use the conversion functions in `payment_models` (e.g. `cpr_to_smm`, `psa_to_smm`) to move between PERCENT and decimal fraction forms.
+
+## Package layout
+
+### `bma_standard_formulas.formulas` — BMA math
 
 | Module | Contents |
 |--------|----------|
 | `scheduled_payments` | B.1: balance factor, payment factor, am factor, vectors (fixed & floating) |
 | `payment_models` | B.2–B.4, C: SMM/CPR/PSA/ABS conversions, PSA/SDA curves, historical recovery, pool aggregation |
-| `cashflows` | C.3: `BMAScheduledCashflow`, `BMAActualCashflow`, `run_bma_scheduled_cashflow`, `run_bma_actual_cashflow`, `Loan`, wrappers |
-| `examples` | BMA example data structures and reference scenarios |
+| `cashflows` | C.3: `BMAScheduledCashflow`, `BMAActualCashflow`, `run_bma_scheduled_cashflow`, `run_bma_actual_cashflow`, `CashFlowPair` |
+| `examples` | BMA reference examples and scenario data structures |
+
+### `bma_standard_formulas.engine` — Application layer
+
+| Module | Contents |
+|--------|----------|
+| `loan` | `Loan` dataclass, `build_rate_vector`, per-loan cashflow wrappers, portfolio runner functions |
+| `portfolio` | `PortfolioCashflow`, `PortfolioMode`, waterfall aggregation (`apply_waterfall`) |
+| `tape` | `TapeSchema`, `read_loan_tape`, `loans_to_dataframe`: CSV/DataFrame → `list[Loan]` |
+| `rate_index` | `RateIndex`: dated market rate curve for floating-rate loans |
+| `cashflow_persistence` | Parquet I/O: `write_cashflow`, `read_scheduled`, `read_actual` |
 
 ## AI assistance disclosure
 
