@@ -393,6 +393,11 @@ class TestRowLevelErrors(unittest.TestCase):
     def test_all_row_errors_collected(self):
         """All bad rows reported in one TapeReadError, not just the first."""
         df = _make_minimal_df(n=5)
+        # pandas 2.2+ may raise on incompatible scalar assignment into numeric dtypes.
+        # Cast the targeted columns to object so malformed string payloads reach the parser.
+        df["rate_margin"] = df["rate_margin"].astype(object)
+        df["original_balance"] = df["original_balance"].astype(object)
+        df["original_term"] = df["original_term"].astype(object)
         df.loc[0, "rate_margin"] = "bad"
         df.loc[2, "original_balance"] = "bad"
         df.loc[4, "original_term"] = "bad"
@@ -404,6 +409,7 @@ class TestRowLevelErrors(unittest.TestCase):
 
     def test_error_message_shows_row_index(self):
         df = _make_minimal_df(n=3)
+        df["rate_margin"] = df["rate_margin"].astype(object)
         df.loc[1, "rate_margin"] = "bad"
         with self.assertRaises(TapeReadError) as ctx:
             read_loan_tape(df)
@@ -411,6 +417,7 @@ class TestRowLevelErrors(unittest.TestCase):
 
     def test_error_message_includes_exception_type_and_loan_id(self):
         df = _make_minimal_df(n=1)
+        df["remaining_term"] = df["remaining_term"].astype(object)
         df.loc[0, "remaining_term"] = "bad-int"
         with self.assertRaises(TapeReadError) as ctx:
             read_loan_tape(df)
