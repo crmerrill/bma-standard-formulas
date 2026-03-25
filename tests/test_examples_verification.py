@@ -12,11 +12,11 @@ Status: Active
 import unittest
 import numpy as np
 
-from bma_standard_formulas.examples import (
+from bma_standard_formulas.formulas.examples import (
     BMA_EXAMPLES, BMAExample, PeriodCashFlows, PrepayType, DefaultType,
     SF12_POOL1, SF12_POOL2,
 )
-from bma_standard_formulas.scheduled_payments import (
+from bma_standard_formulas.formulas.scheduled_payments import (
     sch_balance_factor_fixed_rate,
     sch_payment_factor_fixed_rate,
     sch_am_factor_fixed_rate,
@@ -26,7 +26,7 @@ from bma_standard_formulas.scheduled_payments import (
     sch_balance_factors,
     sch_ending_balance_factor,
 )
-from bma_standard_formulas.payment_models import (
+from bma_standard_formulas.formulas.payment_models import (
     smm_from_factors,
     smm_to_cpr,
     cpr_to_smm,
@@ -51,7 +51,7 @@ from bma_standard_formulas.payment_models import (
     sda_to_cdr,
     generate_sda_curve,
 )
-from bma_standard_formulas.cashflows import (
+from bma_standard_formulas.engine.loan import (
     Loan,
     scheduled_cashflow_from_loan,
     actual_cashflow_from_loan,
@@ -116,12 +116,12 @@ def _build_loan(ex):
     # BMA D.2 SF-40: use the D.2-adjusted remaining term for amortization
     rem = _rem_beg(ex)
     return Loan(
+        loan_id=1,
         origination_date=ex.origination.origination_date or '2000-01-01',
         asof_date=ex.current.asof_date or '2000-01-01',
         original_balance=ex.origination.original_balance,
         current_balance=ex.current.current_balance,
         rate_margin=_coupon(ex),
-        rate_index=None,
         servicing_fee=ex.assumptions.servicing_fee,
         original_term=oterm,
         remaining_term=rem,
@@ -169,7 +169,12 @@ class TestScheduledPayments(unittest.TestCase):
                 if cf is None or cf.bal1 == 0 or not _is_factor_bal(cf):
                     continue
                 fixed = sch_balance_factor_fixed_rate(_coupon(ex), _oterm(ex), _rem_beg(ex))
-                general = sch_ending_balance_factor([_coupon(ex)], _oterm(ex), _rem_beg(ex))
+                age = _oterm(ex) - _rem_beg(ex)
+                if age > 0:
+                    rate_vec = [0.0] + [_coupon(ex)] * age
+                    general = sch_ending_balance_factor(rate_vec, _oterm(ex))
+                else:
+                    general = 1.0
                 self.assertAlmostEqual(fixed, general, places=10)
 
     def test_sch_balance_factors_vector(self):
@@ -182,7 +187,8 @@ class TestScheduledPayments(unittest.TestCase):
                 oterm = _oterm(ex)
                 beg_age = oterm - _rem_beg(ex)
                 end_age = oterm - _rem_end(ex)
-                _, _, _, survival = sch_balance_factors([_coupon(ex)], oterm, _rem_end(ex))
+                rate_vec = [0.0] + [_coupon(ex)] * oterm
+                _, _, _, _, survival = sch_balance_factors(rate_vec, oterm)
                 self.assertAlmostEqual(survival[beg_age], cf.bal1, places=5)
                 self.assertAlmostEqual(survival[end_age], cf.bal2, places=5)
 
@@ -266,9 +272,8 @@ class TestScheduledPayments(unittest.TestCase):
                 oterm = _oterm(ex)
                 end_age = oterm - _rem_end(ex)
                 # sch_payment_factor_vector returns (periods, rates, payment_factors)
-                periods, rates, pf_vec = sch_payment_factor_vector(
-                    [_coupon(ex)], oterm, _rem_end(ex)
-                )
+                rate_vec = [0.0] + [_coupon(ex)] * oterm
+                periods, rates, pf_vec = sch_payment_factor_vector(rate_vec, oterm)
                 # pf_vec[end_age] is the annuity factor AF for that period
                 # It should match sch_payment_factor(coupon, rem_beg) with default bal=1.0
                 scalar_af = sch_payment_factor(_coupon(ex), _rem_beg(ex))
@@ -589,15 +594,6 @@ class TestLoanProperties(unittest.TestCase):
                     continue
                 self.assertEqual(loan.age, _oterm(ex) - _rem_beg(ex))
 
-    def test_loan_coupon_percent(self):
-        for name, ex in BMA_EXAMPLES.items():
-            with self.subTest(example=name):
-                try:
-                    loan = _build_loan(ex)
-                except (ValueError, TypeError):
-                    continue
-                self.assertAlmostEqual(loan.coupon_percent, _coupon(ex), places=10)
-
     def test_loan_is_fixed_rate(self):
         for name, ex in BMA_EXAMPLES.items():
             with self.subTest(example=name):
@@ -607,19 +603,18 @@ class TestLoanProperties(unittest.TestCase):
                     continue
                 self.assertTrue(loan.is_fixed_rate())
 
-    def test_loan_coupon_decimal(self):
+    def test_loan_build_coupon_vector_fixed(self):
         for name, ex in BMA_EXAMPLES.items():
             with self.subTest(example=name):
                 try:
                     loan = _build_loan(ex)
                 except (ValueError, TypeError):
                     continue
-                if loan.remaining_term <= 0:
-                    continue
-                self.assertAlmostEqual(
-                    loan.coupon_decimal_for_cashflow()[0],
-                    _coupon(ex) / 100.0, places=10,
-                )
+                cv = loan.build_coupon_vector()
+                self.assertEqual(len(cv), loan.original_term + 1)
+                self.assertEqual(cv[0], 0.0)
+                for n in range(1, len(cv)):
+                    self.assertAlmostEqual(cv[n], _coupon(ex), places=10)
 
     def test_loan_servicing_fee_decimal(self):
         for name, ex in BMA_EXAMPLES.items():
@@ -632,19 +627,6 @@ class TestLoanProperties(unittest.TestCase):
                     loan.servicing_fee_decimal(),
                     ex.assumptions.servicing_fee / 100.0, places=10,
                 )
-
-    def test_loan_get_coupon_vector(self):
-        for name, ex in BMA_EXAMPLES.items():
-            with self.subTest(example=name):
-                try:
-                    loan = _build_loan(ex)
-                except (ValueError, TypeError):
-                    continue
-                if loan.remaining_term <= 0:
-                    continue
-                vec = loan.get_coupon_vector(3)
-                for v in vec:
-                    self.assertAlmostEqual(v, _coupon(ex), places=10)
 
 
 # =============================================================================
@@ -689,11 +671,14 @@ class TestCashflowModule(unittest.TestCase):
                 loan = _build_loan(ex)
                 sch = scheduled_cashflow_from_loan(loan)
                 rem = loan.remaining_term
+                # Curves must be age-indexed (length = loan.age + remaining_term + 1).
+                # Constant assumptions extend trivially across the full age range.
+                curve_len = loan.age + rem + 1
                 act = actual_cashflow_from_loan(
                     loan, sch,
-                    np.full(rem + 1, cf.smm),
-                    np.full(rem + 1, cf.mdr),
-                    np.full(rem + 1, ex.assumptions.loss_severity),
+                    np.full(curve_len, cf.smm),
+                    np.full(curve_len, cf.mdr),
+                    np.full(curve_len, ex.assumptions.loss_severity),
                     severity_lag=ex.assumptions.recovery_months,
                     months_to_liquidation=ex.assumptions.recovery_months,
                 )
@@ -715,7 +700,7 @@ class TestCashflowModule(unittest.TestCase):
                 self.assertAlmostEqual(
                     act.vol_prepay[i] / orig, cf.vol_prepay, places=5,
                 )
-                # gross interest (act_int = gross when no defaults)
+                # gross interest (act_int uses gross rate; = gross_int when no defaults)
                 self.assertAlmostEqual(
                     act.act_int[i] / orig, cf.gross_int, places=4,
                 )
@@ -750,8 +735,8 @@ class TestCrossModuleConsistency(unittest.TestCase):
                     continue
                 loan = _build_loan(ex)
                 sch = scheduled_cashflow_from_loan(loan)
-                # Survival ratio from cashflows module
-                cf_ratio = sch.pool_factor[1] / sch.pool_factor[0]
+                # Survival ratio from cashflows module (BAL path)
+                cf_ratio = sch.amortized_balance_fraction[1] / sch.amortized_balance_fraction[0]
                 # Survival ratio from scheduled_payments
                 sp_ratio = cf.bal2 / cf.bal1
                 self.assertAlmostEqual(cf_ratio, sp_ratio, places=8)
@@ -766,11 +751,12 @@ class TestCrossModuleConsistency(unittest.TestCase):
                 loan = _build_loan(ex)
                 sch = scheduled_cashflow_from_loan(loan)
                 rem = loan.remaining_term
+                curve_len = loan.age + rem + 1
                 act = actual_cashflow_from_loan(
                     loan, sch,
-                    np.full(rem + 1, cf.smm),
-                    np.full(rem + 1, cf.mdr),
-                    np.full(rem + 1, ex.assumptions.loss_severity),
+                    np.full(curve_len, cf.smm),
+                    np.full(curve_len, cf.mdr),
+                    np.full(curve_len, ex.assumptions.loss_severity),
                     severity_lag=ex.assumptions.recovery_months,
                     months_to_liquidation=ex.assumptions.recovery_months,
                 )

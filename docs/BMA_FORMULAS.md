@@ -7,6 +7,19 @@
 
 ---
 
+## Important Scope Note
+
+This document is a math-first reference to BMA formulas and original notation.
+
+- It intentionally mirrors BMA-style percent notation in many equations.
+- Library API units and behavior contracts are documented in:
+  - `README.md`
+  - `docs/architecture/overview.md`
+
+When there is a conflict between a historical formula narrative here and live code behavior, treat the implementation docs and code as authoritative.
+
+---
+
 ## Table of Contents
 
 - [A. Computational Accuracy](#a-computational-accuracy)
