@@ -823,6 +823,42 @@ def _annuity_payment(balance: float, monthly_rate: float, remaining_term: int) -
     return balance * monthly_rate / (1 - (1 + monthly_rate) ** (-remaining_term))
 
 
+def _normalize_coupon_vector(
+    coupon_vector: float | np.ndarray,
+    remaining_term: int,
+    *,
+    allow_period_indexed_with_snapshot: bool = False,
+) -> tuple[np.ndarray, bool]:
+    """Normalize coupon input to a remaining-term annual-rate vector in percent.
+
+    Returns:
+        (cv, is_fixed_like_input) where cv has length remaining_term and
+        is_fixed_like_input reflects whether the original input was scalar or
+        constant-valued.
+    """
+    cv = np.atleast_1d(np.asarray(coupon_vector, dtype=float))
+    if not np.all(np.isfinite(cv)):
+        raise ValueError("coupon_vector contains non-finite values (NaN or Inf)")
+
+    if allow_period_indexed_with_snapshot and len(cv) == remaining_term + 1:
+        cv = cv[1:]
+
+    is_fixed_like_input = len(cv) == 1 or np.all(cv == cv[0])
+
+    if len(cv) < remaining_term:
+        if is_fixed_like_input:
+            cv = np.full(remaining_term, cv[0])
+        else:
+            raise ValueError(
+                f"coupon_vector has {len(cv)} rates but remaining_term is {remaining_term}. "
+                "Provide a complete vector for floating-rate loans."
+            )
+    elif len(cv) > remaining_term:
+        cv = cv[:remaining_term]
+
+    return cv, is_fixed_like_input
+
+
 @_njit(cache=True)
 def _scheduled_cf_floating_loop(
     periods: int,
@@ -932,24 +968,11 @@ def run_bma_scheduled_cashflow(
         raise ValueError("servicing_fee must be >= 0")
 
     # ── Validate and normalize coupon_vector ──────────────────────────
-    cv = np.atleast_1d(np.asarray(coupon_vector, dtype=float))
-    if not np.all(np.isfinite(cv)):
-        raise ValueError("coupon_vector contains non-finite values (NaN or Inf)")
-
-    all_equal = len(cv) == 1 or np.all(cv == cv[0])
-
-    if len(cv) < remaining_term:
-        if all_equal:
-            cv = np.full(remaining_term, cv[0])
-        else:
-            raise ValueError(
-                f"coupon_vector has {len(cv)} rates but remaining_term is {remaining_term}. "
-                f"Provide a complete vector for floating-rate loans."
-            )
-    elif len(cv) > remaining_term:
-        cv = cv[:remaining_term]
-
-    is_fixed = all_equal
+    cv, is_fixed = _normalize_coupon_vector(
+        coupon_vector=coupon_vector,
+        remaining_term=remaining_term,
+        allow_period_indexed_with_snapshot=False,
+    )
 
     periods = remaining_term + 1
     loan_age = original_term - remaining_term
@@ -1505,7 +1528,7 @@ def _actual_cf_loop(
     smm_arr: np.ndarray,
     mdr_arr: np.ndarray,
     severity_curve: np.ndarray,
-    gross_monthly: float,
+    gross_monthly_vec: np.ndarray,
     svc_monthly_perf: float,
     svc_monthly_def: float,
     svc_monthly_fcl: float,
@@ -1580,8 +1603,9 @@ def _actual_cf_loop(
             prin_recov[i] = max(adb[i] - prin_loss[i], 0.0)
 
         # Interest
-        exp_int[i] = (perf_bal[i - 1] + fcl[i - 1]) * gross_monthly
-        lost_int[i] = (new_def[i] + fcl[i - 1]) * gross_monthly
+        gross_monthly_i = gross_monthly_vec[i]
+        exp_int[i] = (perf_bal[i - 1] + fcl[i - 1]) * gross_monthly_i
+        lost_int[i] = (new_def[i] + fcl[i - 1]) * gross_monthly_i
         act_int[i] = exp_int[i] - lost_int[i]
 
         # 3-tier servicing
@@ -1601,7 +1625,7 @@ def _actual_cf_loop(
                 adv_int[i] = 0.0
                 if advance_months >= 1:
                     adv_prin[i] += new_def[i] * one_minus_af
-                    adv_int[i] += new_def[i] * gross_monthly
+                    adv_int[i] += new_def[i] * gross_monthly_i
                 advancing_fcl = 0.0
                 for d in range(max(0, i - advance_months), i):
                     advancing_fcl += new_def[d]
@@ -1647,7 +1671,7 @@ def run_bma_actual_cashflow(
     mdr_curve: np.ndarray,
     severity_curve: np.ndarray,
     severity_lag: int = 12,
-    coupon: float = 8.0,
+    coupon_vector: float | np.ndarray = 8.0,
     pi_advanced: bool = True,
     advance_months: int = -1,
     svc_rate_performing: float = 0.0,
@@ -1691,7 +1715,13 @@ def run_bma_actual_cashflow(
         severity_curve: Loss severity per dollar defaulted (decimal, 0-1).
             Same period-indexed convention as smm_curve.
         severity_lag: Months from default to liquidation (BMA default 12).
-        coupon: Annual gross interest rate in PERCENT (e.g. 9.5 for 9.5%).
+        coupon_vector: Annual gross coupon rate in PERCENT (e.g. 9.5 for 9.5%).
+            Scalar: fixed-rate, expanded to remaining_term.
+            Array of length remaining_term: one coupon per period.
+            Array of length remaining_term + 1: period-indexed with slot 0
+                as snapshot, which is dropped.
+            Array shorter than remaining_term with all equal values: treated as fixed.
+            Array shorter than remaining_term with varying values: rejected (ValueError).
         pi_advanced: Whether servicer advances P&I to investors on defaulted loans.
         advance_months: Per-vintage advance window. -1 = until liquidation (BMA default).
             0 = no advancing. 4 = FNMA/GNMA agency convention.
@@ -1737,8 +1767,17 @@ def run_bma_actual_cashflow(
     svc_monthly_fcl = svc_rate_fcl / 12.0
 
     periods = len(scheduled_cf.period)
-    gross_monthly = coupon / 1200.0
-    net_monthly = gross_monthly - svc_rate_performing / 12.0
+    remaining_term = periods - 1
+
+    # Normalize coupon vector (shared contract with scheduled runner).
+    cv, _ = _normalize_coupon_vector(
+        coupon_vector=coupon_vector,
+        remaining_term=remaining_term,
+        allow_period_indexed_with_snapshot=True,
+    )
+
+    gross_monthly_vec = np.concatenate([[0.0], cv / 1200.0])
+    net_monthly_vec = gross_monthly_vec - svc_rate_performing / 12.0
 
     # --- Allocate output arrays ---
     period = scheduled_cf.period.copy()
@@ -1772,9 +1811,9 @@ def run_bma_actual_cashflow(
     smm = np.zeros(periods)
     mdr = np.zeros(periods)
     # Store annualized rates (monthly * 12) for readability
-    gross_rate = np.full(periods, gross_monthly * 12)
+    gross_rate = gross_monthly_vec * 12.0
+    net_rate = net_monthly_vec * 12.0
     gross_rate[0] = 0.0
-    net_rate = np.full(periods, net_monthly * 12)
     net_rate[0] = 0.0
     age = scheduled_cf.age.copy() if len(scheduled_cf.age) == periods else np.zeros(periods)
 
@@ -1794,7 +1833,7 @@ def run_bma_actual_cashflow(
         vol_prepay, exp_int, lost_int, act_int, prin_recov, prin_loss, adb,
         svc_billed, adv_prin, adv_int, adv_reimbursed_prin, adv_reimbursed_int,
         adv_unrecoverable, adv_prin_outstanding, adv_int_outstanding, adv_outstanding,
-        smm, mdr, severity_curve, gross_monthly,
+        smm, mdr, severity_curve, gross_monthly_vec,
         svc_monthly_perf, svc_monthly_def, svc_monthly_fcl,
         severity_lag, months_to_liquidation,
         effective_advancing, advance_months,

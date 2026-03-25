@@ -15,6 +15,10 @@ Covers:
 
 import unittest
 import numpy as np
+import tempfile
+import gc
+import warnings
+from pathlib import Path
 
 from bma_standard_formulas.formulas import (
     BMAScheduledCashflow,
@@ -38,6 +42,7 @@ from bma_standard_formulas.engine import (
     apply_waterfall,
 )
 from bma_standard_formulas.formulas.cashflows import fields_by_kind
+from bma_standard_formulas.engine import write_cashflow
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +420,40 @@ class TestVersionHistory(unittest.TestCase):
         p_v2 = p.rewind(2, store=store)
         self.assertEqual(p_v2.n_constituents, 2)
 
+    def test_history_retention_cap_trims_old_events(self):
+        s1 = _make_scheduled(loan_id=1)
+        p = PortfolioCashflow([s1], mode=PortfolioMode.SCHEDULED_ONLY, max_history_events=3)
+        p += _make_scheduled(loan_id=2)
+        p += _make_scheduled(loan_id=3)
+        p += _make_scheduled(loan_id=4)
+        p += _make_scheduled(loan_id=5)
+        self.assertEqual(len(p._history), 3)
+        self.assertEqual(p.history_dropped_events, 2)
+        self.assertEqual(p._history[0].version, 3)
+
+    def test_rewind_before_retained_history_raises(self):
+        s1 = _make_scheduled(loan_id=1)
+        s2 = _make_scheduled(loan_id=2)
+        s3 = _make_scheduled(loan_id=3)
+        s4 = _make_scheduled(loan_id=4)
+        p = PortfolioCashflow([s1], mode=PortfolioMode.SCHEDULED_ONLY, max_history_events=2)
+        p += s2
+        p += s3
+        p += s4
+        store = {s.cf_id: s for s in (s1, s2, s3, s4)}
+        with self.assertRaises(ValueError):
+            p.rewind(1, store=store)
+
+    def test_history_trim_logs_aggregate_drop_count(self):
+        s1 = _make_scheduled(loan_id=1)
+        with self.assertLogs("bma_standard_formulas.engine.portfolio", level="INFO") as cm:
+            p = PortfolioCashflow([s1], mode=PortfolioMode.SCHEDULED_ONLY, max_history_events=2)
+            p += _make_scheduled(loan_id=2)
+            p += _make_scheduled(loan_id=3)
+        joined = "\n".join(cm.output)
+        self.assertIn("Portfolio history trimmed", joined)
+        self.assertIn("total_dropped=", joined)
+
 
 # ---------------------------------------------------------------------------
 # Advance Reimbursement
@@ -531,6 +570,94 @@ class TestEventLog(unittest.TestCase):
         s1 = _make_scheduled(loan_id=1)
         p = PortfolioCashflow([s1], mode=PortfolioMode.SCHEDULED_ONLY)
         self.assertFalse(hasattr(p._history[0], "operands"))
+
+
+class TestRewindComponentLoading(unittest.TestCase):
+
+    def _persist_scheduled_only(self):
+        s = _make_scheduled(loan_id=9001, balance=250_000.0, rate=0.065, term=24, remaining=24)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "history.parquet"
+            write_cashflow(s, path, mode="write")
+            loaded = PortfolioCashflow.load_rewind_components(path)
+            return s, loaded
+
+    def _persist_actual_only(self):
+        s = _make_scheduled(loan_id=9011, balance=180_000.0, rate=0.0625, term=24, remaining=24)
+        a = _make_actual(s, psa=120, sda=80)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "history_actual.parquet"
+            write_cashflow(a, path, mode="write")
+            loaded = PortfolioCashflow.load_rewind_components(path)
+            return a, loaded
+
+    def test_load_rewind_components_preserves_metadata(self):
+        s, loaded = self._persist_scheduled_only()
+        self.assertIn(s.cf_id, loaded)
+
+        s_loaded = loaded[s.cf_id]
+        self.assertEqual(s_loaded.loan_id, s.loan_id)
+        self.assertEqual(s_loaded.original_term, s.original_term)
+        self.assertEqual(s_loaded.remaining_term, s.remaining_term)
+        np.testing.assert_allclose(s_loaded.ending_balance, s.ending_balance)
+
+        a, actual_loaded = self._persist_actual_only()
+        self.assertIn(a.cf_id, actual_loaded)
+        a_loaded = actual_loaded[a.cf_id]
+        self.assertEqual(a_loaded.loan_id, a.loan_id)
+        self.assertEqual(a_loaded.scheduled_loan_id, a.scheduled_loan_id)
+        np.testing.assert_allclose(a_loaded.perf_bal, a.perf_bal)
+
+    def test_load_rewind_components_store_works_with_rewind(self):
+        s, loaded = self._persist_scheduled_only()
+        s2 = _make_scheduled(loan_id=9002, balance=100_000.0, rate=0.06, term=24, remaining=24)
+        p = PortfolioCashflow([s], mode=PortfolioMode.SCHEDULED_ONLY)
+        p += s2
+        rewound = p.rewind(1, store=loaded)
+        self.assertEqual(rewound.n_constituents, 1)
+        np.testing.assert_allclose(rewound.scheduled.ending_balance, s.ending_balance)
+
+
+class TestPersistentHistoryLifecycle(unittest.TestCase):
+
+    def test_unclosed_persistent_portfolio_emits_resource_warning(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "persistent.parquet"
+            s = _make_scheduled(loan_id=9901, balance=100_000.0, rate=0.06, term=24, remaining=24)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", ResourceWarning)
+                p = PortfolioCashflow(
+                    [s],
+                    mode=PortfolioMode.SCHEDULED_ONLY,
+                    persistent_history=True,
+                    history_path=path,
+                )
+                p.flush()
+                del p
+                gc.collect()
+            self.assertTrue(
+                any(issubclass(w.category, ResourceWarning) for w in caught),
+                "Expected ResourceWarning when persistent writer is not explicitly closed",
+            )
+
+    def test_context_manager_avoids_resource_warning(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "persistent_ctx.parquet"
+            s = _make_scheduled(loan_id=9902, balance=100_000.0, rate=0.06, term=24, remaining=24)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", ResourceWarning)
+                with PortfolioCashflow(
+                    [s],
+                    mode=PortfolioMode.SCHEDULED_ONLY,
+                    persistent_history=True,
+                    history_path=path,
+                ) as p:
+                    p.flush()
+                gc.collect()
+            self.assertFalse(
+                any(issubclass(w.category, ResourceWarning) for w in caught),
+                "Context manager path should close cleanly without ResourceWarning",
+            )
 
 
 if __name__ == "__main__":

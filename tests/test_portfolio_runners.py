@@ -120,7 +120,7 @@ class TestRunScheduledPortfolio(unittest.TestCase):
         self.assertIsNotNone(pf.scheduled)
 
     def test_empty_loans_raises(self):
-        with self.assertRaises((ValueError, Exception)):
+        with self.assertRaises(ValueError):
             run_scheduled_portfolio([])
 
     def test_flush_true_clears_constituents(self):
@@ -228,7 +228,7 @@ class TestRunActualPortfolio(unittest.TestCase):
         self.assertIsInstance(df, pd.DataFrame)
 
     def test_empty_loans_raises(self):
-        with self.assertRaises((ValueError, Exception)):
+        with self.assertRaises(ValueError):
             run_actual_portfolio(
                 [],
                 smm_curves=np.zeros(361),

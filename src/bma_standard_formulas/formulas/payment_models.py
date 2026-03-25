@@ -79,8 +79,26 @@ def smm_from_factors(
     Returns:
         Average SMM as decimal (0-1)
     """
+    # Input contract checks (kept intentionally short for readability).
+    if window_months <= 0:
+        raise ValueError("window_months must be > 0")
+    if not np.isfinite(act_beg_factor) or not np.isfinite(act_end_factor):
+        raise ValueError("act_beg_factor and act_end_factor must be finite")
+    if not np.isfinite(sch_beg_factor) or not np.isfinite(sch_end_factor):
+        raise ValueError("sch_beg_factor and sch_end_factor must be finite")
+    if not (0.0 <= act_beg_factor <= 1.0 and 0.0 <= act_end_factor <= 1.0):
+        raise ValueError("actual factors must be in [0, 1]")
+    if not (0.0 <= sch_beg_factor <= 1.0 and 0.0 <= sch_end_factor <= 1.0):
+        raise ValueError("scheduled factors must be in [0, 1]")
+    if sch_beg_factor <= 0.0:
+        raise ValueError("sch_beg_factor must be > 0")
+
     f_sched = act_beg_factor * (sch_end_factor / sch_beg_factor)  # Scheduled factor if 0% prepays
+    if f_sched <= 0.0:
+        raise ValueError("scheduled baseline factor must be > 0")
     survival_ratio = act_end_factor / f_sched
+    if not (0.0 <= survival_ratio <= 1.0):
+        raise ValueError("implied survival ratio must be in [0, 1]")
 
     # Take nth root to get average monthly survival, then convert to SMM
     avg_monthly_survival = survival_ratio ** (1.0 / window_months)
@@ -837,6 +855,25 @@ def historical_psa(
         ... )
         150.00  # PSA = 150%
     """
+    if original_term <= 0:
+        raise ValueError("original_term must be > 0")
+    if beginning_age < 0 or ending_age < 0:
+        raise ValueError("beginning_age and ending_age must be >= 0")
+    if ending_age <= beginning_age:
+        raise ValueError("ending_age must be greater than beginning_age")
+    if ending_age > original_term:
+        raise ValueError("ending_age cannot exceed original_term")
+    if beginning_month < 1:
+        raise ValueError("beginning_month must be >= 1")
+    if not (0.0 <= act_beg_factor <= 1.0 and 0.0 <= act_end_factor <= 1.0):
+        raise ValueError("act_beg_factor and act_end_factor must be in [0, 1]")
+    if not np.isfinite(coupon):
+        raise ValueError("coupon must be finite")
+    if tolerance <= 0:
+        raise ValueError("tolerance must be > 0")
+    if max_iterations <= 0:
+        raise ValueError("max_iterations must be > 0")
+
     num_months = ending_age - beginning_age
 
     # Month indices for the observation window (for PSA model, 1-indexed)
@@ -1041,6 +1078,34 @@ def historical_psa_pool(
     exactly reproduces the observed ending balance. The SF-12 value may be an
     approximation or use a different iteration method.
     """
+    if not isinstance(loan_pool, list) or len(loan_pool) == 0:
+        raise ValueError("loan_pool must be a non-empty list")
+    if pool_age <= 0:
+        raise ValueError("pool_age must be > 0")
+    if tolerance <= 0:
+        raise ValueError("tolerance must be > 0")
+    if max_iterations <= 0:
+        raise ValueError("max_iterations must be > 0")
+
+    required_keys = {
+        "coupon_vector", "original_term", "original_face",
+        "beginning_age", "beginning_factor", "ending_factor",
+    }
+    for i, loan in enumerate(loan_pool):
+        missing = required_keys - set(loan.keys())
+        if missing:
+            raise ValueError(f"loan_pool[{i}] missing required keys: {sorted(missing)}")
+        if loan["original_term"] <= 0:
+            raise ValueError(f"loan_pool[{i}].original_term must be > 0")
+        if loan["original_face"] <= 0:
+            raise ValueError(f"loan_pool[{i}].original_face must be > 0")
+        if loan["beginning_age"] < 0:
+            raise ValueError(f"loan_pool[{i}].beginning_age must be >= 0")
+        if loan["beginning_age"] + pool_age > loan["original_term"]:
+            raise ValueError(f"loan_pool[{i}] has ending age beyond original_term")
+        if not (0.0 <= loan["beginning_factor"] <= 1.0 and 0.0 <= loan["ending_factor"] <= 1.0):
+            raise ValueError(f"loan_pool[{i}] factors must be in [0, 1]")
+
     # Compute observed combined ending balance
     observed_ending_balance = sum(
         loan['original_face'] * loan['ending_factor'] for loan in loan_pool

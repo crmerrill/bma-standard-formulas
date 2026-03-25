@@ -29,6 +29,7 @@ Ref: BMA SF-4, SF-15, SF-17, SF-18, SF-19; FNMA F-1-20; GNMA Ch. 14-15; FHLMC AM
 """
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -47,6 +48,8 @@ from bma_standard_formulas.formulas.cashflows import (
     PortfolioModeError,
     fields_by_kind,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -770,6 +773,8 @@ class PortfolioCashflow:
       - _committed:  Dict caching computed results ('_scheduled', '_pool', '_waterfall').
                      Cleared by _invalidate() on any mutation.
       - _history:    Append-only list of PortfolioEvent for version tracking / rewind.
+                     Retention is bounded by max_history_events (default 5,000).
+                     Old events are dropped from the front when cap is exceeded.
       - Mode locking: PortfolioMode (SCHEDULED_ONLY, ACTUAL_ONLY, PAIRED) with
                       LCD coercion when combining different modes.
       - Cross-collat: CrossCollateralMode (NONE, FULL, GROUP) with configurable cap.
@@ -783,9 +788,9 @@ class PortfolioCashflow:
         mode: PortfolioMode | str = PortfolioMode.SCHEDULED_ONLY,
         cross_collateral_mode: CrossCollateralMode | None = None,
         cross_collateral_cap: float = 1.0,
-        validate_stocks: bool = True,
         persistent_history: bool = False,
         history_path: str | Path | None = None,
+        max_history_events: int | None = 5000,
     ):
         self._pending: list[BMAScheduledCashflow | BMAActualCashflow | CashFlowPair] = []
 
@@ -805,16 +810,20 @@ class PortfolioCashflow:
 
         self._cross_collateral_mode = cross_collateral_mode or CrossCollateralMode.NONE
         self._cross_collateral_cap = max(0.0, min(1.0, cross_collateral_cap))
-        self._validate_stocks = validate_stocks
         self._persistent_history = persistent_history
         self._history_path = Path(history_path) if history_path else None
+        if max_history_events is not None and (not isinstance(max_history_events, int) or max_history_events <= 0):
+            raise ValueError("max_history_events must be a positive int or None")
+        self._max_history_events = max_history_events
         self._committed: dict[str, object] = {}
         self._history: list[PortfolioEvent] = []
+        self._history_dropped_events = 0
         self._version = 0
         self._n_constituents = 0
         self._flushed = False  # True after flush() has released _pending
         self._parquet_writer: Any = None   # pq.ParquetWriter, opened lazily on first flush
         self._cf_meta_store: dict[str, dict] = {}  # accumulated scalar META for footer
+        self._persistent_writer_opened = False
 
         # Ingest initial constituents (with mode extraction and history logging)
         for c in constituents:
@@ -823,7 +832,7 @@ class PortfolioCashflow:
             self._n_constituents += len(extracted)
             for item in extracted:
                 self._version += 1
-                self._history.append(PortfolioEvent(
+                self._append_history_event(PortfolioEvent(
                     version=self._version,
                     timestamp=time.perf_counter(),
                     op=PortfolioOp.ADD,
@@ -837,6 +846,23 @@ class PortfolioCashflow:
     def _invalidate(self) -> None:
         """Clear all cached aggregation results, forcing recomputation on next access."""
         self._committed.clear()
+
+    def _append_history_event(self, evt: PortfolioEvent) -> None:
+        """Append one event and enforce bounded history retention."""
+        self._history.append(evt)
+        if self._max_history_events is None:
+            return
+        excess = len(self._history) - self._max_history_events
+        if excess > 0:
+            del self._history[:excess]
+            self._history_dropped_events += excess
+            logger.info(
+                "Portfolio history trimmed: dropped=%d total_dropped=%d retained=%d max_history_events=%d",
+                excess,
+                self._history_dropped_events,
+                len(self._history),
+                self._max_history_events,
+            )
 
     def _unflushed_for_mutation(self) -> None:
         """If flushed, move the committed aggregate back to _pending as a super-constituent.
@@ -935,6 +961,7 @@ class PortfolioCashflow:
                 batch.schema,
                 compression="snappy",
             )
+            self._persistent_writer_opened = True
 
         self._parquet_writer.write_table(batch)
 
@@ -988,6 +1015,26 @@ class PortfolioCashflow:
         if self._history_path and self._history_path.exists() and self._cf_meta_store:
             self._finalize_parquet_metadata()
 
+    def __del__(self) -> None:
+        """Best-effort safety net for unclosed persistent-history writers."""
+        if not getattr(self, "_persistent_history", False):
+            return
+        if getattr(self, "_parquet_writer", None) is None:
+            return
+        if not getattr(self, "_persistent_writer_opened", False):
+            return
+        warnings.warn(
+            "PortfolioCashflow with persistent_history=True was not closed; "
+            "closing automatically in __del__. Use a context manager or call close().",
+            ResourceWarning,
+            stacklevel=2,
+        )
+        try:
+            self.close()
+        except Exception:
+            # Never raise from __del__; best-effort cleanup only.
+            pass
+
     def _finalize_parquet_metadata(self) -> None:
         """Rewrite the Parquet file footer with accumulated CF scalar metadata.
 
@@ -1004,29 +1051,20 @@ class PortfolioCashflow:
         pq.write_table(updated, self._history_path)
 
     @staticmethod
-    def load_constituents(path: str | Path) -> dict[str, BMAActualCashflow | BMAScheduledCashflow]:
-        """Read constituents back from a Parquet file, keyed by cf_id.
+    def load_rewind_components(path: str | Path) -> dict[str, BMAActualCashflow | BMAScheduledCashflow]:
+        """Load persisted cashflows for rewind, keyed by cf_id.
 
-        Reconstructs cashflow objects from the stored array data.  Returns a
-        dict suitable for passing to rewind(version, store=...).
-
-        Args:
-            path:  Path to the Parquet file written by flush().
-
-        Returns:
-            Dict mapping cf_id -> cashflow object.
+        Uses the schema-aware persistence reader to preserve scalar metadata
+        (loan/date/term fields) and array data exactly.
         """
-        df = pd.read_parquet(path)
-        result: dict = {}
-        for cf_id, group in df.groupby("cf_id"):
-            group = group.sort_values("period").reset_index(drop=True)
-            cf_id_str = str(cf_id)
-            # Discriminate type by presence of an actual-only column.
-            if "perf_bal" in group.columns:
-                cf = BMAActualCashflow.from_dataframe(group, cf_id=cf_id_str)
-            else:
-                cf = BMAScheduledCashflow.from_dataframe(group, cf_id=cf_id_str)
-            result[cf_id_str] = cf
+        from bma_standard_formulas.engine.cashflow_persistence import read_cashflows
+
+        result: dict[str, BMAActualCashflow | BMAScheduledCashflow] = {}
+        for cf in read_cashflows(path):
+            cid = str(cf.cf_id)
+            if cid in result:
+                raise ValueError(f"Duplicate cf_id {cid!r} found in persisted history: {path}")
+            result[cid] = cf
         return result
 
     @classmethod
@@ -1054,6 +1092,11 @@ class PortfolioCashflow:
     def mode(self) -> PortfolioMode:
         """Current portfolio mode (may have been coerced by LCD on combination)."""
         return self._mode
+
+    @property
+    def history_dropped_events(self) -> int:
+        """Cumulative count of event-log entries dropped by bounded retention."""
+        return self._history_dropped_events
 
     # --- Lazy aggregation ---
 
@@ -1168,12 +1211,21 @@ class PortfolioCashflow:
                 mode=new_mode,
                 cross_collateral_mode=self._cross_collateral_mode,
                 cross_collateral_cap=self._cross_collateral_cap,
+                max_history_events=self._max_history_events,
             )
             # Transfer constituents from both sides (re-extract under new_mode)
             new_portfolio._pending = list(self._pending) + list(other._pending)
             new_portfolio._n_constituents = len(new_portfolio._pending)
             new_portfolio._version = self._version + other._version
             new_portfolio._history = list(self._history) + list(other._history)
+            new_portfolio._history_dropped_events = (
+                self._history_dropped_events + other._history_dropped_events
+            )
+            if new_portfolio._max_history_events is not None:
+                excess = len(new_portfolio._history) - new_portfolio._max_history_events
+                if excess > 0:
+                    del new_portfolio._history[:excess]
+                    new_portfolio._history_dropped_events += excess
             return new_portfolio
 
         # portfolio + cf: mutate self
@@ -1187,7 +1239,7 @@ class PortfolioCashflow:
         self._invalidate()
         for item in extracted:
             self._version += 1
-            self._history.append(PortfolioEvent(
+            self._append_history_event(PortfolioEvent(
                 version=self._version,
                 timestamp=time.perf_counter(),
                 op=PortfolioOp.ADD,
@@ -1220,6 +1272,7 @@ class PortfolioCashflow:
                 mode=self._mode,
                 cross_collateral_mode=self._cross_collateral_mode,
                 cross_collateral_cap=self._cross_collateral_cap,
+                max_history_events=self._max_history_events,
             )
             new_portfolio._pending = remaining
             new_portfolio._n_constituents = len(remaining)
@@ -1244,7 +1297,7 @@ class PortfolioCashflow:
         self._invalidate()
         for item in removed:
             self._version += 1
-            self._history.append(PortfolioEvent(
+            self._append_history_event(PortfolioEvent(
                 version=self._version,
                 timestamp=time.perf_counter(),
                 op=PortfolioOp.SUBTRACT,
@@ -1276,7 +1329,7 @@ class PortfolioCashflow:
         self._pending[:] = [c.scale_by(scalar) for c in self._pending]
         self._invalidate()
         self._version += 1
-        self._history.append(PortfolioEvent(
+        self._append_history_event(PortfolioEvent(
             version=self._version,
             timestamp=time.perf_counter(),
             op=PortfolioOp.SCALE,
@@ -1315,14 +1368,26 @@ class PortfolioCashflow:
 
         Returns:
             A new PortfolioCashflow representing the state at the target version.
+
+        Raises:
+            ValueError: If version predates retained history (bounded retention
+                dropped older events).
         """
         current = PortfolioCashflow(
             [],
             mode=self._mode,
             cross_collateral_mode=self._cross_collateral_mode,
             cross_collateral_cap=self._cross_collateral_cap,
-            validate_stocks=self._validate_stocks,
+            max_history_events=self._max_history_events,
         )
+        if self._history:
+            earliest_version = self._history[0].version
+            if version < earliest_version:
+                raise ValueError(
+                    f"Cannot rewind to version {version}: earliest retained history is version "
+                    f"{earliest_version}. {self._history_dropped_events} event(s) were dropped "
+                    "from the front of history."
+                )
         for evt in self._history:
             if evt.version > version:
                 break

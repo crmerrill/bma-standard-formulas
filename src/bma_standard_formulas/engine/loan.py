@@ -119,7 +119,12 @@ class Loan:
     rate_floor: float | None = None      # life floor: absolute min coupon (%)
 
     def __post_init__(self) -> None:
-        """Validate loan data per BMA requirements."""
+        """Validate loan data per BMA requirements.
+
+        Validation philosophy for this educational library:
+        - Dates: strict parseability checks at construction time.
+        - Economics/terms: domain checks (balances, terms, cap/floor ordering).
+        """
         if self.original_term <= 0:
             raise ValueError(f"original_term must be positive, got {self.original_term}")
         if self.remaining_term < 0:
@@ -136,15 +141,29 @@ class Loan:
                 f"current_balance ({self.current_balance}) cannot exceed "
                 f"original_balance ({self.original_balance})"
             )
-        # Parse dates separately from validation so that a conversion failure
-        # (e.g. None / non-date input) silently skips the check, but an actual
-        # date ordering violation still raises.
-        try:
-            orig = np.datetime64(self.origination_date)
-            asof = np.datetime64(self.asof_date)
-        except (TypeError, ValueError):
-            orig = asof = None
-        if orig is not None and asof is not None and asof < orig:
+
+        def _parse_date_or_raise(field: str, value: np.datetime64 | date | None, required: bool) -> np.datetime64 | None:
+            if value is None:
+                if required:
+                    raise ValueError(f"{field} is required and cannot be None")
+                return None
+            try:
+                return np.datetime64(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field} must be a valid date-like value, got {value!r}") from exc
+
+        # Required dates must always parse.
+        orig = _parse_date_or_raise("origination_date", self.origination_date, required=True)
+        asof = _parse_date_or_raise("asof_date", self.asof_date, required=True)
+
+        # Optional dates must parse when provided.
+        _parse_date_or_raise("maturity_date", self.maturity_date, required=False)
+        _parse_date_or_raise("first_payment_date", self.first_payment_date, required=False)
+        _parse_date_or_raise("next_payment_date", self.next_payment_date, required=False)
+        _parse_date_or_raise("last_payment_date", self.last_payment_date, required=False)
+        _parse_date_or_raise("next_reset_date", self.next_reset_date, required=False)
+
+        if asof < orig:
             raise ValueError(
                 f"asof_date ({self.asof_date}) cannot be before "
                 f"origination_date ({self.origination_date})"
@@ -532,7 +551,8 @@ def actual_cashflow_from_loan(
         ValueError: If any curve is too short to cover loan.age + loan.remaining_term + 1.
     """
     coupon_vec = loan.build_coupon_vector(rate_index)
-    coupon = float(coupon_vec[loan.age + 1]) if len(coupon_vec) > loan.age + 1 else loan.rate_margin
+    # Strip age-0 slot and align to this loan's remaining projection periods.
+    cv_for_runner = coupon_vec[loan.age + 1:] if loan.age > 0 else coupon_vec[1:]
 
     # Slice age-indexed curves to the period-indexed window for this loan.
     smm_sliced = _slice_curve(smm_curve, loan, "smm_curve")
@@ -545,7 +565,7 @@ def actual_cashflow_from_loan(
         mdr_curve=mdr_sliced,
         severity_curve=sev_sliced,
         severity_lag=severity_lag,
-        coupon=coupon,
+        coupon_vector=cv_for_runner,
         pi_advanced=loan.pi_advanced,
         advance_months=loan.advance_months,
         svc_rate_performing=loan.servicing_fee_decimal(),

@@ -201,6 +201,24 @@ class TestTypeConversion(unittest.TestCase):
         self.assertEqual(loans[0].advance_months, 4)
         self.assertEqual(loans[0].reset_frequency, 12)
 
+    def test_int_field_decimal_string_rejected(self):
+        df = _make_minimal_df(n=1, original_term=["360.0"])
+        with self.assertRaises(TapeReadError) as ctx:
+            read_loan_tape(df)
+        self.assertIn("original_term", str(ctx.exception))
+
+    def test_int_field_scientific_notation_rejected(self):
+        df = _make_minimal_df(n=1, remaining_term=["3e2"])
+        with self.assertRaises(TapeReadError) as ctx:
+            read_loan_tape(df)
+        self.assertIn("remaining_term", str(ctx.exception))
+
+    def test_int_field_float_type_rejected(self):
+        df = _make_minimal_df(n=1, loan_id=[1.0])
+        with self.assertRaises(TapeReadError) as ctx:
+            read_loan_tape(df)
+        self.assertIn("loan_id", str(ctx.exception))
+
     def test_float_as_string(self):
         """Rate passed as a string in the CSV should parse correctly."""
         df = _make_minimal_df(n=1)
@@ -390,6 +408,23 @@ class TestRowLevelErrors(unittest.TestCase):
         with self.assertRaises(TapeReadError) as ctx:
             read_loan_tape(df)
         self.assertIn("Row 1", str(ctx.exception))
+
+    def test_error_message_includes_exception_type_and_loan_id(self):
+        df = _make_minimal_df(n=1)
+        df.loc[0, "remaining_term"] = "bad-int"
+        with self.assertRaises(TapeReadError) as ctx:
+            read_loan_tape(df)
+        msg = str(ctx.exception)
+        self.assertIn("loan_id=1", msg)
+        self.assertIn("ValueError", msg)
+
+    def test_unexpected_exception_is_not_wrapped(self):
+        class BoomSchema(TapeSchema):
+            def _parse_row(self, row: dict) -> Loan:  # type: ignore[override]
+                raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            BoomSchema().read(_make_minimal_df(n=1))
 
     def test_invalid_bool_raises(self):
         df = _make_minimal_df(n=1, pi_advanced=["maybe"])
