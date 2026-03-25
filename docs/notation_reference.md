@@ -1,5 +1,7 @@
 # BMA Notation Reference
 
+This page defines notation and indexing vocabulary. For executable API contracts (units, curve slicing, wrapper behavior), see `README.md` and `docs/architecture/overview.md`.
+
 ## B.1: The M₀ and M Notation
 
 **From BMA B.1 (SF-3):**

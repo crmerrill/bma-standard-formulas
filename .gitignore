@@ -41,6 +41,13 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
+# VBA add-in (pause; not ready for repo)
+vba/
+VBA_STATUS.md
+
+# Local-only review/planning artifacts
+local-only/
+
 # Excluded per plan (backup / internal only)
 bma_reference.py
 test_bma_up_sf_examples.py

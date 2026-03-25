@@ -1,11 +1,10 @@
+
 # Requires Python 3.12+
 # Uses native type hints: list[x], tuple[x, y], X | None (PEP 585, PEP 604)
 from __future__ import annotations
 
 import warnings
 import numpy as np
-
-__version__ = "0.3.1"
 
 
 
@@ -393,10 +392,10 @@ def sch_am_factor_fixed_rate(
 #       am_factorₙ = AF(Mₙ₋₁, rₙ) - rₙ
 #       BAL(Mₙ) = BAL(Mₙ₋₁) × (1 - am_factorₙ)
 #
-#   sch_payment_factor_vector(coupon_vector, original_term, remaining_term, num_periods)
+#   sch_payment_factor_vector(coupon_vector, original_term)
 #       Vectorized annuity factors for multiple periods at once.
 #
-#   sch_balance_factors(coupon_vector, original_term, remaining_term)
+#   sch_balance_factors(coupon_vector, original_term)
 #       Iterates from origination along the SCHEDULED (0% CPR, 0% CDR) path.
 #       Returns vectors of (periods, rates, am_factors, balance_factors)
 #       all indexed by age (n=0 is origination).
@@ -787,135 +786,104 @@ def am_factor(
 
 
 def sch_payment_factor_vector(
-        coupon_vector: list[float] | np.ndarray[float],
+        coupon_vector: float | list[float] | np.ndarray,
         original_term: int,
-        remaining_term: int | None = None,
-        num_periods: int | None = None
+        age: int | None = None,
 ) -> tuple[np.ndarray[int], np.ndarray[float], np.ndarray[float]]:
     """
-    Compute scheduled payment factors (annuity factors) for a vector of coupon rates.
+    Compute scheduled payment factors (annuity factors) for an age-indexed coupon vector.
 
     For each period n (from age n-1 to age n), computes the annuity factor:
 
         AFₙ = AF(Mₙ₋₁, rₙ) = rₙ / [1 - (1+rₙ)^-Mₙ₋₁]
 
     Where:
-        rₙ     = coupon_vector[n] / 1200.0 (monthly rate for period n)
-        Mₙ₋₁   = original_term - (n-1) = remaining term at START of period n
+        rₙ   = coupon_vector[n] / 1200  (monthly rate for period ending at age n)
+        Mₙ₋₁ = original_term - (n-1)    (remaining term at START of period n)
 
     BMA Reference: Section B.1, SF-4
 
-    COUPON VECTOR EXTENSION:
-    ------------------------
-    The coupon_vector is "oldest first" — coupon_vector[0] is the rate for period 1.
+    COUPON VECTOR CONVENTION (age-indexed):
+    ---------------------------------------
+    coupon_vector[0] = 0.0   (origination — no payment in this period)
+    coupon_vector[n] = annual coupon rate (%) for the period ending at age n
 
-    - len == 1: Fixed-rate convention. Extended silently to all periods (no warning).
-    - len == original_term: Full vector. No extension needed.
-    - len == original_term - remaining_term: Full history up to now. Extended FORWARD
-      with most recent rate for projection (no warning — normal for floating rate).
-    - len < original_term - remaining_term and len > 1: Missing historical rates.
-      Extended BACKWARD with oldest rate (warning — we're guessing at history),
-      then FORWARD with most recent rate if needed.
+    The vector has length num_periods + 1, where num_periods = len(coupon_vector) - 1.
+    Please use Loan.build_coupon_vector() to construct from partial coupon data.
+
+    As a convenience, a bare scalar (float/int) is accepted and treated as a
+    fixed-rate loan: expanded with a warning.
 
     Args:
-        coupon_vector: Annual coupon rates (%) for each period, oldest first.
-        original_term: Original term in months (M₀)
-        remaining_term: Remaining term in months (default: None = assume at origination).
-                       Used to determine where history ends and projection begins.
-        num_periods: Number of periods to compute (default: original_term = full life).
+        coupon_vector: Age-indexed annual coupon rates (%).  coupon_vector[0] = 0.0,
+            coupon_vector[n] = coupon for period n.  A bare scalar triggers
+            fixed-rate expansion (with warning).
+        original_term: Original term in months (M₀).
+        age: Compute periods 0 through age.  Default None = original_term (full life).
+            For a seasoned loan, pass age=loan_age to compute only the historical
+            path needed to anchor the BAL at that age.
 
     Returns:
-        Tuple of (periods, rates, payment_factors):
-        - periods: Age indices (0-indexed), length num_periods+1; periods[0]=0 (origination)
-        - rates: Annual coupon rate (%) used for each period; rates[0]=0.0 (origination)
-        - payment_factors: AFₙ = annuity factor for each period; payment_factors[0]=0.0 (origination)
+        Tuple of (periods, rates, payment_factors), all age-indexed (length age + 1):
+        - periods[n]: Age index (0 = origination)
+        - rates[n]: Annual coupon rate (%) for period ending at age n (0.0 at n=0)
+        - payment_factors[n]: Annuity factor for period ending at age n (0.0 at n=0)
 
     Raises:
-        ValueError: If coupon_vector is empty
-
-    Note:
-        num_periods=0 returns ([0], [0.0], [0.0]) — origination only.
+        ValueError: If coupon_vector is empty or original_term <= 0.
 
     Warns:
-        UserWarning: If coupon_vector is shorter than the historical period
-            (original_term - remaining_term) and len > 1. Oldest rate is extended
-            backwards to fill missing history. Not issued for single-rate (fixed).
-        
+        UserWarning: If a bare scalar is provided (int or float).
 
     Example:
-        >>> periods, rates, factors = sch_payment_factor_vector([9.5], 360)
-        >>> # Fixed-rate: 360 periods, all rates 9.5%
-        >>> periods, rates, factors = sch_payment_factor_vector([9.5], 360, 348, 12)
-        >>> # First 12 periods only
+        >>> cv = np.concatenate([[0.0], np.full(360, 9.5)])  # age-indexed
+        >>> periods, rates_used, factors = sch_payment_factor_vector(cv, 360)
+        >>> # Compute only first 60 periods (for a loan at age 60):
+        >>> periods, rates_used, factors = sch_payment_factor_vector(cv, 360, age=60)
     """
-    # Apply defaults for optional parameters
-    if remaining_term is None:
-        remaining_term = original_term
-    if num_periods is None:
-        num_periods = original_term
-    # Early return: at origination (num_periods=0) return age-0 only
-    if num_periods <= 0:
-        return (np.array([0], dtype=int), np.array([0.0]), np.array([0.0]))
-    # Happy path: all inputs valid — proceed
-    if (original_term > 0
-        and coupon_vector is not None and len(coupon_vector) > 0
-        and 0 <= remaining_term <= original_term):
-        coupons_given = len(coupon_vector)
-    else:
-        # Triage: identify the specific problem
-        if original_term <= 0:
-            raise ValueError(f"original_term must be positive, got {original_term}")
-        if coupon_vector is None or len(coupon_vector) == 0:
-            raise ValueError("coupon_vector cannot be None or empty")
-        if remaining_term < 0 or remaining_term > original_term:
-            raise ValueError(f"remaining_term must be in [0, {original_term}], got {remaining_term}")
-    
-    # Build age-indexed rate vector: rates[0] = 0.0 (origination), rates[n] = coupon for period n
-    # Fixed-rate: single coupon → fill entire vector
-    if coupons_given == 1:
-        rates = np.concatenate([[0.0], np.full(num_periods, coupon_vector[0])])
-    # Full vector or longer: just slice
-    elif coupons_given >= num_periods:
-        rates = np.concatenate([[0.0], np.asarray(coupon_vector[:num_periods], dtype=float)])
-    # Floating-rate with partial vector: backward and/or forward extension
-    else:
-        oldest_rate = float(coupon_vector[0])
-        newest_rate = float(coupon_vector[-1])
-        historical_periods = (original_term - remaining_term) if remaining_term is not None else 0
-        backward_fill = max(0, historical_periods - coupons_given)
-        if backward_fill > 0:
-            warnings.warn(
-                f"coupon_vector has {coupons_given} rates but {historical_periods} "
-                f"historical periods needed. Extending oldest rate ({oldest_rate}%) "
-                f"backwards for {backward_fill} period(s).",
-                UserWarning
-            )
-        forward_fill = max(0, num_periods - coupons_given - backward_fill)
-        rates = np.concatenate([
-            np.array([0.0]),
-            np.full(backward_fill, oldest_rate),
-            np.asarray(coupon_vector, dtype=float),
-            np.full(forward_fill, newest_rate),
-        ])[:num_periods + 1]
+    if original_term <= 0:
+        raise ValueError(f"original_term must be positive, got {original_term}")
+    if age is None:
+        age = original_term
 
-    # Age-indexed vectors: length num_periods + 1 (indices 0..num_periods)
+    rates = np.atleast_1d(np.asarray(coupon_vector, dtype=float))
+    if len(rates) == 0:
+        raise ValueError("coupon_vector cannot be empty")
+    if len(rates) == 1:
+        rates = np.concatenate([[0.0], np.full(age, rates[0])])
+        warnings.warn(
+            f"Single rate ({rates[1]}%) passed to sch_payment_factor_vector; "
+            f"treating as fixed-rate and expanding to {age} periods. "
+            f"Use Loan.build_coupon_vector() to construct the full vector explicitly.",
+            UserWarning,
+        )
+
+    num_periods = min(len(rates) - 1, age)
+    rates = rates[:num_periods + 1]
+
+    if num_periods > original_term:
+        raise ValueError(
+            f"coupon_vector implies {num_periods} periods but original_term is {original_term}"
+        )
+
     periods = np.arange(num_periods + 1, dtype=int)
-    r = rates[1:] / 1200.0                                  # monthly rates for periods 1..n
-    M = original_term - np.arange(num_periods)               # remaining term at START of periods 1..n
 
-    # AF(M, r) = r / [1 - (1+r)^-M], or 1/M when r = 0
-    af = np.where(r == 0.0, 1.0 / M, r / (1.0 - np.power(1.0 + r, -M)))
-    payment_factors = np.concatenate([[0.0], af])  # payment_factors[0] = 0 (origination)
+    # Computation vectors: length num_periods, one per period (1..num_periods)
+    # r[i] and M[i] are paired for period i+1: rate for the period, remaining term at its start
+    r = rates[1:] / 1200.0
+    M = original_term - np.arange(num_periods)
+
+    payment_factors = np.zeros(num_periods + 1)
+    payment_factors[1:] = np.where(r == 0.0, 1.0 / M, r / (1.0 - np.power(1.0 + r, -M)))
 
     return (periods, rates, payment_factors)
 
 
 def sch_balance_factors(
-        coupon_vector: list[float] | np.ndarray[float],
+        coupon_vector: float | list[float] | np.ndarray,
         original_term: int,
-        remaining_term: int | None = None,
-        num_periods: int | None = None
-) -> tuple[np.ndarray[int], np.ndarray[float], np.ndarray[float], np.ndarray[float]]:
+        age: int | None = None,
+) -> tuple[np.ndarray[int], np.ndarray[float], np.ndarray[float], np.ndarray[float], np.ndarray[float]]:
     """
     Compute scheduled balance factors (and amortization factors) by iterating from origination.
 
@@ -955,12 +923,16 @@ def sch_balance_factors(
     all annuity factors at once, converts to am_factors, then iterates to accumulate
     the balance trajectory.
 
-    RATE VECTOR CONVENTION:
-    -----------------------
-    - coupon_vector[0] = oldest rate (period 1)
-    - coupon_vector[-1] = most recent rate (latest period)
-    - If len(coupon_vector) < periods needed, the OLDEST rate is extended
-      backwards in time (with a warning).
+    COUPON VECTOR CONVENTION (age-indexed):
+    ---------------------------------------
+    coupon_vector[0] = 0.0   (origination — no payment in this period)
+    coupon_vector[n] = annual coupon rate (%) for the period ending at age n
+
+    Use Loan.build_coupon_vector() to construct from a RateIndex, or construct
+    a coupon_vector manually that is age-indexed.
+
+    A bare scalar (float/int) is accepted as a fixed-rate convenience and
+    expanded with a warning (delegated to sch_payment_factor_vector).
 
     INDEXING CONVENTION:
     --------------------
@@ -976,28 +948,34 @@ def sch_balance_factors(
         balance_factors[n] = balance_factors[n-1] × (1 - am_factors[n])  for n >= 1
 
     Args:
-        coupon_vector: Annual coupon rates (%), oldest first, most recent last.
-                     Extended backwards with oldest rate if too short.
-        original_term: Original term in months (M₀)
-        remaining_term: Target remaining term in months (Mₙ) at END of iteration.
-                       Default None = at origination (original_term).
-        num_periods: Number of periods to compute. Default None = original_term (full life).
-                     Same convention as sch_payment_factor_vector.
+        coupon_vector: Age-indexed annual coupon rates (%).  coupon_vector[0] = 0.0,
+            coupon_vector[n] = coupon for period n.  A bare scalar triggers
+            fixed-rate expansion (with warning).
+        original_term: Original term in months (M₀).
+        age: Compute periods 0 through age.  Default None = original_term (full life).
+            For a seasoned loan, pass age=loan_age to compute only the historical
+            path needed to anchor the scheduled BAL at that age.
 
     Returns:
-        Tuple of (periods, rates, am_factors, balance_factors):
-        - periods[n]: Age index n (0 = origination through n = target age)
+        Tuple of (periods, rates, payment_factors, am_factors, balance_factors),
+        all age-indexed with length age + 1:
+        - periods[n]: Age index n (0 = origination through n = age)
         - rates[n]: Annual coupon rate (%) for period ending at age n (0.0 at n=0)
-        - am_factors[n]: Amortization factor for period ending at age n (0.0 at n=0)
+        - payment_factors[n]: Annuity factor AF for period ending at age n (0.0 at n=0)
+        - am_factors[n]: Amortization factor (AF - r) for period ending at age n (0.0 at n=0)
         - balance_factors[n]: BAL(Mₙ) = scheduled balance at age n (1.0 at n=0)
 
     Raises:
-        ValueError: If coupon_vector is empty
+        ValueError: If coupon_vector is empty or original_term <= 0.
 
     Example (BMA SF-4):
-        >>> periods, rates, am, bal = sch_balance_factors([9.5], 360, 348)
+        >>> cv = np.concatenate([[0.0], np.full(360, 9.5)])
+        >>> periods, rates_used, pf, am, bal = sch_balance_factors(cv, 360)
         >>> print(f"At age 12 (M₁₂ = 348): BAL = {bal[12]:.8f}")
         At age 12 (M₁₂ = 348): BAL = 0.99417759
+        >>> # Just the first 60 periods (for anchoring at age 60):
+        >>> _, _, _, _, bal60 = sch_balance_factors(cv, 360, age=60)
+        >>> print(f"BAL at age 60: {bal60[-1]:.8f}")
 
     See Also:
         sch_payment_factor: Full algebraic derivation (Steps 1-6) including
@@ -1005,55 +983,53 @@ def sch_balance_factors(
         sch_payment_factor_vector: Vectorized annuity factor computation.
         am_factor: Single-period amortization primitive.
     """
-    # Same optional signature and defaults as sch_payment_factor_vector
-    if remaining_term is None:
-        remaining_term = original_term
-    if num_periods is None:
-        num_periods = original_term
     periods, rates_used, payment_factors = sch_payment_factor_vector(
-        coupon_vector, original_term, remaining_term=remaining_term, num_periods=num_periods
+        coupon_vector, original_term, age=age,
     )
 
     # Convert payment factors to am_factors: am_factor = payment_factor - monthly_rate
     monthly_rates = rates_used / 1200.0
     am_factors = payment_factors - monthly_rates
 
-    # Compute balance factors using cumulative product of (1 - am_factor)
-    # am_factors[0] = 0.0, so (1 - am_factors[0]) = 1.0 — origination is preserved
+    # BAL[n] = BAL[n-1] × (1 - am_factors[n])
+    #
+    # Each period, the balance shrinks by the amortization fraction.  The cumulative
+    # product telescopes the full path from origination:
+    #
+    #   BAL[n] = ∏ₖ₌₀ⁿ (1 - am_factors[k])
+    #
+    # At k=0: am_factors[0] = 0 → factor is 1.0, so BAL[0] = 1.0 (par at origination).
+    # At k=n: (1 - am_factors[n]) = 1 - (AF[n] - r[n]) = PVAF(M[n], r[n]) / PVAF(M[n-1], r[n])
+    #         which is the single-period balance decay ratio at rate r[n].
     balance_factors = np.cumprod(1.0 - am_factors)
 
-    return periods, rates_used, am_factors, balance_factors
+    return periods, rates_used, payment_factors, am_factors, balance_factors
 
 
 def sch_ending_balance_factor(
-        coupon_vector: list[float] | np.ndarray[float],
+        coupon_vector: float | list[float] | np.ndarray,
         original_term: int,
-        remaining_term: int
+        age: int | None = None,
 ) -> float:
     """
-    Get the latest scheduled balance factor, for a floating rate loan given
-    the coupon vector, original term, and remaining term.
+    Get the scheduled balance factor at a given age.
+
+    Convenience wrapper around sch_balance_factors that returns only the final
+    balance factor.  With age=loan_age, this gives the anchor BAL the cashflow
+    runner needs at period 0.
 
     Args:
-        coupon_vector: Annual coupon rates (%), oldest first, most recent last.
-                     Extended backwards with oldest rate if too short.
-        original_term: Original term in months (M0)
-        remaining_term: Remaining term in months (M). Function returns BAL(M).
+        coupon_vector: Age-indexed annual coupon rates (%).  coupon_vector[0] = 0.0,
+            coupon_vector[n] = coupon for period n.  A bare scalar triggers
+            fixed-rate expansion (with warning).
+        original_term: Original term in months (M₀).
+        age: BAL at this age.  Default None = original_term (BAL at maturity).
 
     Returns:
-        BAL(M): Scheduled ending balance at end of period (M0-M), as fraction of par
+        BAL at the specified age: scheduled balance as fraction of par.
 
     See Also:
-        sch_balance_factors: Returns full trajectory, not just final value
-        am_factor: Single-period primitive calculation
+        sch_balance_factors: Returns full trajectory, not just final value.
     """
-    # Delegate to sch_balance_factors - it handles rate vector extension/validation
-    # Explicitly pass num_periods so balance_factors[-1] is the target age
-    _, _, _, balance_factors = sch_balance_factors(
-        coupon_vector,
-        original_term,
-        remaining_term,
-        num_periods=original_term - remaining_term
-    )
-
+    _, _, _, _, balance_factors = sch_balance_factors(coupon_vector, original_term, age=age)
     return balance_factors[-1]

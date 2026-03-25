@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bma-standard-formulas"
-version = "0.3.1"
+version = "0.5.0"
 description = "BMA Standard Formulas for mortgage cash flows, prepayments, and defaults"
 readme = "README.md"
 license = { text = "GPL-2.0-only" }
@@ -28,7 +28,19 @@ classifiers = [
 dependencies = [
     "numpy",
     "scipy",
+    "pandas",
+    "pyarrow",
 ]
+
+[project.optional-dependencies]
+# JIT-compiled cashflow loops (significant speedup for large portfolios)
+numba = ["numba>=0.59"]
+# FRED rate data access via RateIndex.from_fred()
+fred = ["pandas-datareader>=0.10"]
+# All optional runtime extras
+all = ["numba>=0.59", "pandas-datareader>=0.10"]
+# Development / testing
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [project.urls]
 Repository = "https://github.com/crmerrill/bma-standard-formulas"
@@ -36,3 +48,7 @@ Documentation = "https://github.com/crmerrill/bma-standard-formulas#readme"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+testpaths = ["tests"]

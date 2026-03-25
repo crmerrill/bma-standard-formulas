@@ -47,14 +47,14 @@ Or run all tests together (recommended):
 
 import unittest
 import numpy as np
-from bma_standard_formulas.scheduled_payments import (
+from bma_standard_formulas.formulas.scheduled_payments import (
     sch_balance_factor_fixed_rate,
     sch_payment_factor_fixed_rate,
     sch_payment_factor,
     sch_am_factor_fixed_rate,
     sch_balance_factors,
 )
-from bma_standard_formulas.cashflows import (
+from bma_standard_formulas.formulas.cashflows import (
     run_bma_scheduled_cashflow,
     run_bma_actual_cashflow,
 )
@@ -136,7 +136,7 @@ class TestB1C3SurvivalFactorConsistency(unittest.TestCase):
             scheduled = run_bma_scheduled_cashflow(
                 original_balance=ORIGINAL_BALANCE,
                 current_balance=starting_balance,
-                coupon=coupon / 100.0,  # Convert percentage to decimal
+                coupon_vector=coupon,
                 original_term=orig_term,
                 remaining_term=rem_term,
             )
@@ -147,31 +147,18 @@ class TestB1C3SurvivalFactorConsistency(unittest.TestCase):
                 M_i = rem_term - i
                 
                 with self.subTest(coupon=coupon, orig_term=orig_term, i=i, age_i=age_i, M_i=M_i):
-                    # B.1 survival factor
-                    b1_survival = sch_balance_factor_fixed_rate(coupon, orig_term, M_i)
-                    
-                    # C.3 survival factor from scheduled cashflow
-                    # survival_factor = pool_factor / amortized_balance_fraction
-                    # With no prepays, pool_factor = amortized_balance_fraction, so survival_factor = 1.0
-                    # But we should check pool_factor matches the survival factor concept
-                    c3_pool_factor = scheduled.pool_factor[i]
-                    c3_amortized_bal = scheduled.amortized_balance_fraction[i]
-                    
-                    # For scheduled (no prepays), survival_factor should be 1.0
-                    # and pool_factor should equal amortized_balance_fraction
-                    # The B.1 survival factor represents BAL(M_i) / BAL(M_0)
-                    # which equals ending_balance[i] / original_balance
-                    c3_survival_equivalent = scheduled.ending_balance[i] / ORIGINAL_BALANCE
-                    
+                    # B.1 BAL = scheduled balance at age
+                    b1_bal = sch_balance_factor_fixed_rate(coupon, orig_term, M_i)
+                    # C.3 amortized_balance_fraction = BAL path
+                    c3_bal = scheduled.amortized_balance_fraction[i]
                     self.assertAlmostEqual(
-                        b1_survival, c3_survival_equivalent, places=DECIMAL_PLACES_FOR_ASSERTIONS,
-                        msg=f"Survival factor mismatch at period {i}: B.1={b1_survival:.10f}, C.3={c3_survival_equivalent:.10f}"
+                        b1_bal, c3_bal, places=DECIMAL_PLACES_FOR_ASSERTIONS,
+                        msg=f"BAL mismatch at period {i}: B.1={b1_bal:.10f}, C.3={c3_bal:.10f}"
                     )
-                    
-                    # With no prepays, pool_factor should equal amortized_balance_fraction
+                    # Virgin start (no prepay): F=BAL, survival_factor = 1.0
                     self.assertAlmostEqual(
-                        c3_pool_factor, c3_amortized_bal, places=DECIMAL_PLACES_FOR_ASSERTIONS,
-                        msg=f"Pool factor should equal amortized balance (no prepays) at period {i}"
+                        scheduled.survival_factor[i], 1.0, places=DECIMAL_PLACES_FOR_ASSERTIONS,
+                        msg=f"Survival factor should be 1.0 (F=BAL) at period {i}"
                     )
 
 
@@ -193,7 +180,7 @@ class TestB1C3PaymentFactorConsistency(unittest.TestCase):
             scheduled = run_bma_scheduled_cashflow(
                 original_balance=ORIGINAL_BALANCE,
                 current_balance=starting_balance,
-                coupon=coupon / 100.0,  # Convert percentage to decimal
+                coupon_vector=coupon,
                 original_term=orig_term,
                 remaining_term=rem_term,
             )
@@ -237,7 +224,7 @@ class TestB1C3AmortizationFactorConsistency(unittest.TestCase):
             scheduled = run_bma_scheduled_cashflow(
                 original_balance=ORIGINAL_BALANCE,
                 current_balance=starting_balance,
-                coupon=coupon / 100.0,  # Convert percentage to decimal
+                coupon_vector=coupon,
                 original_term=orig_term,
                 remaining_term=rem_term,
             )
@@ -282,7 +269,7 @@ class TestB1C3BalanceConsistency(unittest.TestCase):
             scheduled = run_bma_scheduled_cashflow(
                 original_balance=ORIGINAL_BALANCE,
                 current_balance=starting_balance,
-                coupon=coupon / 100.0,
+                coupon_vector=coupon,
                 original_term=orig_term,
                 remaining_term=rem_term,
             )
@@ -322,7 +309,7 @@ class TestC3ScheduledActualConsistency(unittest.TestCase):
             scheduled = run_bma_scheduled_cashflow(
                 original_balance=ORIGINAL_BALANCE,
                 current_balance=starting_balance,
-                coupon=coupon / 100.0,
+                coupon_vector=coupon,
                 original_term=orig_term,
                 remaining_term=rem_term,
             )
@@ -339,7 +326,7 @@ class TestC3ScheduledActualConsistency(unittest.TestCase):
                 mdr_curve=zero_mdr_curve,
                 severity_curve=zero_severity_curve,
                 severity_lag=12,
-                coupon=coupon / 100.0,
+                coupon_vector=coupon,
             )
             
             # Compare key fields
@@ -410,14 +397,14 @@ class TestB1C3VectorConsistency(unittest.TestCase):
             scheduled = run_bma_scheduled_cashflow(
                 original_balance=ORIGINAL_BALANCE,
                 current_balance=starting_balance,
-                coupon=coupon / 100.0,
+                coupon_vector=coupon,
                 original_term=orig_term,
                 remaining_term=rem_term,
             )
             
             # Generate B.1 balance factors vector
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, balance_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, balance_vec = sch_balance_factors(coupon_vector, orig_term)
             
             # Compare balance factors
             for i in range(rem_term + 1):
