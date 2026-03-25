@@ -134,6 +134,34 @@ class TestLoanValidation(unittest.TestCase):
         )
         self.assertEqual(loan.asof_date, np.datetime64("2024-01-01"))
 
+    def test_invalid_required_origination_date_raises(self):
+        with self.assertRaises(ValueError):
+            _loan(origination_date="not-a-date")
+
+    def test_invalid_required_asof_date_raises(self):
+        with self.assertRaises(ValueError):
+            _loan(asof_date="not-a-date")
+
+    def test_invalid_optional_maturity_date_raises(self):
+        with self.assertRaises(ValueError):
+            _loan(maturity_date="bad-date")
+
+    def test_invalid_optional_first_payment_date_raises(self):
+        with self.assertRaises(ValueError):
+            _loan(first_payment_date="bad-date")
+
+    def test_invalid_optional_next_payment_date_raises(self):
+        with self.assertRaises(ValueError):
+            _loan(next_payment_date="bad-date")
+
+    def test_invalid_optional_last_payment_date_raises(self):
+        with self.assertRaises(ValueError):
+            _loan(last_payment_date="bad-date")
+
+    def test_invalid_optional_next_reset_date_raises(self):
+        with self.assertRaises(ValueError):
+            _loan(next_reset_date="bad-date")
+
     # rate cap / floor
     def test_rate_cap_below_rate_floor_raises(self):
         with self.assertRaises(ValueError):

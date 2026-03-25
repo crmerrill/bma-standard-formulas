@@ -15,7 +15,7 @@ import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 
-from bma_standard_formulas.payment_models import (
+from bma_standard_formulas.formulas.payment_models import (
     cpr_to_smm_vector,
     generate_psa_curve,
     cdr_to_mdr_vector,

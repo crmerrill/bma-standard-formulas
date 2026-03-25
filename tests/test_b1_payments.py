@@ -63,8 +63,8 @@ FUNCTIONS UNDER TEST:
 - sch_payment_factor(coupon, remaining_term)
 - sch_am_factor_fixed_rate(coupon, remaining_term)
 - am_factor(beginning_balance, coupon, remaining_term)
-- sch_balance_factors(coupon_vector, original_term, remaining_term)
-- sch_ending_balance_factor(coupon_vector, original_term, remaining_term)
+- sch_balance_factors(rate_vector, original_term)
+- sch_ending_balance_factor(rate_vector, original_term)
 
 REVIEW APPROACH:
 ---------------
@@ -109,7 +109,7 @@ conventions, and software engineering principles rather than following a checkli
 """
 
 import unittest
-from bma_standard_formulas.scheduled_payments import (
+from bma_standard_formulas.formulas.scheduled_payments import (
     sch_balance_factor_fixed_rate,
     sch_payment_factor_fixed_rate,
     sch_payment_factor,
@@ -195,8 +195,8 @@ class TestB1SurvivalFactorConsistency(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             
             for i in range(rem_term + 1):
                 age_i = start_age + i
@@ -207,39 +207,33 @@ class TestB1SurvivalFactorConsistency(unittest.TestCase):
                     self.assertAlmostEqual(fixed, iterative, places=DECIMAL_PLACES_FOR_ASSERTIONS)
     
     def test_fixed_rate_equals_balance_factor(self):
-        """sch_balance_factor_fixed_rate == sch_ending_balance_factor for all i."""
+        """sch_balance_factor_fixed_rate == sch_balance_factors[age] for all i."""
         for scenario in TEST_SCENARIOS:
             coupon = float(scenario['coupon'])
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, _, bal_vec = sch_balance_factors(coupon_vector, orig_term)
             
             for i in range(rem_term + 1):
                 age_i = start_age + i
                 M_i = rem_term - i
                 with self.subTest(coupon=coupon, orig_term=orig_term, i=i, age_i=age_i, M_i=M_i):
                     fixed = sch_balance_factor_fixed_rate(coupon, orig_term, M_i)
-                    balance = sch_ending_balance_factor(coupon_vector, orig_term, M_i)
+                    balance = bal_vec[age_i]
                     self.assertAlmostEqual(fixed, balance, places=DECIMAL_PLACES_FOR_ASSERTIONS)
     
     def test_survival_factors_vector_equals_balance_factor(self):
-        """survival_vec[age(i)] == sch_ending_balance_factor for all i."""
-        for scenario in TEST_SCENARIOS:
-            coupon = float(scenario['coupon'])
-            orig_term = int(scenario['orig_term'])
-            start_age = int(scenario['age'])
-            rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
-            
-            for i in range(rem_term + 1):
-                age_i = start_age + i
-                M_i = rem_term - i
-                with self.subTest(coupon=coupon, orig_term=orig_term, i=i, age_i=age_i, M_i=M_i):
-                    iterative = survival_vec[age_i]
-                    balance = sch_ending_balance_factor(coupon_vector, orig_term, M_i)
-                    self.assertAlmostEqual(iterative, balance, places=DECIMAL_PLACES_FOR_ASSERTIONS)
+        """sch_ending_balance_factor(rate_vec[:age]) == survival_vec[age] for various ages."""
+        for coupon, orig_term in {(s['coupon'], s['orig_term']) for s in TEST_SCENARIOS}:
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, _, survival_vec = sch_balance_factors(coupon_vector, orig_term)
+            ages = [2, orig_term // 4, orig_term // 2, orig_term - 1, orig_term]
+            for age in ages:
+                with self.subTest(coupon=coupon, orig_term=orig_term, age=age):
+                    ending = sch_ending_balance_factor(coupon_vector[:age + 1], orig_term)
+                    self.assertAlmostEqual(ending, survival_vec[age], places=DECIMAL_PLACES_FOR_ASSERTIONS)
 
 
 class TestB1AmFactorConsistency(unittest.TestCase):
@@ -252,8 +246,8 @@ class TestB1AmFactorConsistency(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             
             for i in range(rem_term + 1):
                 age_i = start_age + i 
@@ -282,8 +276,8 @@ class TestB1AmFactorConsistency(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             
             for i in range(rem_term + 1):
                 age_i = start_age + i
@@ -312,8 +306,8 @@ class TestB1AmFactorConsistency(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             
             for i in range(rem_term + 1):
                 age_i = start_age + i
@@ -342,8 +336,8 @@ class TestB1AmFactorConsistency(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             monthly_rate = coupon / 1200.0
             
             for i in range(rem_term + 1):
@@ -378,8 +372,8 @@ class TestB1PaymentFactorConsistency(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             
             for i in range(rem_term + 1):
                 age_i = start_age + i
@@ -404,8 +398,8 @@ class TestB1PaymentFactorConsistency(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             monthly_rate = coupon / 1200.0
             
             for i in range(rem_term + 1):
@@ -431,8 +425,8 @@ class TestB1PaymentFactorConsistency(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             monthly_rate = coupon / 1200.0
             
             for i in range(rem_term + 1):
@@ -473,8 +467,8 @@ class TestB1AmortizationIdentities(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             
             for i in range(rem_term + 1):
                 age_i = start_age + i
@@ -499,8 +493,8 @@ class TestB1AmortizationIdentities(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             
             for i in range(rem_term + 1):
                 age_i = start_age + i
@@ -524,8 +518,8 @@ class TestB1AmortizationIdentities(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             monthly_rate = coupon / 1200.0
             
             for i in range(rem_term + 1):
@@ -553,8 +547,8 @@ class TestB1AmortizationIdentities(unittest.TestCase):
             orig_term = int(scenario['orig_term'])
             start_age = int(scenario['age'])
             rem_term = int(scenario['rem_term'])
-            coupon_vector = [coupon] * orig_term
-            _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+            coupon_vector = [0.0] + [coupon] * orig_term
+            _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
             monthly_rate = coupon / 1200.0
             
             for i in range(rem_term + 1):
@@ -590,24 +584,24 @@ class TestB1TerminalConditions(unittest.TestCase):
         """sch_balance_factors[orig_term] == 0"""
         for coupon, orig_term in {(s['coupon'], s['orig_term']) for s in TEST_SCENARIOS}:
             with self.subTest(coupon=coupon, orig_term=orig_term):
-                coupon_vector = [coupon] * orig_term
-                _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+                coupon_vector = [0.0] + [coupon] * orig_term
+                _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
                 self.assertAlmostEqual(survival_vec[orig_term], 0.0, places=DECIMAL_PLACES_FOR_ASSERTIONS)
     
     def test_balance_factor_at_maturity_is_zero(self):
-        """sch_ending_balance_factor at maturity (remaining_term=0) == 0"""
+        """sch_ending_balance_factor with full-life rate vector == 0"""
         for coupon, orig_term in {(s['coupon'], s['orig_term']) for s in TEST_SCENARIOS}:
             with self.subTest(coupon=coupon, orig_term=orig_term):
-                coupon_vector = [coupon] * orig_term
-                terminal = sch_ending_balance_factor(coupon_vector, orig_term, 0)
+                coupon_vector = [0.0] + [coupon] * orig_term
+                terminal = sch_ending_balance_factor(coupon_vector, orig_term)
                 self.assertAlmostEqual(terminal, 0.0, places=DECIMAL_PLACES_FOR_ASSERTIONS)
     
     def test_cumulative_principal_equals_original_balance(self):
         """sum(principal) == 1.0"""
         for coupon, orig_term in {(s['coupon'], s['orig_term']) for s in TEST_SCENARIOS}:
             with self.subTest(coupon=coupon, orig_term=orig_term):
-                coupon_vector = [coupon] * orig_term
-                _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+                coupon_vector = [0.0] + [coupon] * orig_term
+                _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
                 # principal at age k = survival_vec[k-1] * am_vec[k]
                 total = sum(
                     survival_vec[age - 1] * am_vec[age]
@@ -619,8 +613,8 @@ class TestB1TerminalConditions(unittest.TestCase):
         """sum(payments) == 1.0 + sum(interest)"""
         for coupon, orig_term in {(s['coupon'], s['orig_term']) for s in TEST_SCENARIOS}:
             with self.subTest(coupon=coupon, orig_term=orig_term):
-                coupon_vector = [coupon] * orig_term
-                _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+                coupon_vector = [0.0] + [coupon] * orig_term
+                _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
                 monthly_rate = coupon / 1200.0
                 
                 total_payments = sum(
@@ -648,17 +642,17 @@ class TestB1BoundaryConditions(unittest.TestCase):
         """sch_balance_factors[0] == 1.0"""
         for coupon, orig_term in {(s['coupon'], s['orig_term']) for s in TEST_SCENARIOS}:
             with self.subTest(coupon=coupon, orig_term=orig_term):
-                coupon_vector = [coupon] * orig_term
-                _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+                coupon_vector = [0.0] + [coupon] * orig_term
+                _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
                 self.assertAlmostEqual(survival_vec[0], 1.0, places=DECIMAL_PLACES_FOR_ASSERTIONS)
     
     def test_balance_factor_at_origination_is_one(self):
-        """sch_ending_balance_factor at origination (remaining_term=orig_term) == 1.0"""
+        """sch_balance_factors[0] == 1.0 at origination"""
         for coupon, orig_term in {(s['coupon'], s['orig_term']) for s in TEST_SCENARIOS}:
             with self.subTest(coupon=coupon, orig_term=orig_term):
-                coupon_vector = [coupon] * orig_term
-                balance = sch_ending_balance_factor(coupon_vector, orig_term, orig_term)
-                self.assertAlmostEqual(balance, 1.0, places=DECIMAL_PLACES_FOR_ASSERTIONS)
+                coupon_vector = [0.0] + [coupon] * orig_term
+                _, _, _, _, bal = sch_balance_factors(coupon_vector, orig_term)
+                self.assertAlmostEqual(bal[0], 1.0, places=DECIMAL_PLACES_FOR_ASSERTIONS)
 
 
 class TestB1ZeroInterestEdgeCase(unittest.TestCase):
@@ -675,16 +669,19 @@ class TestB1ZeroInterestEdgeCase(unittest.TestCase):
         coupon = 0.0
         for orig_term in {s['orig_term'] for s in TEST_SCENARIOS}:
             try:
-                coupon_vector = [coupon] * orig_term
-                _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
-                coupon_vector = [coupon] * orig_term
+                coupon_vector = [0.0] + [coupon] * orig_term
+                _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
+                coupon_vector = [0.0] + [coupon] * orig_term
                 
                 for age in range(orig_term + 1):
                     remaining_term = orig_term - age
                     with self.subTest(orig_term=orig_term, age=age, remaining_term=remaining_term):
                         fixed = sch_balance_factor_fixed_rate(coupon, orig_term, remaining_term)
                         vector = survival_vec[age]
-                        balance = sch_ending_balance_factor(coupon_vector, orig_term, remaining_term)
+                        if age > 0:
+                            balance = sch_ending_balance_factor(coupon_vector[:age + 1], orig_term)
+                        else:
+                            balance = 1.0
                         
                         self.assertAlmostEqual(fixed, vector, places=DECIMAL_PLACES_FOR_ASSERTIONS)
                         self.assertAlmostEqual(fixed, balance, places=DECIMAL_PLACES_FOR_ASSERTIONS)
@@ -698,8 +695,8 @@ class TestB1ZeroInterestEdgeCase(unittest.TestCase):
         coupon = 0.0
         for orig_term in {s['orig_term'] for s in TEST_SCENARIOS}:
             try:
-                coupon_vector = [coupon] * orig_term
-                _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+                coupon_vector = [0.0] + [coupon] * orig_term
+                _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
                 monthly_rate = coupon / 1200.0
                 
                 # Monthly rate should be zero
@@ -738,8 +735,8 @@ class TestB1ZeroInterestEdgeCase(unittest.TestCase):
                     self.assertAlmostEqual(initial, 1.0, places=DECIMAL_PLACES_FOR_ASSERTIONS)
                     
                     # Cumulative principal should equal 1.0
-                    coupon_vector = [coupon] * orig_term
-                    _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+                    coupon_vector = [0.0] + [coupon] * orig_term
+                    _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
                     total_principal = sum(
                         survival_vec[age - 1] * am_vec[age - 1]
                         for age in range(1, orig_term + 1)
@@ -773,8 +770,8 @@ class TestB1LastPaymentEdgeCase(unittest.TestCase):
                     self.assertGreater(payment_factor, 0.0, "Payment factor should be positive")
                     
                     # Verify consistency with vectorized function
-                    coupon_vector = [coupon] * orig_term
-                    _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+                    coupon_vector = [0.0] + [coupon] * orig_term
+                    _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
                     monthly_rate = coupon / 1200.0
                     # am_vec[age_at_end] is the am_factor at age orig_term (for period ending at orig_term)
                     am_factor_vector = am_vec[age_at_end]
@@ -797,8 +794,8 @@ class TestB1LastPaymentEdgeCase(unittest.TestCase):
                 remaining_term = 1
                 age_at_start = orig_term - remaining_term  # Age at start of final period
                 age_at_end = orig_term  # Age at end of final period
-                coupon_vector = [coupon] * orig_term
-                _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term, 0)
+                coupon_vector = [0.0] + [coupon] * orig_term
+                _, _, _, am_vec, survival_vec = sch_balance_factors(coupon_vector, orig_term)
                 monthly_rate = coupon / 1200.0
                 
                 with self.subTest(coupon=coupon, orig_term=orig_term):
@@ -822,20 +819,18 @@ class TestB1LastPaymentEdgeCase(unittest.TestCase):
 
 
 class TestB1Warnings(unittest.TestCase):
-    """Test expected warnings for rate vector extension."""
-    
-    def test_balance_factors_warns_on_short_rate_vector(self):
-        """sch_balance_factors warns when rate vector is shorter than historical periods.
-        
-        Single-rate [coupon] is fixed-rate convention and extends silently (no warning).
-        A partial vector (e.g. 5 rates for 12 periods) triggers backward-fill warning.
-        """
-        # 5 rates for a loan needing 12 periods → backward_fill = 7 → warning
-        coupon_vector = [9.5, 9.4, 9.3, 9.2, 9.1]
-        orig_term = 360
-        remaining_term = 348  # 12 periods elapsed
+    """Test expected warnings for rate vector construction and single-rate fallback."""
+
+    def test_payment_factor_vector_warns_on_single_float(self):
+        """sch_payment_factor_vector warns when a single float is provided."""
+        from bma_standard_formulas.formulas.scheduled_payments import sch_payment_factor_vector
         with self.assertWarns(UserWarning):
-            sch_balance_factors(coupon_vector, orig_term, remaining_term)
+            sch_payment_factor_vector(9.5, 360)
+
+    def test_balance_factors_warns_on_scalar_float(self):
+        """sch_balance_factors warns when a scalar float is provided."""
+        with self.assertWarns(UserWarning):
+            sch_balance_factors(9.5, 360)
 
 
 if __name__ == '__main__':

@@ -18,6 +18,8 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from bma_standard_formulas.formulas import (
     BMAScheduledCashflow,
@@ -98,6 +100,32 @@ class TestScheduledRoundTrip(unittest.TestCase):
             self.assertEqual(loaded.loan_id, 99)
             self.assertEqual(loaded.cf_id, s.cf_id)
 
+    def test_meta_decode_uses_dataclass_types(self):
+        s = run_bma_scheduled_cashflow(
+            original_balance=100_000.0,
+            current_balance=100_000.0,
+            coupon_vector=6.0,
+            original_term=360,
+            remaining_term=360,
+            loan_id=42,
+            group_id=7,
+            asof_date=np.datetime64("2024-01-01"),
+            first_payment_date=np.datetime64("2024-02-01"),
+            maturity_date=np.datetime64("2054-01-01"),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "typed_meta.parquet"
+            write_cashflow(s, path, mode="write")
+            loaded = read_scheduled(path, cf_id=s.cf_id)
+            self.assertIsInstance(loaded.loan_id, int)
+            self.assertIsInstance(loaded.group_id, int)
+            self.assertIsInstance(loaded.original_term, int)
+            self.assertIsInstance(loaded.original_balance, float)
+            self.assertIsInstance(loaded.bal_path_is_estimated, bool)
+            self.assertEqual(loaded.asof_date, np.datetime64("2024-01-01"))
+            self.assertEqual(loaded.first_payment_date, np.datetime64("2024-02-01"))
+            self.assertEqual(loaded.maturity_date, np.datetime64("2054-01-01"))
+
     def test_auto_file_naming(self):
         s = _make_scheduled()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -165,6 +193,19 @@ class TestCfTypeDiscriminator(unittest.TestCase):
             results = read_cashflows(path)
             self.assertEqual(len(results), 1)
             self.assertIsInstance(results[0], BMAScheduledCashflow)
+
+    def test_read_cashflows_missing_cf_type_column_raises_schema_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad.parquet"
+            table = pa.table(
+                {
+                    "cf_id": pa.array(["x"], type=pa.string()),
+                    "period": pa.array([0], type=pa.int64()),
+                }
+            )
+            pq.write_table(table, path)
+            with self.assertRaises(SchemaValidationError):
+                read_cashflows(path)
 
 
 class TestFromDataFrame(unittest.TestCase):

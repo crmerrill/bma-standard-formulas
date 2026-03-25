@@ -42,6 +42,7 @@ Ref: BMA SF-4 (scheduled payment), SF-18 (C.3 cash flow variables).
 """
 
 import warnings
+import re
 from dataclasses import dataclass, fields as dc_fields
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -431,8 +432,13 @@ class TapeSchema:
         for idx, row in enumerate(df.to_dict("records")):
             try:
                 loans.append(self._parse_row(row))
-            except Exception as exc:
-                errors.append(f"  Row {idx}: {exc}")
+            except (ValueError, TypeError) as exc:
+                loan_id = row.get("loan_id", "<missing>")
+                details = self._format_exception_chain(exc)
+                errors.append(
+                    f"  Row {idx} (loan_id={loan_id!r}): "
+                    f"{type(exc).__name__}: {exc}{details}"
+                )
 
         if errors:
             n = len(errors)
@@ -542,7 +548,7 @@ class TapeSchema:
                 elif spec.kind == "bool":
                     kwargs[spec.name] = self._parse_bool(raw)
                 elif spec.kind == "int":
-                    kwargs[spec.name] = int(float(raw))
+                    kwargs[spec.name] = self._parse_int_strict(raw)
                 elif spec.kind == "float":
                     kwargs[spec.name] = float(raw)
                 else:
@@ -598,6 +604,45 @@ class TapeSchema:
         if s in ("false", "no", "0", "n"):
             return False
         raise ValueError(f"cannot parse {val!r} as boolean (expected true/false/yes/no/1/0)")
+
+    @staticmethod
+    def _parse_int_strict(val: Any) -> int:
+        """Parse integers without float coercion.
+
+        Accepted:
+          - Python / numpy integer types
+          - strings matching ^[+-]?\\d+$ (after strip)
+
+        Rejected:
+          - float types (including 12.0)
+          - decimal/scientific notation strings (e.g. "12.0", "1e3")
+          - booleans
+        """
+        if isinstance(val, (bool, np.bool_)):
+            raise ValueError(f"cannot parse {val!r} as integer")
+        if isinstance(val, (int, np.integer)):
+            return int(val)
+        if isinstance(val, (float, np.floating)):
+            raise ValueError(f"cannot parse {val!r} as integer")
+
+        s = str(val).strip()
+        if re.fullmatch(r"[+-]?\d+", s):
+            return int(s)
+        raise ValueError(f"cannot parse {val!r} as integer")
+
+    @staticmethod
+    def _format_exception_chain(exc: Exception) -> str:
+        """Return a compact 'caused by' chain for aggregated row errors."""
+        chain: list[str] = []
+        current = exc.__cause__
+        seen = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            chain.append(f"{type(current).__name__}: {current}")
+            current = current.__cause__
+        if not chain:
+            return ""
+        return " | caused by: " + " -> ".join(chain)
 
 
 # ---------------------------------------------------------------------------
