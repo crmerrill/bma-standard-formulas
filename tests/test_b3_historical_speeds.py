@@ -38,8 +38,9 @@ TEST DATA SOURCES:
 
 import unittest
 import numpy as np
-from bma_standard_formulas.payment_models import (
+from bma_standard_formulas.formulas.payment_models import (
     project_act_end_factor,
+    smm_from_factors,
     historical_smm_fixed_rate,
     historical_cpr_fixed_rate,
     historical_smm,
@@ -53,7 +54,7 @@ from bma_standard_formulas.payment_models import (
     psa_to_smm,
     generate_smm_curve_from_psa,
 )
-from bma_standard_formulas.scheduled_payments import (
+from bma_standard_formulas.formulas.scheduled_payments import (
     sch_balance_factor_fixed_rate,
 )
 
@@ -134,7 +135,8 @@ class TestB3ProjectActEndFactor(unittest.TestCase):
         beginning_age = 24
         window = 12
         act_beg_factor = 0.92
-        coupon_vector = list(np.linspace(7.0, 8.5, 36))
+        raw_rates = list(np.linspace(7.0, 8.5, 36))
+        coupon_vector = [0.0] + raw_rates + [raw_rates[-1]] * (original_term - len(raw_rates))
         smm_vector = np.array([0.003, 0.004, 0.005, 0.006, 0.007, 0.008,
                                 0.009, 0.010, 0.008, 0.006, 0.004, 0.003])
 
@@ -143,9 +145,8 @@ class TestB3ProjectActEndFactor(unittest.TestCase):
         )
 
         # Iterative check
-        from bma_standard_formulas.scheduled_payments import sch_balance_factors
-        remaining_end = original_term - beginning_age - window
-        _, _, _, sf = sch_balance_factors(coupon_vector, original_term, remaining_end)
+        from bma_standard_formulas.formulas.scheduled_payments import sch_balance_factors
+        _, _, _, _, sf = sch_balance_factors(coupon_vector, original_term)
         factor = act_beg_factor
         for m in range(window):
             age = beginning_age + m
@@ -238,7 +239,8 @@ class TestB3HistoricalSmmFloating(unittest.TestCase):
 
     def test_variable_coupon_produces_different_smm(self):
         """Varying coupon vector gives different SMM than fixed (unless rates are identical)."""
-        coupon_vec = list(np.linspace(9.0, 10.0, 16))
+        raw = list(np.linspace(9.0, 10.0, 16))
+        coupon_vec = [0.0] + raw + [raw[-1]] * (SF7_ORIG_TERM - len(raw))
         smm_floating = historical_smm(
             coupon_vec, SF7_ORIG_TERM,
             SF7_BEG_FACTOR, SF7_BEG_AGE,
@@ -272,7 +274,8 @@ class TestB3HistoricalCprFloating(unittest.TestCase):
 
     def test_cross_verify_smm_to_cpr(self):
         """historical_cpr == smm_to_cpr(historical_smm(...))."""
-        coupon_vec = list(np.linspace(9.0, 10.0, 16))
+        raw_cpr = list(np.linspace(9.0, 10.0, 16))
+        coupon_vec = [0.0] + raw_cpr + [raw_cpr[-1]] * (SF7_ORIG_TERM - len(raw_cpr))
         smm = historical_smm(
             coupon_vec, SF7_ORIG_TERM,
             SF7_BEG_FACTOR, SF7_BEG_AGE,
@@ -399,6 +402,59 @@ class TestB3HistoricalPsaPool(unittest.TestCase):
 
         recovered_psa = historical_psa_pool(pools, pool_age)
         self.assertAlmostEqual(recovered_psa, psa_speed, places=1)
+
+
+class TestB3ValidationGuards(unittest.TestCase):
+    """Negative-path validation tests for historical speed helpers."""
+
+    def test_smm_from_factors_invalid_window_raises(self):
+        with self.assertRaises(ValueError):
+            smm_from_factors(0.9, 0.89, 0.95, 0.94, window_months=0)
+
+    def test_smm_from_factors_invalid_scheduled_denominator_raises(self):
+        with self.assertRaises(ValueError):
+            smm_from_factors(0.9, 0.89, 0.0, 0.94, window_months=1)
+
+    def test_historical_psa_invalid_age_window_raises(self):
+        with self.assertRaises(ValueError):
+            historical_psa(
+                SF7_COUPON, SF7_ORIG_TERM,
+                SF7_BEG_FACTOR, beginning_age=16,
+                act_end_factor=SF7_END_FACTOR, ending_age=16,
+                beginning_month=17,
+            )
+
+    def test_historical_psa_invalid_beginning_month_raises(self):
+        with self.assertRaises(ValueError):
+            historical_psa(
+                SF7_COUPON, SF7_ORIG_TERM,
+                SF7_BEG_FACTOR, SF7_BEG_AGE,
+                SF7_END_FACTOR, SF7_END_AGE,
+                beginning_month=0,
+            )
+
+    def test_historical_psa_invalid_factor_domain_raises(self):
+        with self.assertRaises(ValueError):
+            historical_psa(
+                SF7_COUPON, SF7_ORIG_TERM,
+                1.2, SF7_BEG_AGE,
+                SF7_END_FACTOR, SF7_END_AGE,
+                beginning_month=17,
+            )
+
+    def test_historical_psa_pool_empty_pool_raises(self):
+        with self.assertRaises(ValueError):
+            historical_psa_pool([], pool_age=6)
+
+    def test_historical_psa_pool_missing_key_raises(self):
+        bad_pool = [dict(SF12_POOLS[0])]
+        del bad_pool[0]["ending_factor"]
+        with self.assertRaises(ValueError):
+            historical_psa_pool(bad_pool, pool_age=6)
+
+    def test_historical_psa_pool_invalid_pool_age_raises(self):
+        with self.assertRaises(ValueError):
+            historical_psa_pool(SF12_POOLS, pool_age=0)
 
 
 if __name__ == '__main__':

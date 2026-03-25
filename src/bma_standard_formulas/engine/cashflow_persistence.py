@@ -26,8 +26,10 @@ Architecture layering:
 """
 
 import json
+from types import UnionType
 from dataclasses import fields as dc_fields
 from pathlib import Path
+from typing import Union, get_args, get_origin, get_type_hints
 
 import numpy as np
 import pyarrow as pa
@@ -116,13 +118,8 @@ def _encode_meta(cf) -> dict[str, str]:
 def _decode_meta(raw: dict[str, str], cls: type) -> dict[str, object]:
     """Convert string metadata values back to typed Python values.
 
-    Type inference is driven by field name conventions:
-      - int fields: loan_id, original_term, remaining_term, group_id, scheduled_loan_id
-      - float fields: original_balance, current_balance, accrued_interest
-      - bool fields: bal_path_is_estimated
-      - str fields: cf_id, bal_path_note
-      - datetime64 fields: asof_date, first_payment_date, maturity_date
-      - "null" → None for optional fields
+    Type inference is derived directly from dataclass META field annotations.
+    "null"/"None"/"NaT" decode to None for optional metadata values.
 
     Args:
         raw:  String key-value pairs (from Parquet metadata or JSON).
@@ -131,30 +128,36 @@ def _decode_meta(raw: dict[str, str], cls: type) -> dict[str, object]:
     Returns:
         dict[str, object]: Typed values ready to pass as kwargs.
     """
-    INT_FIELDS = {"loan_id", "original_term", "remaining_term", "group_id", "scheduled_loan_id"}
-    FLOAT_FIELDS = {"original_balance", "current_balance", "accrued_interest"}
-    BOOL_FIELDS = {"bal_path_is_estimated"}
-    STR_FIELDS = {"cf_id", "bal_path_note"}
-    DATE_FIELDS = {"asof_date", "first_payment_date", "maturity_date"}
-
-    valid_names = {f.name for f in dc_fields(cls) if f.metadata.get("kind") == FieldKind.META}
+    type_hints = get_type_hints(cls)
+    meta_types = {
+        f.name: type_hints.get(f.name, f.type)
+        for f in dc_fields(cls)
+        if f.metadata.get("kind") == FieldKind.META
+    }
     typed = {}
     for key, val in raw.items():
-        if key not in valid_names:
+        if key not in meta_types:
             continue
-        if val == "null" or val == "None":
+        if val in ("null", "None", "NaT"):
             typed[key] = None
             continue
-        if key in INT_FIELDS:
+
+        target_type = meta_types[key]
+        origin = get_origin(target_type)
+        if origin in (Union, UnionType):
+            args = [a for a in get_args(target_type) if a is not type(None)]
+            target_type = args[0] if args else object
+
+        if target_type in (int, np.int64):
             typed[key] = int(val)
-        elif key in FLOAT_FIELDS:
+        elif target_type in (float, np.float64):
             typed[key] = float(val)
-        elif key in BOOL_FIELDS:
+        elif target_type in (bool, np.bool_):
             typed[key] = val.lower() in ("true", "1")
-        elif key in STR_FIELDS:
+        elif target_type is str:
             typed[key] = val
-        elif key in DATE_FIELDS:
-            typed[key] = np.datetime64(val) if val not in ("null", "NaT", "None") else None
+        elif target_type is np.datetime64:
+            typed[key] = np.datetime64(val)
         else:
             typed[key] = val
     return typed
