@@ -35,7 +35,7 @@ import csv
 import os
 import unittest
 import numpy as np
-from bma_standard_formulas.payment_models import (
+from bma_standard_formulas.formulas.payment_models import (
     smm_from_factors,
     cpr_to_smm,
     smm_to_cpr,
@@ -45,7 +45,7 @@ from bma_standard_formulas.payment_models import (
     cpr_to_psa,
     generate_psa_curve,
 )
-from bma_standard_formulas.scheduled_payments import sch_balance_factor_fixed_rate
+from bma_standard_formulas.formulas.scheduled_payments import sch_balance_factor_fixed_rate
 
 # =============================================================================
 # Test Parameters

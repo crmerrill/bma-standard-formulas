@@ -14,13 +14,12 @@ Structure:
   (3) CashFlowAssumptions - prepay/default/servicing assumptions + end_date
   (4) PeriodCashFlows - computed results for single or aggregate periods
   
-  cashflows is Dict[Tuple[int, int], PeriodCashFlows] where key is (asof_period, window_length)
+  cashflows is dict[tuple[int, int], PeriodCashFlows] where key is (asof_period, window_length)
   - Single period: (15, 1) = month 15, 1-month window
   - Aggregate: (15, 6) = as-of month 15, 6-month window (months 10-15)
 """
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Tuple
 from enum import Enum
 import datetime as dt
 
@@ -53,7 +52,7 @@ class OriginationParams:
     original_balance: float              # Original face amount ($) or 1.0 for normalized
     gross_coupon: float                  # WAC % (annual rate, e.g., 9.5 = 9.5%)
     original_term: float                 # M0 - original term in months (can be fractional for pools)
-    origination_date: Optional[dt.date]  # Issue date (None if not specified)
+    origination_date: dt.date | None  # Issue date (None if not specified)
 
 
 # =============================================================================
@@ -63,7 +62,7 @@ class OriginationParams:
 @dataclass
 class CurrentState:
     """Loan/pool state at beginning of calculation period."""
-    asof_date: Optional[dt.date]         # Beginning of period date (None if not specified)
+    asof_date: dt.date | None         # Beginning of period date (None if not specified)
     loan_age: float                      # WALA - loan age at start of window (months, can be fractional for pools)
     current_balance: float               # Performing balance at start of period
     current_factor: float                # Pool factor at this point in time
@@ -77,7 +76,7 @@ class CurrentState:
 @dataclass
 class CashFlowAssumptions:
     """Assumptions for cash flow projection from asof_period to end_period."""
-    end_date: Optional[dt.date]          # End of period / settlement date (None if not specified)
+    end_date: dt.date | None          # End of period / settlement date (None if not specified)
     end_period: int                      # Loan age at end of window (required)
     prepay_type: PrepayType              # SMM, CPR, or PSA
     prepay_speed: float                  # Rate (% for SMM/CPR, multiple for PSA)
@@ -121,10 +120,10 @@ class PeriodCashFlows:
     """
     # === Period/Temporal Info ===
     # BMA age is 0-indexed: age 0 = origination, age n = n months after origination
-    asof_date: Optional[dt.date]         # Calendar date at ending age (None if not specified)
-    beg_date: Optional[dt.date] = None   # Calendar date at starting age (None = single period)
+    asof_date: dt.date | None         # Calendar date at ending age (None if not specified)
+    beg_date: dt.date | None = None   # Calendar date at starting age (None = single period)
     asof_period: int = 0                 # Ending age (0-indexed months from origination)
-    beg_period: Optional[int] = None     # Starting age (0-indexed); window = [beg_period, asof_period]
+    beg_period: int | None = None     # Starting age (0-indexed); window = [beg_period, asof_period]
     loan_age: float = 0                  # WALA at ending age (can be fractional for pools)
     remaining_term: float = 0            # WAM at ending age (can be fractional for pools)
     
@@ -217,8 +216,8 @@ class BMAExample:
     origination: OriginationParams
     current: CurrentState
     assumptions: CashFlowAssumptions
-    cashflows: Optional[Dict[Tuple[int, int], PeriodCashFlows]] = None  # (asof, length) -> PeriodCashFlows
-    cashflows_file: Optional[str] = None                                 # Path to multi-month CSV file
+    cashflows: dict[tuple[int, int], PeriodCashFlows] | None = None  # (asof, length) -> PeriodCashFlows
+    cashflows_file: str | None = None                                 # Path to multi-month CSV file
     
     @property
     def loan_age(self) -> int:
