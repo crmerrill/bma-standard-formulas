@@ -384,6 +384,68 @@ def present_values_from_discount_factors(cashflows: np.ndarray, discount_factors
     return cashflows * discount_factors
 
 
+def accrued_interest_simple(
+    annual_coupon_pct: float,
+    accrued_days: float,
+    *,
+    face_value: float = 100.0,
+    day_count_basis: float = 360.0,
+) -> float:
+    """Compute simple accrued interest on quote basis.
+
+    Args:
+        annual_coupon_pct: Annual coupon rate in percent.
+        accrued_days: Accrued days since prior accrual boundary.
+        face_value: Quote basis notional (default 100).
+        day_count_basis: Day-count denominator, usually 360 for MBS conventions.
+
+    Returns:
+        Accrued interest amount on the same quote basis as ``face_value``.
+
+    Raises:
+        ValueError: If ``day_count_basis`` is non-positive.
+    """
+    if day_count_basis <= 0.0:
+        raise ValueError("day_count_basis must be positive")
+    return float(face_value * (annual_coupon_pct / 100.0) * (float(accrued_days) / float(day_count_basis)))
+
+
+def dirty_price_from_clean(
+    clean_price: float,
+    annual_coupon_pct: float,
+    accrued_days: float,
+    *,
+    face_value: float = 100.0,
+    day_count_basis: float = 360.0,
+) -> float:
+    """Convert clean price to dirty price using simple accrued interest."""
+    accrued = accrued_interest_simple(
+        annual_coupon_pct,
+        accrued_days,
+        face_value=face_value,
+        day_count_basis=day_count_basis,
+    )
+    return float(clean_price + accrued)
+
+
+def clean_price_from_dirty(
+    dirty_price: float,
+    annual_coupon_pct: float,
+    accrued_days: float,
+    *,
+    face_value: float = 100.0,
+    day_count_basis: float = 360.0,
+) -> float:
+    """Convert dirty price to clean price using simple accrued interest."""
+    accrued = accrued_interest_simple(
+        annual_coupon_pct,
+        accrued_days,
+        face_value=face_value,
+        day_count_basis=day_count_basis,
+    )
+    return float(dirty_price - accrued)
+
+
 def _notional_from_cashflow_object(cf: object) -> float:
     """Return best-available scenario notional for quote normalization."""
     if isinstance(cf, BMAScheduledCashflow):
