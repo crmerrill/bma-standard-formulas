@@ -15,6 +15,10 @@ Test Execution Order:
 4. B.4 ABS prepayment tests (test_b4_abs_prepayment)
 5. C.3 cashflow tests (test_c3_cashflows)
 6. C.3/B.1 consistency tests (test_c3b1_consistency)
+7. D calendar primitive tests (test_d_calendar_primitives)
+8. E day-count convention tests (test_e_daycount_conventions)
+9. F date increment/schedule tests (test_f_date_increment_and_schedule)
+10. G pricing/risk tests (test_g_pricing_and_risk)
 
 Usage:
     # Run all BMA compliance tests in order (recommended)
@@ -87,6 +91,10 @@ def load_tests(loader, standard_tests, pattern):
         'tests.test_b4_abs_prepayment',
         'tests.test_c3_cashflows',
         'tests.test_c3b1_consistency',
+        'tests.test_d_calendar_primitives',
+        'tests.test_e_daycount_conventions',
+        'tests.test_f_date_increment_and_schedule',
+        'tests.test_g_pricing_and_risk',
     ]
     
     # Create a test suite
