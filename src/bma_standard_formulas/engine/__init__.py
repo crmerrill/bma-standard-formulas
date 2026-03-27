@@ -65,6 +65,17 @@ from bma_standard_formulas.engine.cashflow_persistence import (
     ACTUAL_SCHEMA,
     SchemaValidationError,
 )
+from bma_standard_formulas.engine.pricing import (
+    build_expanded_price_yield_table,
+    build_price_yield_table,
+    compute_risk_metrics,
+)
+from bma_standard_formulas.formulas.pricing_risk import (
+    PriceRiskAnalyzer,
+    PriceYieldRiskTable,
+    PriceYieldScenarioTable,
+    RiskMetrics,
+)
 
 __all__ = [
     # Loan
@@ -98,4 +109,12 @@ __all__ = [
     "SCHEDULED_SCHEMA",
     "ACTUAL_SCHEMA",
     "SchemaValidationError",
+    # Pricing/risk tables
+    "build_price_yield_table",
+    "build_expanded_price_yield_table",
+    "compute_risk_metrics",
+    "PriceRiskAnalyzer",
+    "PriceYieldRiskTable",
+    "PriceYieldScenarioTable",
+    "RiskMetrics",
 ]
