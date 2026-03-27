@@ -26,6 +26,7 @@ Read in this order if you are new:
 9. [Frontend Integration](frontend_integration.md)
 10. [Cashflow Aggregation Design](cashflow_aggregation_design.md)
 11. [Operational Playbook](operational_playbook.md)
+12. [Daycount and Pricing Contracts](daycount_and_pricing_contracts.md)
 
 ### Reading paths
 

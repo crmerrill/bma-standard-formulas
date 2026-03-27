@@ -17,11 +17,40 @@ Structure:
   cashflows is dict[tuple[int, int], PeriodCashFlows] where key is (asof_period, window_length)
   - Single period: (15, 1) = month 15, 1-month window
   - Aggregate: (15, 6) = as-of month 15, 6-month window (months 10-15)
+
+Current BMA example coverage in this module:
+  - SF-4
+  - SF-7
+  - SF-12 (including pool-level components)
+  - SF-23 to SF-38 (cash-flow tables via CSV references)
+  - SF-41 and SF-42 variants
+  - SF-49 to SF-51
+  - SF-56
 """
 
 from dataclasses import dataclass
 from enum import Enum
 import datetime as dt
+
+
+# -----------------------------------------------------------------------------
+# BMA example coverage metadata
+# -----------------------------------------------------------------------------
+# This list is intentionally explicit so contributors can quickly verify whether
+# a specific published BMA Standard Formula example already has a canonical
+# entry in this module.
+INCLUDED_BMA_REFERENCE_IDS = (
+    "SF-4",
+    "SF-7",
+    "SF-12",
+    "SF-23",
+    "SF-31",
+    "SF-41",
+    "SF-42",
+    "SF-49/50",
+    "SF-51",
+    "SF-56",
+)
 
 
 # =============================================================================
@@ -1615,6 +1644,11 @@ BMA_EXAMPLES = {
     # Average life conventions (SF-56)
     "SF56": SF56_AVGLIFE,
 }
+
+
+def get_included_bma_reference_ids() -> tuple[str, ...]:
+    """Return normalized BMA reference IDs covered by this module."""
+    return INCLUDED_BMA_REFERENCE_IDS
 
 
 # =============================================================================
