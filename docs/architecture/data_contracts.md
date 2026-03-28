@@ -14,9 +14,13 @@ Accepted sources:
 Key behavior:
 
 - Column aliases are normalized and mapped to `Loan` fields.
+- A tape-specific `column_map` can translate non-canonical headers into canonical fields.
 - Unknown columns are ignored.
 - Missing required fields raise `TapeReadError`.
 - Row parse errors are aggregated and raised as one `TapeReadError`.
+- If multiple source columns map to the same canonical field, duplicate canonical
+  columns are collapsed deterministically (left-to-right first non-null column wins
+  by pandas `groupby(...).first()` semantics).
 
 ### Required canonical fields
 
@@ -38,6 +42,24 @@ loan_id,origination_date,asof_date,original_balance,current_balance,rate_margin,
 1,2020-01-01,2024-01-01,100000,95000,8.0,360,312
 2,2021-06-01,2024-01-01,250000,240000,7.5,360,330
 ```
+
+### Generic tape + map pattern (recommended)
+
+Use one ingestion API for all tape formats:
+
+```python
+import pandas as pd
+from bma_standard_formulas.engine import (
+    CRT_FILE_LAYOUT_COLUMN_MAP,
+    read_loan_tape,
+)
+
+df = pd.read_csv("sample_crt_tape.csv")
+loans = read_loan_tape(df, column_map=CRT_FILE_LAYOUT_COLUMN_MAP)
+```
+
+This keeps format-specific logic in data (`column_map`) rather than separate
+reader functions.
 
 ### Strict integer parsing
 

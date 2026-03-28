@@ -171,6 +171,8 @@ class TapeSchema:
         "loan_number":          "loan_id",
         "loan_num":             "loan_id",
         "loan_no":              "loan_id",
+        "loan":                 "loan_id",
+        "loan_identifier":      "loan_id",
         # ── origination_date ─────────────────────────────────────────────────
         "orig_date":            "origination_date",
         "origdate":             "origination_date",
@@ -178,6 +180,7 @@ class TapeSchema:
         "note_date":            "origination_date",
         "close_date":           "origination_date",
         "closing_date":         "origination_date",
+        "odate":                "origination_date",
         # ── asof_date ────────────────────────────────────────────────────────
         "as_of_date":           "asof_date",
         "asofdate":             "asof_date",
@@ -186,6 +189,8 @@ class TapeSchema:
         "cutoff_date":          "asof_date",
         "cut_off_date":         "asof_date",
         "settlement_date":      "asof_date",
+        "month":                "asof_date",
+        "monthly_reporting_period": "asof_date",
         # ── original_balance ─────────────────────────────────────────────────
         "orig_balance":         "original_balance",
         "orig_bal":             "original_balance",
@@ -215,6 +220,9 @@ class TapeSchema:
         "gross_coupon":         "rate_margin",
         "margin":               "rate_margin",
         "rate":                 "rate_margin",
+        "current_interest_rate": "rate_margin",
+        "original_interest_rate": "rate_margin",
+        "mortgage_margin":      "rate_margin",
         # ── original_term ────────────────────────────────────────────────────
         "orig_term":            "original_term",
         "loan_term":            "original_term",
@@ -226,6 +234,9 @@ class TapeSchema:
         "months_remaining":     "remaining_term",
         "remaining_months":     "remaining_term",
         "months_to_maturity":   "remaining_term",
+        "remaining_legal_term": "remaining_term",
+        "remaining_months_to_legal_maturity": "remaining_term",
+        "remaing_term":         "remaining_term",
         # ── servicing_fee ────────────────────────────────────────────────────
         "svc_fee":              "servicing_fee",
         "servicing_spread":     "servicing_fee",
@@ -236,6 +247,8 @@ class TapeSchema:
         "pool_id":              "group_id",
         "poolid":               "group_id",
         "group":                "group_id",
+        "int":                  "group_id",
+        "reference_pool_id":    "group_id",
         # ── accrued_interest ─────────────────────────────────────────────────
         "accrued_int":          "accrued_interest",
         "ai":                   "accrued_interest",
@@ -250,6 +263,8 @@ class TapeSchema:
         "npd":                  "next_payment_date",
         "last_pay_date":        "last_payment_date",
         "lpd":                  "last_payment_date",
+        "paid_thru_date":       "last_payment_date",
+        "last_paid_installment_date": "last_payment_date",
         # ── ARM / floating-rate fields ───────────────────────────────────────
         "index":                "index_type",
         "rate_index":           "index_type",
@@ -258,20 +273,24 @@ class TapeSchema:
         "reset_freq":           "reset_frequency",
         "arm_reset_freq":       "reset_frequency",
         "adjustment_frequency": "reset_frequency",
+        "interest_rate_adjustment_frequency": "reset_frequency",
         "next_reset":           "next_reset_date",
         "arm_reset_date":       "next_reset_date",
         "reset_date":           "next_reset_date",
         "next_adjustment_date": "next_reset_date",
+        "next_interest_rate_adjustment_date": "next_reset_date",
         "per_cap":              "periodic_cap",
         "rate_cap_periodic":    "periodic_cap",
         "adjustment_cap":       "periodic_cap",
         "arm_cap":              "periodic_cap",
+        "periodic_interest_rate_cap_up_percent": "periodic_cap",
         "per_floor":            "periodic_floor",
         "adjustment_floor":     "periodic_floor",
         "life_cap":             "rate_cap",
         "ceiling_rate":         "rate_cap",
         "max_rate":             "rate_cap",
         "rate_ceiling":         "rate_cap",
+        "lifetime_interest_rate_cap_up_percent": "rate_cap",
         "life_floor":           "rate_floor",
         "floor_rate":           "rate_floor",
         "min_rate":             "rate_floor",
@@ -306,7 +325,7 @@ class TapeSchema:
         FieldSpec("advance_months",    "int",   default=-1),
         FieldSpec("reset_frequency",   "int",   default=0),
         # ── Optional, nullable (default=None → omit from kwargs) ─────────────
-        FieldSpec("group_id",             "int"),
+        FieldSpec("group_id",             "group_id"),
         FieldSpec("maturity_date",        "date"),
         FieldSpec("first_payment_date",   "date"),
         FieldSpec("next_payment_date",    "date"),
@@ -386,6 +405,12 @@ class TapeSchema:
 
         # ── Step 2: Resolve column aliases ───────────────────────────────────
         df = df.rename(columns=self._resolve_columns(list(df.columns)))
+        if df.columns.has_duplicates:
+            # Multiple raw columns may intentionally map to the same canonical
+            # field (for example typo + corrected variants in source files).
+            # Collapse duplicate columns deterministically in left-to-right
+            # order so row dict materialization remains unambiguous.
+            df = df.T.groupby(level=0, sort=False).first().T
 
         # ── Step 3: Inject portfolio-level asof_date if column is absent ──────
         if asof_date is not None and "asof_date" not in df.columns:
@@ -549,6 +574,8 @@ class TapeSchema:
                     kwargs[spec.name] = self._parse_bool(raw)
                 elif spec.kind == "int":
                     kwargs[spec.name] = self._parse_int_strict(raw)
+                elif spec.kind == "group_id":
+                    kwargs[spec.name] = self._parse_group_id(raw)
                 elif spec.kind == "float":
                     kwargs[spec.name] = float(raw)
                 else:
@@ -631,6 +658,39 @@ class TapeSchema:
         raise ValueError(f"cannot parse {val!r} as integer")
 
     @staticmethod
+    def _parse_group_id(val: Any) -> int | str:
+        """Parse group ID as int when numeric, otherwise as non-empty text.
+
+        Real-world tapes commonly use either numeric pool IDs (e.g. 7) or text
+        labels (e.g. "A", "Prime_2024Q1"). This parser preserves that intent:
+        strict numeric values remain integers; non-numeric values remain strings.
+
+        Raises:
+            ValueError: If value is null/blank or boolean.
+        """
+        if isinstance(val, (bool, np.bool_)):
+            raise ValueError(f"cannot parse {val!r} as group_id")
+        try:
+            if pd.isna(val):
+                raise ValueError("group_id is null")
+        except (TypeError, ValueError):
+            pass
+
+        if isinstance(val, (int, np.integer)):
+            return int(val)
+        if isinstance(val, (float, np.floating)):
+            if np.isfinite(val) and float(val).is_integer():
+                return int(val)
+            raise ValueError(f"cannot parse {val!r} as group_id")
+
+        s = str(val).strip()
+        if not s:
+            raise ValueError("group_id is blank")
+        if re.fullmatch(r"[+-]?\d+", s):
+            return int(s)
+        return s
+
+    @staticmethod
     def _format_exception_chain(exc: Exception) -> str:
         """Return a compact 'caused by' chain for aggregated row errors."""
         chain: list[str] = []
@@ -648,6 +708,37 @@ class TapeSchema:
 # ---------------------------------------------------------------------------
 # Convenience wrappers
 # ---------------------------------------------------------------------------
+
+
+# Mapping for Fannie Mae CRT/SF Loan Performance sample tapes, based on
+# "Single-Family Loan Performance Dataset and Credit Risk Transfer - Glossary
+# and File Layout" (see docs/reference/crt_file_layout_and_glossary.md).
+CRT_FILE_LAYOUT_COLUMN_MAP: dict[str, str] = {
+    # ── Identity & grouping ────────────────────────────────────────────
+    "int": "group_id",                          # Field 1: Reference Pool ID
+    "loan": "loan_id",                          # Field 2: Loan Identifier
+    # ── Dates ──────────────────────────────────────────────────────────
+    "month": "asof_date",                       # Field 3: Monthly Reporting Period
+    "odate": "origination_date",                # Field 14: Origination Date
+    "first_payment_date": "first_payment_date", # Field 15: First Payment Date
+    "maturity_date": "maturity_date",           # Field 19: Maturity Date
+    "paid_thru_date": "last_payment_date",      # Field 51: Last Paid Installment Date
+    # ── Rates ──────────────────────────────────────────────────────────
+    "current_interest_rate": "rate_margin",     # Field 9: Current Interest Rate
+    # ── Balances ───────────────────────────────────────────────────────
+    "original_upb": "original_balance",         # Field 10: Original UPB
+    "current_upb": "current_balance",           # Field 12: Current Actual UPB
+    # ── Term ───────────────────────────────────────────────────────────
+    "original_term": "original_term",           # Field 13: Original Loan Term
+    "remaining_legal_term": "remaining_term",   # Field 17: Remaining Months to Legal Maturity
+    "remaing_term": "remaining_term",           # Observed typo in sample header
+    # ── ARM fields ─────────────────────────────────────────────────────
+    "interest_rate_adjustment_frequency": "reset_frequency",  # Field 91
+    "next_interest_rate_adjustment_date": "next_reset_date",  # Field 92
+    "periodic_interest_rate_cap_up_percent": "periodic_cap",  # Field 97
+    "lifetime_interest_rate_cap_up_percent": "rate_cap",      # Field 98
+    "mortgage_margin": "rate_margin",           # Field 99: ARM Mortgage Margin
+}
 
 
 def read_loan_tape(
