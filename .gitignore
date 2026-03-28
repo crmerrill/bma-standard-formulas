@@ -58,3 +58,8 @@ DESIGN_MODULES_AND_LOAN.md
 htmlcov/
 .pytest_cache/
 .tox/
+
+# App runtime artifacts
+runs/
+src/bma_cfengine_app/ui/node_modules/
+src/bma_cfengine_app/ui/dist/

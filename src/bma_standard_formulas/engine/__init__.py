@@ -48,6 +48,7 @@ from bma_standard_formulas.engine.tape import (
     TapeSchema,
     FieldSpec,
     TapeReadError,
+    CRT_FILE_LAYOUT_COLUMN_MAP,
     read_loan_tape,
     loans_to_dataframe,
 )
@@ -97,6 +98,7 @@ __all__ = [
     "TapeSchema",
     "FieldSpec",
     "TapeReadError",
+    "CRT_FILE_LAYOUT_COLUMN_MAP",
     "read_loan_tape",
     "loans_to_dataframe",
     # Rate index

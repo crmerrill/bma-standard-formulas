@@ -81,7 +81,7 @@ class Loan:
     rate_margin: float                        # annual % (e.g. 8.0 for 8%)
 
     # ── Optional rate / grouping fields ─────────────────────────────────
-    group_id: int | None = None               # for GROUP cross-collat; None = standalone
+    group_id: int | str | None = None         # supports numeric or text pool/group IDs
     servicing_fee: float = 0.0                # annual % (e.g. 0.25 for 25 bp)
     original_term: int = 0                    # months (M₀)
     remaining_term: int = 0                   # months at asof (Mₙ)

@@ -23,6 +23,18 @@ pip install bma-standard-formulas
 
 Requirements: Python 3.12+, NumPy, SciPy, pandas, pyarrow.
 
+### Local developer install (recommended for this repo)
+
+```bash
+git clone https://github.com/crmerrill/bma-standard-formulas.git
+cd bma-standard-formulas
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev,app]"
+```
+
+If you plan to run the frontend, also install Node.js 20+ (includes `npm`).
+
 ## Quick Start
 
 ### 1) Formulas layer (math-first)
@@ -77,6 +89,113 @@ portfolio = run_actual_portfolio(loans, smm, mdr, sev, flush=True)
 pool_df = portfolio.pool.to_dataframe()
 ```
 
+### 3) Optional: run the API + frontend app
+
+This repo also includes an optional app scaffold at `src/bma_cfengine_app/`
+(FastAPI backend + React/Vite UI).
+
+Install with app extras:
+
+```bash
+pip install -e ".[app]"
+```
+
+Run the full app stack:
+
+```bash
+python scripts/run_app.py
+```
+
+Useful variants:
+
+```bash
+# do not auto-open browser
+python scripts/run_app.py --no-browser
+
+# custom ports
+python scripts/run_app.py --api-port 9000 --ui-port 5200
+
+# serve built UI from FastAPI (no Vite dev server)
+python scripts/run_app.py --prod
+```
+
+Default endpoints:
+
+- UI: `http://localhost:5175`
+- API: `http://127.0.0.1:8000`
+- API docs: `http://127.0.0.1:8000/api/docs`
+
+### 4) Frontend quick start (manual mode)
+
+If you want to run backend and frontend separately instead of `scripts/run_app.py`:
+
+```bash
+# Terminal 1: API
+uvicorn bma_cfengine_app.api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+```bash
+# Terminal 2: UI
+cd src/bma_cfengine_app/ui
+npm install
+npm run dev -- --port 5175
+```
+
+Then open:
+
+- UI: `http://localhost:5175`
+- API docs: `http://127.0.0.1:8000/api/docs`
+
+Build frontend assets:
+
+```bash
+cd src/bma_cfengine_app/ui
+npm run build
+```
+
+Serve built frontend from FastAPI:
+
+```bash
+python scripts/run_app.py --prod
+```
+
+## Examples and Notebooks
+
+### Formula examples module
+
+Canonical BMA example fixtures live in:
+
+- `src/bma_standard_formulas/formulas/examples.py`
+
+Use it directly from Python:
+
+```python
+from bma_standard_formulas.formulas import examples
+
+print(examples.INCLUDED_BMA_REFERENCE_IDS)
+```
+
+### Notebook walkthroughs
+
+This repo includes notebooks for worked examples:
+
+- `notebooks/BMA_Examples_Walkthrough.ipynb`
+- `notebooks/ReadMeExamples.ipynb`
+
+Open with Jupyter:
+
+```bash
+jupyter lab
+```
+
+or
+
+```bash
+jupyter notebook
+```
+
+then navigate to the `notebooks/` folder.
+
 ## Core Conventions (Important)
 
 ### Units
@@ -123,6 +242,13 @@ The engine wrappers convert age-indexed curves into period-indexed windows autom
 - `tape`: strict tape parsing (`TapeSchema`, `read_loan_tape`).
 - `rate_index`: floating-rate index vectors.
 - `cashflow_persistence`: schema-aware Parquet read/write (`write_cashflow`, `read_cashflows`, etc.).
+
+### `bma_cfengine_app` (optional app scaffold)
+
+- `api`: FastAPI routes and request/response models.
+- `orchestrator`: run setup, grouping, mapping, assumptions, rates, and execution wiring.
+- `storage`: local workspace and run artifact management.
+- `ui`: React/Vite frontend for tape intake, run setup, and results views.
 
 ## Persistence and Rewind Notes
 

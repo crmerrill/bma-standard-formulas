@@ -1,0 +1,214 @@
+from __future__ import annotations
+
+import json
+import shutil
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+APP_HOME = Path.home() / "PrismaRisk" / "BMA-CFEngine"
+
+_UPLOADS_DIR = APP_HOME / "uploads"
+_RUNS_DIR = APP_HOME / "runs"
+_CONFIG_DIR = APP_HOME / "config"
+
+RAW_SUBDIR = "raw"
+WORKING_SUBDIR = "working"
+
+
+def init_workspace() -> Path:
+    """Create the user workspace on first run. Safe to call repeatedly."""
+    for d in (APP_HOME, _UPLOADS_DIR, _RUNS_DIR, _CONFIG_DIR):
+        d.mkdir(parents=True, exist_ok=True)
+    return APP_HOME
+
+
+def workspace_path() -> Path:
+    return APP_HOME
+
+
+def new_upload_id() -> str:
+    return f"upl_{uuid.uuid4().hex[:12]}"
+
+
+def new_mapping_id() -> str:
+    return f"map_{uuid.uuid4().hex[:12]}"
+
+
+def new_run_id() -> str:
+    return f"run_{uuid.uuid4().hex[:12]}"
+
+
+def upload_dir(upload_id: str) -> Path:
+    p = _UPLOADS_DIR / upload_id
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def run_dir(run_id: str) -> Path:
+    p = _RUNS_DIR / run_id
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Upload: raw (immutable) + working (editable) copies
+# ---------------------------------------------------------------------------
+
+
+def save_upload(upload_id: str, file_name: str, content: bytes) -> Path:
+    """Save the original upload as an immutable raw file."""
+    d = upload_dir(upload_id)
+    raw_dir = d / RAW_SUBDIR
+    raw_dir.mkdir(exist_ok=True)
+    dest = raw_dir / file_name
+    dest.write_bytes(content)
+    return dest
+
+
+def _raw_file(upload_id: str) -> Path:
+    raw_dir = upload_dir(upload_id) / RAW_SUBDIR
+    files = list(raw_dir.glob("*")) if raw_dir.exists() else []
+    if not files:
+        legacy = [f for f in upload_dir(upload_id).iterdir()
+                  if f.is_file() and f.suffix in (".csv", ".xlsx", ".xls")]
+        if legacy:
+            return legacy[0]
+        raise FileNotFoundError(f"No raw file for upload {upload_id}")
+    return files[0]
+
+
+def _working_file(upload_id: str) -> Path | None:
+    working_dir = upload_dir(upload_id) / WORKING_SUBDIR
+    if not working_dir.exists():
+        return None
+    parquet = working_dir / "tape.parquet"
+    if parquet.exists():
+        return parquet
+    files = list(working_dir.glob("*"))
+    return files[0] if files else None
+
+
+def _read_file(path: Path) -> pd.DataFrame:
+    ext = path.suffix.lower()
+    if ext == ".parquet":
+        return pd.read_parquet(path)
+    if ext in (".xlsx", ".xls"):
+        return pd.read_excel(path)
+    return pd.read_csv(path)
+
+
+def load_upload_df(upload_id: str) -> tuple[pd.DataFrame, str]:
+    """Load the working copy (parquet) if it exists, otherwise the raw original."""
+    working = _working_file(upload_id)
+    if working:
+        return _read_file(working), working.name
+    raw = _raw_file(upload_id)
+    return _read_file(raw), raw.name
+
+
+def load_raw_df(upload_id: str) -> tuple[pd.DataFrame, str]:
+    """Always load the immutable raw original."""
+    raw = _raw_file(upload_id)
+    return _read_file(raw), raw.name
+
+
+def save_working_copy(upload_id: str, df: pd.DataFrame) -> Path:
+    """Save a modified working copy as parquet. The raw file is never touched.
+
+    Parquet preserves dtypes (int vs float, dates, categoricals) across
+    read/write cycles, avoiding the float-upcast problem that CSV causes.
+    """
+    working_dir = upload_dir(upload_id) / WORKING_SUBDIR
+    working_dir.mkdir(exist_ok=True)
+    dest = working_dir / "tape.parquet"
+    df.to_parquet(dest, index=False)
+    return dest
+
+
+def has_working_copy(upload_id: str) -> bool:
+    return _working_file(upload_id) is not None
+
+
+def revert_to_raw(upload_id: str) -> None:
+    """Delete the working copy, reverting to the raw original."""
+    working_dir = upload_dir(upload_id) / WORKING_SUBDIR
+    if working_dir.exists():
+        shutil.rmtree(working_dir)
+
+
+# ---------------------------------------------------------------------------
+# Run manifests and artifacts
+# ---------------------------------------------------------------------------
+
+
+def save_manifest(run_id: str, manifest: dict[str, Any]) -> Path:
+    d = run_dir(run_id)
+    p = d / "manifest.json"
+    manifest.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+    p.write_text(json.dumps(manifest, indent=2, default=str))
+    return p
+
+
+def load_manifest(run_id: str) -> dict[str, Any]:
+    p = run_dir(run_id) / "manifest.json"
+    if not p.exists():
+        raise FileNotFoundError(f"No manifest for run {run_id}")
+    return json.loads(p.read_text())
+
+
+def save_artifact(run_id: str, name: str, df: pd.DataFrame) -> Path:
+    d = run_dir(run_id) / "artifacts"
+    d.mkdir(exist_ok=True)
+    dest = d / f"{name}.parquet"
+    df.to_parquet(dest, index=False)
+    return dest
+
+
+def save_artifact_csv(run_id: str, name: str, df: pd.DataFrame) -> Path:
+    d = run_dir(run_id) / "artifacts"
+    d.mkdir(exist_ok=True)
+    dest = d / f"{name}.csv"
+    df.to_csv(dest, index=False)
+    return dest
+
+
+def load_artifact(run_id: str, name: str) -> pd.DataFrame:
+    d = run_dir(run_id) / "artifacts"
+    parquet = d / f"{name}.parquet"
+    if parquet.exists():
+        return pd.read_parquet(parquet)
+    csv = d / f"{name}.csv"
+    if csv.exists():
+        return pd.read_csv(csv)
+    raise FileNotFoundError(f"Artifact '{name}' not found for run {run_id}")
+
+
+def list_artifacts(run_id: str) -> list[str]:
+    d = run_dir(run_id) / "artifacts"
+    if not d.exists():
+        return []
+    return [f.stem for f in d.iterdir() if f.is_file()]
+
+
+# ---------------------------------------------------------------------------
+# Mappings
+# ---------------------------------------------------------------------------
+
+
+def save_mapping(upload_id: str, mapping_id: str, mapping_data: dict) -> Path:
+    d = upload_dir(upload_id)
+    p = d / f"{mapping_id}.json"
+    p.write_text(json.dumps(mapping_data, indent=2))
+    return p
+
+
+def load_mapping(upload_id: str, mapping_id: str) -> dict:
+    d = upload_dir(upload_id)
+    p = d / f"{mapping_id}.json"
+    if not p.exists():
+        raise FileNotFoundError(f"Mapping {mapping_id} not found")
+    return json.loads(p.read_text())
