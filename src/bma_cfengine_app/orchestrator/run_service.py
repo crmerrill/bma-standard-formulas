@@ -125,6 +125,76 @@ def compute_tape_stats(df: pd.DataFrame) -> TapeStats:
     )
 
 
+def _save_assumption_curves(
+    run_id: str,
+    prefix: str,
+    smm: Any,
+    mdr: Any,
+    severity: Any,
+    loans: list[Loan],
+    group_id_map: dict[int, str] | None,
+) -> str:
+    """Save resolved assumption curves as parquet. Returns the format used."""
+    try:
+        if isinstance(smm, np.ndarray):
+            horizon = len(smm)
+            df = pd.DataFrame({
+                "period": np.arange(horizon),
+                "smm": smm,
+                "mdr": mdr if isinstance(mdr, np.ndarray) else np.zeros(horizon),
+                "severity": severity if isinstance(severity, np.ndarray) else np.zeros(horizon),
+            })
+            run_store.save_artifact(run_id, f"{prefix}_assumptions", df)
+            return "portfolio"
+        elif isinstance(smm, dict):
+            rows = []
+            for loan in loans:
+                lid = loan.loan_id
+                gid = group_id_map.get(lid, "") if group_id_map else ""
+                s = smm.get(lid, np.array([]))
+                m = mdr.get(lid, np.array([])) if isinstance(mdr, dict) else np.array([])
+                sv = severity.get(lid, np.array([])) if isinstance(severity, dict) else np.array([])
+                for p in range(len(s)):
+                    rows.append({
+                        "loan_id": lid,
+                        "group_id": gid,
+                        "period": p,
+                        "smm": float(s[p]) if p < len(s) else 0.0,
+                        "mdr": float(m[p]) if p < len(m) else 0.0,
+                        "severity": float(sv[p]) if p < len(sv) else 0.0,
+                    })
+            if rows:
+                df = pd.DataFrame(rows)
+                run_store.save_artifact(run_id, f"{prefix}_assumptions", df)
+
+                if group_id_map:
+                    group_rows = []
+                    seen_groups: dict[str, int] = {}
+                    for loan in loans:
+                        gid = group_id_map.get(loan.loan_id, "")
+                        if gid in seen_groups:
+                            continue
+                        seen_groups[gid] = loan.loan_id
+                        s = smm.get(loan.loan_id, np.array([]))
+                        m = mdr.get(loan.loan_id, np.array([])) if isinstance(mdr, dict) else np.array([])
+                        sv = severity.get(loan.loan_id, np.array([])) if isinstance(severity, dict) else np.array([])
+                        for p in range(len(s)):
+                            group_rows.append({
+                                "group_id": gid,
+                                "period": p,
+                                "smm": float(s[p]) if p < len(s) else 0.0,
+                                "mdr": float(m[p]) if p < len(m) else 0.0,
+                                "severity": float(sv[p]) if p < len(sv) else 0.0,
+                            })
+                    if group_rows:
+                        run_store.save_artifact(run_id, f"{prefix}_assumptions_by_group", pd.DataFrame(group_rows))
+                    return "group"
+            return "loan"
+    except Exception:
+        pass
+    return "unknown"
+
+
 def _safe_artifact_name(name: str) -> str:
     import re
     safe = re.sub(r'[^\w\-.]', '_', name)
@@ -148,6 +218,8 @@ def _execute_single_scenario(
     smm, mdr, severity, sev_lag, months_liq = resolve_portfolio_curves(
         loans, assumptions, group_id_map
     )
+
+    _save_assumption_curves(run_id, prefix, smm, mdr, severity, loans, group_id_map)
 
     portfolio = _run_portfolio(loans, smm, mdr, severity, sev_lag, months_liq, rate_index, run_mode)
 
@@ -216,7 +288,17 @@ def execute_run(
     try:
         run_store.save_manifest(run_id, {"status": "running", "upload_id": upload_id})
 
-        df_raw, _ = run_store.load_upload_df(upload_id)
+        df_raw, raw_name = run_store.load_upload_df(upload_id)
+
+        tape_snap = run_store.run_dir(run_id) / "tape_snapshot.parquet"
+        df_raw.to_parquet(tape_snap, index=False)
+
+        from .rates import load_rates_df
+        rates_df = load_rates_df(upload_id)
+        if rates_df is not None:
+            rates_snap = run_store.run_dir(run_id) / "rates_snapshot.csv"
+            rates_df.to_csv(rates_snap, index=False)
+
         df_mapped = _dedup_cols(apply_mapping(df_raw, mappings))
         df_mapped = _coerce_int_columns(df_mapped)
 
@@ -297,6 +379,16 @@ def execute_run(
             for sc in scenario_list
         ]
 
+        run_config = {
+            "upload_id": upload_id,
+            "mapping_id": None,
+            "mappings": [m.model_dump() for m in mappings],
+            "asof_date": asof_date,
+            "grouping": grouping.model_dump() if grouping else None,
+            "run_mode": run_mode,
+            "include_period_zero": include_period_zero,
+        }
+
         run_store.save_manifest(run_id, {
             "status": "completed",
             "upload_id": upload_id,
@@ -309,6 +401,9 @@ def execute_run(
             "scenarios": scenarios_manifest,
             "elapsed_seconds": elapsed_sec,
             "summary": summary.model_dump(),
+            "run_config": run_config,
+            "tape_snapshot": "tape_snapshot.parquet",
+            "rates_snapshot": "rates_snapshot.csv" if rates_df is not None else None,
         })
 
         return RunResponse(
@@ -428,6 +523,51 @@ def execute_risk(
             pass
 
     return result
+
+
+def list_all_runs() -> list[dict[str, Any]]:
+    """List all runs from the workspace, sorted by date descending."""
+    from ..storage.run_store import _RUNS_DIR
+    runs: list[dict[str, Any]] = []
+    if not _RUNS_DIR.exists():
+        return runs
+    for d in _RUNS_DIR.iterdir():
+        if not d.is_dir() or not d.name.startswith("run_"):
+            continue
+        mf = d / "manifest.json"
+        if not mf.exists():
+            continue
+        try:
+            import json
+            m = json.loads(mf.read_text())
+            summary = m.get("summary", {})
+            runs.append({
+                "run_id": d.name,
+                "status": m.get("status", "unknown"),
+                "created_at": m.get("created_at", ""),
+                "loan_count": summary.get("loan_count", m.get("loan_count", 0)),
+                "group_count": summary.get("group_count", m.get("group_count", 0)),
+                "scenario_names": m.get("scenario_names", []),
+                "elapsed_seconds": summary.get("elapsed_seconds", m.get("elapsed_seconds")),
+                "total_balance": summary.get("total_balance", 0),
+                "wac": summary.get("wac", 0),
+                "error": m.get("error"),
+            })
+        except Exception:
+            pass
+    runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+    return runs
+
+
+def get_run_config(run_id: str) -> dict[str, Any]:
+    """Return the full run config for re-running."""
+    manifest = run_store.load_manifest(run_id)
+    return {
+        "run_config": manifest.get("run_config", {}),
+        "scenarios": manifest.get("scenarios", []),
+        "group_names": manifest.get("group_names", []),
+        "summary": manifest.get("summary", {}),
+    }
 
 
 def get_run_groups(run_id: str) -> tuple[list[str], dict[str, str]]:
