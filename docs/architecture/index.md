@@ -28,6 +28,10 @@ Read in this order if you are new:
 11. [Operational Playbook](operational_playbook.md)
 12. [Daycount and Pricing Contracts](daycount_and_pricing_contracts.md)
 
+Reference material:
+
+- [CRT File Layout and Glossary](../reference/crt_file_layout_and_glossary.md)
+
 ### Reading paths
 
 - **Path A: run your first scenario**
