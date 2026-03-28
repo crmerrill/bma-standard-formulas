@@ -6,15 +6,17 @@ import {
   BarChart3,
   ChevronRight,
   RotateCcw,
+  Clock,
 } from "lucide-react";
 
-export type Page = "intake" | "tape" | "setup" | "results";
+export type Page = "intake" | "tape" | "setup" | "results" | "history";
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "intake", label: "Tape Intake", icon: Upload },
   { id: "tape", label: "Tape View", icon: Table2 },
   { id: "setup", label: "Run Setup", icon: Settings2 },
   { id: "results", label: "Results", icon: BarChart3 },
+  { id: "history", label: "Run History", icon: Clock },
 ];
 
 interface LayoutProps {
