@@ -434,6 +434,48 @@ export function getRunScenarios(
   return request(`/runs/${runId}/scenarios`);
 }
 
+// ---------- Run History ----------
+
+export interface RunListItem {
+  run_id: string;
+  status: string;
+  created_at: string;
+  loan_count: number;
+  group_count: number;
+  scenario_names: string[];
+  elapsed_seconds: number | null;
+  total_balance: number;
+  wac: number;
+  error?: string;
+}
+
+export function listRuns(): Promise<RunListItem[]> {
+  return request("/runs-list");
+}
+
+export interface RunConfig {
+  run_config: {
+    upload_id: string;
+    mapping_id: string | null;
+    mappings: FieldMapping[];
+    asof_date: string | null;
+    grouping: { keys: string[] } | null;
+    run_mode: string;
+    include_period_zero: boolean;
+  };
+  scenarios: Array<{
+    name: string;
+    run_mode: string;
+    assumptions: unknown;
+  }>;
+  group_names: string[];
+  summary: Record<string, unknown>;
+}
+
+export function getRunConfig(runId: string): Promise<RunConfig> {
+  return request(`/runs/${runId}/config`);
+}
+
 // ---------- Risk ----------
 
 export function computeRisk(
