@@ -447,8 +447,9 @@ class BMAScheduledCashflow:
       - loan_id: Integer uniquely identifying this loan.  Required for CashFlowPair
         validation (scheduled and actual must have the same loan_id) and for
         tracking which loans are in a portfolio.
-      - group_id: Optional integer for GROUP cross-collateralization.  Loans with the
-        same group_id share recovery proceeds within the group.  None = standalone.
+      - group_id: Optional numeric or text identifier for GROUP cross-collateralization.
+        Loans with the same group_id share recovery proceeds within the group.
+        None = standalone.
       - original_balance, original_term, remaining_term: Loan economics at origination
         and as-of date.  Used by CashFlowPair to validate that scheduled and actual
         cashflows were generated from the same loan parameters.
@@ -485,7 +486,7 @@ class BMAScheduledCashflow:
     # --- META fields (loan identity, timing, audit — not aggregated) ---
     cf_id: str = field(default="", metadata={"kind": FieldKind.META})  # globally unique UUID (auto-assigned by runner)
     loan_id: int = field(default=0, metadata={"kind": FieldKind.META})  # uniquely identifies the loan; 0 = unidentified
-    group_id: int | None = field(default=None, metadata={"kind": FieldKind.META})  # for GROUP cross-collat; None = standalone
+    group_id: int | str | None = field(default=None, metadata={"kind": FieldKind.META})  # for GROUP cross-collat; None = standalone
     asof_date: np.datetime64 | None = field(default=None, metadata={"kind": FieldKind.META})  # valuation / reporting date
     first_payment_date: np.datetime64 | None = field(default=None, metadata={"kind": FieldKind.META})  # first payment date from origination
     maturity_date: np.datetime64 | None = field(default=None, metadata={"kind": FieldKind.META})  # loan maturity date
@@ -743,7 +744,7 @@ class BMAScheduledCashflow:
         df: pd.DataFrame,
         cf_id: str | None = None,
         loan_id: int = 0,
-        group_id: int | None = None,
+        group_id: int | str | None = None,
         **meta_kwargs,
     ) -> BMAScheduledCashflow:
         """Reconstruct a scheduled cashflow from a pandas DataFrame.
@@ -925,7 +926,7 @@ def run_bma_scheduled_cashflow(
     accrued_interest: float = 0.0,
     servicing_fee: float = 0.0,
     loan_id: int = 0,
-    group_id: int | None = None,
+    group_id: int | str | None = None,
     asof_date: np.datetime64 | None = None,
     first_payment_date: np.datetime64 | None = None,
     maturity_date: np.datetime64 | None = None,
@@ -1255,7 +1256,7 @@ class BMAActualCashflow:
     # --- META: loan identity (Part A) ---
     cf_id: str = field(default="", metadata={"kind": FieldKind.META})  # globally unique UUID
     loan_id: int = field(default=0, metadata={"kind": FieldKind.META})
-    group_id: int | None = field(default=None, metadata={"kind": FieldKind.META})
+    group_id: int | str | None = field(default=None, metadata={"kind": FieldKind.META})
     original_balance: float = field(default=0.0, metadata={"kind": FieldKind.META})
     current_balance: float = field(default=0.0, metadata={"kind": FieldKind.META})  # outstanding balance at asof ($)
     original_term: int = field(default=0, metadata={"kind": FieldKind.META})
@@ -1412,7 +1413,7 @@ class BMAActualCashflow:
         df: pd.DataFrame,
         cf_id: str | None = None,
         loan_id: int = 0,
-        group_id: int | None = None,
+        group_id: int | str | None = None,
         **meta_kwargs,
     ) -> BMAActualCashflow:
         """Reconstruct an actual cashflow from a pandas DataFrame.

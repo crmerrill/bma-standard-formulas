@@ -330,7 +330,7 @@ def _read_from_parquet(
     target_cls: type | None,
     cf_id: str | None = None,
     loan_id: int | None = None,
-    group_id: int | None = None,
+    group_id: int | str | None = None,
 ) -> list:
     """Internal: read and filter cashflows from a Parquet file.
 
@@ -420,7 +420,7 @@ def read_scheduled(
     path: str | Path,
     cf_id: str | None = None,
     loan_id: int | None = None,
-    group_id: int | None = None,
+    group_id: int | str | None = None,
 ) -> BMAScheduledCashflow | list[BMAScheduledCashflow]:
     """Read scheduled cashflow(s) from a Parquet file.
 
@@ -456,7 +456,7 @@ def read_actual(
     path: str | Path,
     cf_id: str | None = None,
     loan_id: int | None = None,
-    group_id: int | None = None,
+    group_id: int | str | None = None,
 ) -> BMAActualCashflow | list[BMAActualCashflow]:
     """Read actual cashflow(s) from a Parquet file.
 
@@ -488,7 +488,7 @@ def read_cashflows(
     path: str | Path,
     cf_id: str | None = None,
     loan_id: int | None = None,
-    group_id: int | None = None,
+    group_id: int | str | None = None,
 ) -> list[BMAScheduledCashflow | BMAActualCashflow]:
     """Read any cashflow(s) from a Parquet file, auto-detecting type.
 
