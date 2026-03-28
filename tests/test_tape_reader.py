@@ -265,6 +265,11 @@ class TestOptionalFieldDefaults(unittest.TestCase):
         loans = read_loan_tape(df)
         self.assertIsNone(loans[0].group_id)
 
+    def test_group_id_text_preserved(self):
+        df = _make_minimal_df(n=1, group_id=["A"])
+        loans = read_loan_tape(df)
+        self.assertEqual(loans[0].group_id, "A")
+
     def test_servicing_fee_present(self):
         df = _make_minimal_df(n=1, servicing_fee=[0.25])
         loans = read_loan_tape(df)
