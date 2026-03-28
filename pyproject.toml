@@ -30,6 +30,7 @@ dependencies = [
     "scipy",
     "pandas",
     "pyarrow",
+    "openpyxl",
 ]
 
 [project.optional-dependencies]
