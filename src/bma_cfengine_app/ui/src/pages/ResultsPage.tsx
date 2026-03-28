@@ -4,7 +4,7 @@ import {
   Hash, DollarSign, Clock, Percent, Layers, ChevronDown, Timer,
 } from "lucide-react";
 import type {
-  RunResponse, CashflowPreview, RiskResponse, RiskMetricsResult,
+  RunResponse, CashflowPreview, RiskResponse, RiskMetricsResult, RunListItem,
 } from "../services/api";
 import * as api from "../services/api";
 
@@ -26,15 +26,23 @@ function fmtNum(n: unknown, dec = 4): string {
 
 type Tab = "summary" | "portfolio" | "groups" | "risk";
 
-interface Props { run: RunResponse; }
+interface Props {
+  run: RunResponse;
+  onSwitchRun?: (runId: string) => void;
+}
 
 type CfView = "actual" | "scheduled";
 
-export default function ResultsPage({ run }: Props) {
+export default function ResultsPage({ run, onSwitchRun }: Props) {
   const [tab, setTab] = useState<Tab>("summary");
   const [cfPreview, setCfPreview] = useState<CashflowPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [cfView, setCfView] = useState<CfView>("actual");
+
+  const [allRuns, setAllRuns] = useState<RunListItem[]>([]);
+  useEffect(() => {
+    api.listRuns().then((runs) => setAllRuns(runs.filter((r) => r.status === "completed")));
+  }, [run.run_id]);
 
   // Scenarios
   const [scenarioNames, setScenarioNames] = useState<string[]>([]);
@@ -134,6 +142,26 @@ export default function ResultsPage({ run }: Props) {
 
   return (
     <div className="space-y-4">
+      {/* Run selector */}
+      {allRuns.length > 1 && onSwitchRun && (
+        <div className="flex items-center gap-2 text-xs">
+          <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+          <span className="text-muted-foreground">Run:</span>
+          <select
+            value={run.run_id}
+            onChange={(e) => onSwitchRun(e.target.value)}
+            className="px-2 py-1 bg-input-background border border-border rounded text-xs text-foreground"
+            style={MONO}
+          >
+            {allRuns.map((r) => (
+              <option key={r.run_id} value={r.run_id}>
+                {r.run_id.replace("run_", "").slice(0, 8)} — {r.scenario_names.join(", ") || "Base"} — {r.loan_count} loans — {new Date(r.created_at).toLocaleString()}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {/* Summary banner */}
       {summary && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

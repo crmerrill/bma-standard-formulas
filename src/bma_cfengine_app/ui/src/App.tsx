@@ -5,7 +5,9 @@ import TapeIntakePage from "./pages/TapeIntakePage";
 import TapeViewPage from "./pages/TapeViewPage";
 import RunSetupPage from "./pages/RunSetupPage";
 import ResultsPage from "./pages/ResultsPage";
+import RunHistoryPage from "./pages/RunHistoryPage";
 import type { FieldMapping, RunResponse } from "./services/api";
+import * as api from "./services/api";
 
 const MONO = { fontFamily: "'JetBrains Mono', monospace" } as const;
 
@@ -14,6 +16,7 @@ const PAGE_TITLES: Record<Page, string> = {
   tape: "Tape View",
   setup: "Run Setup",
   results: "Results",
+  history: "Run History",
 };
 
 // ---------------------------------------------------------------------------
@@ -78,7 +81,7 @@ export default function App() {
     saveSession({ page, uploadId, mappingId, mappings, run, asofDate, groupKeys });
   }, [page, uploadId, mappingId, mappings, run, asofDate, groupKeys]);
 
-  const enabledPages = new Set<Page>(["intake"]);
+  const enabledPages = new Set<Page>(["intake", "history"]);
   if (uploadId && mappingId) {
     enabledPages.add("tape");
     enabledPages.add("setup");
@@ -111,6 +114,31 @@ export default function App() {
     setGroupKeys([]);
     setPage("intake");
     sessionStorage.removeItem(STORAGE_KEY);
+  }, []);
+
+  const handleViewRun = useCallback(async (runId: string) => {
+    try {
+      const r = await api.getRun(runId);
+      setRun(r);
+      setPage("results");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const handleRerun = useCallback(async (runId: string) => {
+    try {
+      const cfg = await api.getRunConfig(runId);
+      const rc = cfg.run_config;
+      if (rc.upload_id) setUploadId(rc.upload_id);
+      if (rc.mappings) setMappings(rc.mappings);
+      if (rc.grouping?.keys) setGroupKeys(rc.grouping.keys);
+      else setGroupKeys([]);
+      if (rc.asof_date) setAsofDate(rc.asof_date);
+      setPage("setup");
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const asofAction = (
@@ -158,7 +186,12 @@ export default function App() {
           onRunComplete={handleRunComplete}
         />
       )}
-      {page === "results" && run && <ResultsPage run={run} />}
+      {page === "results" && run && (
+        <ResultsPage run={run} onSwitchRun={handleViewRun} />
+      )}
+      {page === "history" && (
+        <RunHistoryPage onViewRun={handleViewRun} onRerun={handleRerun} />
+      )}
     </Layout>
   );
 }

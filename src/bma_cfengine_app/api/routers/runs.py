@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks
 from fastapi.responses import FileResponse
 
-from ...orchestrator.run_service import execute_run, get_cashflow_preview, get_run_groups, get_run_scenarios
+from ...orchestrator.run_service import execute_run, get_cashflow_preview, get_run_config, get_run_groups, get_run_scenarios, list_all_runs
 from ...storage import run_store
 from ..models import (
     CashflowPreview,
@@ -127,3 +127,13 @@ async def list_groups(run_id: str):
 async def list_scenarios(run_id: str):
     scenarios = get_run_scenarios(run_id)
     return {"run_id": run_id, "scenarios": scenarios}
+
+
+@router.get("/runs-list")
+async def list_runs():
+    return list_all_runs()
+
+
+@router.get("/runs/{run_id}/config")
+async def run_config(run_id: str):
+    return get_run_config(run_id)
