@@ -77,6 +77,42 @@ portfolio = run_actual_portfolio(loans, smm, mdr, sev, flush=True)
 pool_df = portfolio.pool.to_dataframe()
 ```
 
+### 3) Optional: run the API + frontend app
+
+This repo also includes an optional app scaffold at `src/bma_cfengine_app/`
+(FastAPI backend + React/Vite UI).
+
+Install with app extras:
+
+```bash
+pip install -e ".[app]"
+```
+
+Run the full app stack:
+
+```bash
+python scripts/run_app.py
+```
+
+Useful variants:
+
+```bash
+# do not auto-open browser
+python scripts/run_app.py --no-browser
+
+# custom ports
+python scripts/run_app.py --api-port 9000 --ui-port 5200
+
+# serve built UI from FastAPI (no Vite dev server)
+python scripts/run_app.py --prod
+```
+
+Default endpoints:
+
+- UI: `http://localhost:5175`
+- API: `http://127.0.0.1:8000`
+- API docs: `http://127.0.0.1:8000/api/docs`
+
 ## Core Conventions (Important)
 
 ### Units
@@ -123,6 +159,13 @@ The engine wrappers convert age-indexed curves into period-indexed windows autom
 - `tape`: strict tape parsing (`TapeSchema`, `read_loan_tape`).
 - `rate_index`: floating-rate index vectors.
 - `cashflow_persistence`: schema-aware Parquet read/write (`write_cashflow`, `read_cashflows`, etc.).
+
+### `bma_cfengine_app` (optional app scaffold)
+
+- `api`: FastAPI routes and request/response models.
+- `orchestrator`: run setup, grouping, mapping, assumptions, rates, and execution wiring.
+- `storage`: local workspace and run artifact management.
+- `ui`: React/Vite frontend for tape intake, run setup, and results views.
 
 ## Persistence and Rewind Notes
 
