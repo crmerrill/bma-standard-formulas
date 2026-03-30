@@ -7,8 +7,10 @@ import {
 } from "lucide-react";
 import type { FieldMapping, RunResponse, GroupPreview, RatesPreflight, CurvePreviewResult, RunPreflightResult } from "../services/api";
 import * as api from "../services/api";
-
-const MONO = { fontFamily: "'JetBrains Mono', monospace" } as const;
+import { MONO } from "../lib/format";
+import DataTable, { type DataTableColumn } from "../components/DataTable";
+import CollapsiblePanel from "../components/CollapsiblePanel";
+import LoadingState from "../components/LoadingState";
 
 interface Props {
   uploadId: string;
@@ -279,14 +281,14 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
       )}
 
       {/* Section 1: Rates */}
-      <AccordionSection
-        id="rates"
+      <CollapsiblePanel
         title="Rate Index Curves"
         icon={TrendingUp}
         open={openSections.has("rates")}
         onToggle={() => toggleSection("rates")}
         status={ratesOk ? "ok" : ratesPreflight?.missing_indexes.length ? "error" : "neutral"}
       >
+        <div className="px-4 pb-4">
         {ratesPreflight?.all_fixed ? (
           <div className="flex items-center gap-2 text-engine-green text-xs">
             <Check className="w-4 h-4" />
@@ -344,19 +346,19 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
             )}
           </div>
         )}
-      </AccordionSection>
+        </div>
+      </CollapsiblePanel>
 
       {/* Section 2: Grouping */}
-      <AccordionSection
-        id="grouping"
+      <CollapsiblePanel
         title="Grouping"
         icon={Layers}
         open={openSections.has("grouping")}
         onToggle={() => toggleSection("grouping")}
         status="ok"
-        subtitle={groupKeys.length ? groupKeys.join(", ") : "Optional"}
+        badge={groupKeys.length ? groupKeys.join(", ") : "Optional"}
       >
-        <div className="space-y-3">
+        <div className="px-4 pb-4 space-y-3">
           <div className="flex items-center gap-2">
             <select
               value=""
@@ -380,41 +382,33 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
             </div>
           )}
           {groupPreview && (
-            <div className="border border-border rounded overflow-hidden max-h-[200px] overflow-auto">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-grid-header">
-                  <tr className="text-muted-foreground border-b border-border">
-                    <th className="text-left px-3 py-1">Group</th>
-                    <th className="text-right px-3 py-1">Loans</th>
-                    <th className="text-right px-3 py-1">Balance</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {groupPreview.map((g) => (
-                    <tr key={g.group_id} className="border-b border-border/50 hover:bg-grid-row-hover">
-                      <td className="px-3 py-1" style={MONO}>{g.group_id}</td>
-                      <td className="px-3 py-1 text-right" style={MONO}>{g.loan_count}</td>
-                      <td className="px-3 py-1 text-right" style={MONO}>${(g.total_balance / 1e6).toFixed(2)}M</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="border border-border rounded overflow-hidden">
+              <DataTable
+                tableId="group_preview"
+                maxHeight="200px"
+                columns={[
+                  { id: "group_id", header: "Group", accessorKey: "group_id" },
+                  { id: "loan_count", header: "Loans", accessorKey: "loan_count", align: "right" },
+                  { id: "total_balance", header: "Balance", accessorKey: "total_balance", align: "right", cell: (v) => `$${(Number(v) / 1e6).toFixed(2)}M` },
+                ] as DataTableColumn<GroupPreview>[]}
+                data={groupPreview}
+                getRowId={(r) => r.group_id}
+              />
             </div>
           )}
           {groupLoading && <span className="text-muted-foreground text-xs">Loading groups...</span>}
         </div>
-      </AccordionSection>
+      </CollapsiblePanel>
 
       {/* Section 3: Assumptions + Scenarios */}
-      <AccordionSection
-        id="assumptions"
+      <CollapsiblePanel
         title="Assumptions"
         icon={Settings2}
         open={openSections.has("assumptions")}
         onToggle={() => toggleSection("assumptions")}
         status="ok"
       >
-        <div className="space-y-3">
+        <div className="px-4 pb-4 space-y-3">
           {/* Scenario tabs */}
           <div className="flex items-center gap-1 border-b border-border">
             {scenarios.map((s, idx) => (
@@ -574,7 +568,7 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
             </div>
           )}
         </div>
-      </AccordionSection>
+      </CollapsiblePanel>
 
       {/* Preflight + Run */}
       <div className="bg-card border border-border rounded-lg p-4 space-y-3">
@@ -622,39 +616,7 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
   );
 }
 
-// ---------------------------------------------------------------------------
-// Accordion section wrapper
-// ---------------------------------------------------------------------------
-
-function AccordionSection({
-  id, title, icon: Icon, open, onToggle, status, subtitle, children,
-}: {
-  id: string;
-  title: string;
-  icon: React.ElementType;
-  open: boolean;
-  onToggle: () => void;
-  status: "ok" | "error" | "neutral";
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden">
-      <button onClick={onToggle}
-        className="w-full flex items-center gap-2 px-4 py-3 text-xs font-medium text-foreground hover:bg-white/5 transition-colors">
-        {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-        <Icon className="w-3.5 h-3.5 text-primary" />
-        {title}
-        {subtitle && <span className="text-muted-foreground font-normal ml-1">— {subtitle}</span>}
-        <div className="ml-auto">
-          {status === "ok" && <Check className="w-3.5 h-3.5 text-engine-green" />}
-          {status === "error" && <AlertTriangle className="w-3.5 h-3.5 text-engine-red" />}
-        </div>
-      </button>
-      {open && <div className="px-4 pb-4">{children}</div>}
-    </div>
-  );
-}
+// AccordionSection replaced by shared CollapsiblePanel
 
 // ---------------------------------------------------------------------------
 // Curve input row

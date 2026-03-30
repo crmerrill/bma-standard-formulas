@@ -3,7 +3,17 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks
 from fastapi.responses import FileResponse
 
-from ...orchestrator.run_service import execute_run, get_cashflow_preview, get_run_config, get_run_groups, get_run_scenarios, list_all_runs
+from ...orchestrator.run_service import (
+    execute_run,
+    get_cashflow_preview,
+    get_run_config,
+    get_run_input_assumptions,
+    get_run_input_mappings,
+    get_run_input_tape_preview,
+    get_run_groups,
+    get_run_scenarios,
+    list_all_runs,
+)
 from ...storage import run_store
 from ..models import (
     CashflowPreview,
@@ -20,6 +30,7 @@ def _run_in_background(
     run_id: str,
     req: RunRequest,
     mappings_data: dict,
+    mapping_id: str | None = None,
 ) -> None:
     from ..models import FieldMapping
 
@@ -43,6 +54,7 @@ def _run_in_background(
         run_mode=req.run_mode,
         include_period_zero=req.include_period_zero,
         scenarios=scenario_dicts,
+        mapping_id=mapping_id,
     )
 
 
@@ -63,7 +75,7 @@ async def create_run(req: RunRequest, background_tasks: BackgroundTasks):
         "run_mode": req.run_mode,
     })
 
-    background_tasks.add_task(_run_in_background, run_id, req, mappings_data)
+    background_tasks.add_task(_run_in_background, run_id, req, mappings_data, req.mapping_id)
 
     return RunResponse(
         run_id=run_id,
@@ -137,3 +149,18 @@ async def list_runs():
 @router.get("/runs/{run_id}/config")
 async def run_config(run_id: str):
     return get_run_config(run_id)
+
+
+@router.get("/runs/{run_id}/inputs/tape", response_model=CashflowPreview)
+async def run_input_tape(run_id: str, max_rows: int = 500):
+    return get_run_input_tape_preview(run_id, max_rows)
+
+
+@router.get("/runs/{run_id}/inputs/assumptions")
+async def run_input_assumptions(run_id: str):
+    return get_run_input_assumptions(run_id)
+
+
+@router.get("/runs/{run_id}/inputs/mappings")
+async def run_input_mappings(run_id: str):
+    return get_run_input_mappings(run_id)

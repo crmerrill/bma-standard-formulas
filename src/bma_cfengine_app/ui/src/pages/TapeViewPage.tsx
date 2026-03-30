@@ -1,53 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  BarChart3,
-  Hash,
-  DollarSign,
-  Percent,
-  Clock,
-  ChevronDown,
-  Table2,
-  Layers,
-  Filter,
-  X,
-  GripVertical,
-  AlertTriangle,
-  Check,
-  Wrench,
-  Eye,
-  Loader2,
+  BarChart3, Hash, DollarSign, Percent, Clock, ChevronDown, Table2,
+  Layers, Filter, X, GripVertical, AlertTriangle, Check, Wrench, Eye,
+  Loader2, Plus, Trash2, Download, FileSpreadsheet, PieChart, ListTree,
 } from "lucide-react";
 import type {
-  TapeStats,
-  TapePreview,
-  StratDimension,
-  StratResult,
-  DiagnoseResult,
-  RepairRule,
-  RepairPreview,
+  TapeStats, TapePreview, StratDimension, StratResult,
+  DiagnoseResult, RepairPreview, TapeSummaryResult, UniqueValuesResult,
 } from "../services/api";
 import * as api from "../services/api";
+import { MONO, fmtCcy, fmtNum, STRAT_COL_LABELS, formatStratCell } from "../lib/format";
+import DataTable, { type DataTableColumn } from "../components/DataTable";
+import TabBar from "../components/TabBar";
+import MetricCard from "../components/MetricCard";
+import SummaryRow from "../components/SummaryRow";
+import CollapsiblePanel from "../components/CollapsiblePanel";
+import LoadingState from "../components/LoadingState";
+import EmptyState from "../components/EmptyState";
+import MonoChip from "../components/MonoChip";
 
-const MONO = { fontFamily: "'JetBrains Mono', monospace" } as const;
-
-function fmtCcy(n: number): string {
-  if (Math.abs(n) >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
-  if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  if (Math.abs(n) >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
-  return `$${n.toFixed(2)}`;
-}
-
-function fmtNum(v: unknown, dec = 2): string {
-  if (v == null || v === "") return "—";
-  const n = Number(v);
-  if (!isFinite(n)) return "—";
-  return n.toLocaleString(undefined, {
-    minimumFractionDigits: dec,
-    maximumFractionDigits: dec,
-  });
-}
-
-type Tab = "grid" | "strats";
+type Tab = "grid" | "summary" | "strats";
 
 interface ColumnFilter {
   column: string;
@@ -69,9 +41,20 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
   const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
 
   const [dimensions, setDimensions] = useState<StratDimension[]>([]);
-  const [selectedDim, setSelectedDim] = useState("");
-  const [stratResult, setStratResult] = useState<StratResult | null>(null);
-  const [stratLoading, setStratLoading] = useState(false);
+  const [tapeSummary, setTapeSummary] = useState<TapeSummaryResult | null>(null);
+  const [uniqueValues, setUniqueValues] = useState<UniqueValuesResult | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+
+  interface StratGroup {
+    id: number;
+    dimension: string;
+    result: StratResult | null;
+    loading: boolean;
+  }
+  const [stratGroups, setStratGroups] = useState<StratGroup[]>([
+    { id: 0, dimension: "", result: null, loading: false },
+  ]);
+  const nextStratId = useRef(1);
 
   const [diagnosis, setDiagnosis] = useState<DiagnoseResult | null>(null);
   const [repairPreview, setRepairPreview] = useState<RepairPreview | null>(null);
@@ -243,19 +226,41 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
     setDragOverIdx(null);
   };
 
-  const handleRunStrat = async (dim: string) => {
-    setSelectedDim(dim);
-    if (!dim) {
-      setStratResult(null);
-      return;
-    }
-    setStratLoading(true);
+  useEffect(() => {
+    if (tab !== "summary" || tapeSummary || summaryLoading) return;
+    setSummaryLoading(true);
+    Promise.all([
+      api.getTapeSummary(uploadId, mappingId),
+      api.getUniqueValues(uploadId, mappingId),
+    ])
+      .then(([ts, uv]) => { setTapeSummary(ts); setUniqueValues(uv); })
+      .finally(() => setSummaryLoading(false));
+  }, [tab, uploadId, mappingId]);
+
+  const handleRunStrat = async (groupId: number, dim: string) => {
+    setStratGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, dimension: dim, result: null, loading: !!dim } : g))
+    );
+    if (!dim) return;
     try {
       const res = await api.computeStrat(uploadId, dim, mappingId);
-      setStratResult(res);
-    } finally {
-      setStratLoading(false);
+      setStratGroups((prev) =>
+        prev.map((g) => (g.id === groupId ? { ...g, result: res, loading: false } : g))
+      );
+    } catch {
+      setStratGroups((prev) =>
+        prev.map((g) => (g.id === groupId ? { ...g, loading: false } : g))
+      );
     }
+  };
+
+  const addStratGroup = () => {
+    const id = nextStratId.current++;
+    setStratGroups((prev) => [...prev, { id, dimension: "", result: null, loading: false }]);
+  };
+
+  const removeStratGroup = (groupId: number) => {
+    setStratGroups((prev) => prev.filter((g) => g.id !== groupId));
   };
 
   if (loading) {
@@ -273,16 +278,12 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
       {/* Stats cards */}
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-          <StatCard icon={Hash} label="Loans" value={stats.record_count.toLocaleString()} />
-          <StatCard icon={DollarSign} label="Total UPB" value={fmtCcy(stats.total_balance)} />
-          <StatCard icon={Percent} label="WAC" value={`${stats.wac.toFixed(2)}%`} />
-          <StatCard icon={Clock} label="WAM" value={`${stats.wam.toFixed(0)} mo`} />
-          <StatCard icon={Clock} label="WALA" value={`${stats.wala.toFixed(0)} mo`} />
-          <StatCard
-            icon={Percent}
-            label="Coupon Range"
-            value={`${stats.coupon_min.toFixed(2)}–${stats.coupon_max.toFixed(2)}%`}
-          />
+          <MetricCard icon={Hash} label="Loans" value={stats.record_count.toLocaleString()} />
+          <MetricCard icon={DollarSign} label="Total UPB" value={fmtCcy(stats.total_balance)} />
+          <MetricCard icon={Percent} label="WAC" value={`${stats.wac.toFixed(2)}%`} />
+          <MetricCard icon={Clock} label="WAM" value={`${stats.wam.toFixed(0)} mo`} />
+          <MetricCard icon={Clock} label="WALA" value={`${stats.wala.toFixed(0)} mo`} />
+          <MetricCard icon={Percent} label="Coupon Range" value={`${stats.coupon_min.toFixed(2)}–${stats.coupon_max.toFixed(2)}%`} />
         </div>
       )}
 
@@ -426,46 +427,18 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <div className="overflow-auto max-h-[250px]">
-                <table className="w-full border-collapse text-xs">
-                  <thead className="sticky top-0 z-10">
-                    <tr className="bg-grid-header text-muted-foreground border-b border-border">
-                      {repairPreview.columns.map((col) => (
-                        <th key={col} className="text-left px-3 py-1.5 whitespace-nowrap">
-                          {col.includes("(computed)") ? (
-                            <span className="text-engine-green">{col}</span>
-                          ) : col.includes("(current)") ? (
-                            <span className="text-engine-amber">{col}</span>
-                          ) : (
-                            col
-                          )}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {repairPreview.rows.map((row, ri) => (
-                      <tr
-                        key={ri}
-                        className={`border-b border-border/50 ${ri % 2 === 1 ? "bg-grid-row-alt" : ""}`}
-                      >
-                        {repairPreview.columns.map((col) => (
-                          <td
-                            key={col}
-                            className={`px-3 py-1 whitespace-nowrap ${
-                              col.includes("(computed)") ? "text-engine-green" :
-                              col.includes("(current)") ? "text-engine-amber" : ""
-                            }`}
-                            style={MONO}
-                          >
-                            {row[col] == null ? "—" : String(row[col])}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <DataTable
+                tableId="repair_preview"
+                maxHeight="250px"
+                columns={repairPreview.columns.map((col): DataTableColumn<Record<string, unknown>> => ({
+                  id: col,
+                  header: col.includes("(computed)") ? <span className="text-engine-green">{col}</span> : col.includes("(current)") ? <span className="text-engine-amber">{col}</span> : col,
+                  accessorKey: col,
+                  cell: (v) => v == null ? "—" : String(v),
+                  className: col.includes("(computed)") ? "text-engine-green" : col.includes("(current)") ? "text-engine-amber" : "",
+                }))}
+                data={repairPreview.rows}
+              />
             </div>
           )}
 
@@ -478,11 +451,15 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
         </div>
       )}
 
-      {/* Tab bar */}
-      <div className="flex items-center gap-1 border-b border-border">
-        <TabBtn icon={Table2} label="Data Grid" active={tab === "grid"} onClick={() => setTab("grid")} />
-        <TabBtn icon={Layers} label="Stratifications" active={tab === "strats"} onClick={() => setTab("strats")} />
-      </div>
+      <TabBar
+        tabs={[
+          { id: "grid", label: "Data Grid", icon: Table2 },
+          { id: "summary", label: "Summary", icon: PieChart },
+          { id: "strats", label: "Stratifications", icon: Layers },
+        ]}
+        active={tab}
+        onSelect={(id) => setTab(id as Tab)}
+      />
 
       {/* Data grid tab */}
       {tab === "grid" && preview && (
@@ -568,152 +545,256 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
           )}
 
           {/* Table */}
-          <div className="overflow-auto max-h-[500px]">
-            <table className="w-full border-collapse text-xs">
-              <thead className="sticky top-0 z-10">
-                <tr className="bg-grid-header text-muted-foreground border-b border-border">
-                  {preview.columns.map((col) => {
-                    const isFiltered = filters.some((f) => f.column === col);
-                    return (
-                      <th
-                        key={col}
-                        className="text-left px-3 py-1.5 whitespace-nowrap cursor-pointer hover:text-foreground transition-colors select-none"
-                        onClick={() => setOpenFilterCol(openFilterCol === col ? null : col)}
-                      >
-                        <span className="flex items-center gap-1">
-                          {col}
-                          <Filter
-                            className={`w-2.5 h-2.5 ${
-                              isFiltered ? "text-primary" : "opacity-0 group-hover:opacity-30"
-                            }`}
-                          />
-                          {openFilterCol === col && (
-                            <ChevronDown className="w-2.5 h-2.5 text-primary" />
-                          )}
-                        </span>
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRows.map((row, ri) => (
-                  <tr
-                    key={ri}
-                    className={`border-b border-border/50 hover:bg-grid-row-hover transition-colors ${
-                      ri % 2 === 1 ? "bg-grid-row-alt" : ""
-                    }`}
-                  >
-                    {preview.columns.map((col) => (
-                      <td key={col} className="px-3 py-1 whitespace-nowrap" style={MONO}>
-                        {String(row[col] ?? "")}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-                {filteredRows.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={preview.columns.length}
-                      className="px-3 py-8 text-center text-muted-foreground"
-                    >
-                      No rows match the current filters.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            tableId="tape_data_grid"
+            maxHeight="500px"
+            columns={preview.columns.map((col): DataTableColumn<Record<string, unknown>> => ({
+              id: col,
+              header: <span className="flex items-center gap-1">
+                {col}
+                <Filter className={`w-2.5 h-2.5 ${filters.some((f) => f.column === col) ? "text-primary" : "opacity-0 group-hover:opacity-30"}`} />
+                {openFilterCol === col && <ChevronDown className="w-2.5 h-2.5 text-primary" />}
+              </span>,
+              accessorKey: col,
+              cell: (v) => String(v ?? ""),
+            }))}
+            data={filteredRows}
+            onHeaderClick={(colId) => setOpenFilterCol(openFilterCol === colId ? null : colId)}
+            emptyMessage="No rows match the current filters."
+          />
         </div>
+      )}
+
+      {/* Summary tab */}
+      {tab === "summary" && (
+        summaryLoading ? (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm p-8">
+            <Loader2 className="w-4 h-4 animate-spin" /> Computing tape summary...
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {/* Aggregate tape stats */}
+            {stats && (
+              <CollapsiblePanel icon={PieChart} title="Tape Aggregates">
+                <div className="p-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-2 text-xs">
+                    <SummaryRow label="Record Count" value={stats.record_count.toLocaleString()} />
+                    <SummaryRow label="Total UPB" value={fmtCcy(stats.total_balance)} />
+                    <SummaryRow label="WAC" value={`${stats.wac.toFixed(4)}%`} />
+                    <SummaryRow label="WAM" value={`${stats.wam.toFixed(1)} months`} />
+                    <SummaryRow label="WALA" value={`${stats.wala.toFixed(1)} months`} />
+                    <SummaryRow label="Coupon Range" value={`${stats.coupon_min.toFixed(3)}% – ${stats.coupon_max.toFixed(3)}%`} />
+                    <SummaryRow label="Balance Range" value={`${fmtCcy(stats.balance_min)} – ${fmtCcy(stats.balance_max)}`} />
+                  </div>
+                </div>
+              </CollapsiblePanel>
+            )}
+
+            {/* Missing value analysis */}
+            {tapeSummary && (() => {
+              const withMissing = tapeSummary.rows.filter((r) => r.missing > 0).sort((a, b) => b.missing_pct - a.missing_pct);
+              const totalCells = tapeSummary.rows.reduce((s, r) => s + r.count + r.missing, 0);
+              const totalMissing = tapeSummary.rows.reduce((s, r) => s + r.missing, 0);
+              const overallPct = totalCells > 0 ? (totalMissing / totalCells * 100) : 0;
+              return (
+                <CollapsiblePanel
+                  icon={AlertTriangle}
+                  title="Missing Value Analysis"
+                  badge={withMissing.length > 0 ? `${withMissing.length} columns with missing data (${overallPct.toFixed(1)}% overall)` : "No missing values"}
+                >
+                  {withMissing.length > 0 ? (
+                    <DataTable
+                      tableId="missing_values"
+                      maxHeight="400px"
+                      columns={[
+                        { id: "column", header: "Column", accessorKey: "column" },
+                        { id: "dtype", header: "Type", accessorKey: "dtype", mono: false },
+                        { id: "total", header: "Total", accessorFn: (r: any) => (r.count + r.missing).toLocaleString(), align: "right" },
+                        { id: "missing", header: "Missing", accessorFn: (r: any) => r.missing.toLocaleString(), align: "right", cell: (v, r: any) => <span style={{ color: "var(--engine-amber)" }}>{r.missing.toLocaleString()}</span> },
+                        { id: "missing_pct", header: "Missing %", accessorKey: "missing_pct", align: "right", cell: (v, r: any) => <span style={{ color: r.missing_pct > 50 ? "var(--engine-red)" : "var(--engine-amber)" }}>{r.missing_pct.toFixed(1)}%</span> },
+                        { id: "coverage", header: "Coverage", accessorKey: "missing_pct", align: "left", size: 200, mono: false, cell: (_v, r: any) => (
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 bg-secondary rounded-full h-2 overflow-hidden">
+                              <div className="h-2 rounded-full" style={{ width: `${100 - r.missing_pct}%`, backgroundColor: r.missing_pct > 50 ? "var(--engine-red)" : r.missing_pct > 10 ? "var(--engine-amber)" : "var(--engine-green)" }} />
+                            </div>
+                            <span className="text-[10px] text-muted-foreground w-10 text-right shrink-0">{(100 - r.missing_pct).toFixed(0)}%</span>
+                          </div>
+                        )},
+                      ] as DataTableColumn<any>[]}
+                      data={withMissing}
+                    />
+                  ) : (
+                    <div className="flex items-center gap-2 text-engine-green text-xs p-4">
+                      <Check className="w-4 h-4" /> All columns are fully populated — no missing values detected.
+                    </div>
+                  )}
+                </CollapsiblePanel>
+              );
+            })()}
+
+            {/* Per-column descriptive statistics */}
+            {tapeSummary && (
+              <CollapsiblePanel icon={Table2} title="Column Statistics" badge={`${tapeSummary.row_count} columns`}>
+                <DataTable
+                  tableId="column_statistics"
+                  maxHeight="600px"
+                  columns={[
+                    { id: "column", header: "Column", accessorKey: "column", pinLeft: true, size: 160 },
+                    { id: "dtype", header: "Type", accessorKey: "dtype", mono: false, size: 80 },
+                    { id: "count", header: "Count", accessorKey: "count", align: "right", size: 70 },
+                    { id: "missing", header: "Missing", accessorKey: "missing", align: "right", size: 80, cell: (v, r: any) => <span style={{ color: r.missing > 0 ? "var(--engine-amber)" : undefined }}>{r.missing}</span> },
+                    { id: "missing_pct", header: "Missing %", accessorKey: "missing_pct", align: "right", size: 90, cell: (v, r: any) => r.missing_pct > 0 ? <span style={{ color: r.missing_pct > 5 ? "var(--engine-red)" : "var(--engine-amber)" }}>{r.missing_pct.toFixed(1)}%</span> : "—" },
+                    { id: "unique", header: "Unique", accessorKey: "unique", align: "right", size: 80 },
+                    { id: "mean", header: "Mean", accessorKey: "mean", align: "right", size: 90, cell: (v) => v != null ? fmtNum(v) : "—" },
+                    { id: "std", header: "Std", accessorKey: "std", align: "right", size: 90, cell: (v) => v != null ? fmtNum(v) : "—" },
+                    { id: "min", header: "Min", accessorKey: "min", align: "right", size: 90, cell: (v) => v != null ? fmtNum(v) : "—" },
+                    { id: "q25", header: "Q25", accessorKey: "q25", align: "right", size: 90, cell: (v) => v != null ? fmtNum(v) : "—" },
+                    { id: "median", header: "Median", accessorKey: "median", align: "right", size: 90, cell: (v) => v != null ? fmtNum(v) : "—" },
+                    { id: "q75", header: "Q75", accessorKey: "q75", align: "right", size: 90, cell: (v) => v != null ? fmtNum(v) : "—" },
+                    { id: "p95", header: "P95", accessorKey: "p95", align: "right", size: 90, cell: (v) => v != null ? fmtNum(v) : "—" },
+                    { id: "p99", header: "P99", accessorKey: "p99", align: "right", size: 90, cell: (v) => v != null ? fmtNum(v) : "—" },
+                    { id: "max", header: "Max", accessorKey: "max", align: "right", size: 90, cell: (v) => v != null ? fmtNum(v) : "—" },
+                    { id: "top_values", header: "Top Values", accessorKey: "top_values", size: 200, cell: (v: any) => v?.length > 0 ? v.slice(0, 5).map(String).join(", ") : "—" },
+                  ] as DataTableColumn<any>[]}
+                  data={tapeSummary.rows}
+                  getRowId={(r: any) => r.column}
+                />
+              </CollapsiblePanel>
+            )}
+
+            {/* Unique values analysis */}
+            {uniqueValues && (
+              <CollapsiblePanel icon={ListTree} title="Unique Values" badge={`${uniqueValues.row_count} columns`} defaultOpen={false}>
+                <DataTable
+                  tableId="unique_values"
+                  maxHeight="600px"
+                  columns={[
+                    { id: "column", header: "Column", accessorKey: "column", pinLeft: true, size: 160 },
+                    { id: "dtype", header: "Type", accessorKey: "dtype", mono: false, size: 80 },
+                    { id: "count", header: "Count", accessorKey: "count", align: "right", size: 70 },
+                    { id: "missing", header: "Missing", accessorKey: "missing", align: "right", size: 80, cell: (v, r: any) => <span style={{ color: r.missing > 0 ? "var(--engine-amber)" : undefined }}>{r.missing}</span> },
+                    { id: "missing_pct", header: "Missing %", accessorKey: "missing_pct", align: "right", size: 90, cell: (v, r: any) => r.missing_pct > 0 ? <span style={{ color: r.missing_pct > 5 ? "var(--engine-red)" : "var(--engine-amber)" }}>{r.missing_pct.toFixed(1)}%</span> : "—" },
+                    { id: "unique", header: "Unique", accessorKey: "unique", align: "right", size: 80 },
+                    { id: "top_values", header: "Top Values (by frequency)", accessorKey: "top_values", size: 400, mono: false, cell: (v: any) => v?.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {v.slice(0, 15).map((val: unknown, vi: number) => (
+                          <span key={vi} className="px-1.5 py-0.5 rounded bg-secondary text-[10px]" style={MONO}>{String(val)}</span>
+                        ))}
+                        {v.length > 15 && <span className="text-[10px] text-muted-foreground/60">+{v.length - 15} more</span>}
+                      </div>
+                    ) : <span className="text-muted-foreground/40 italic">too many unique values</span> },
+                  ] as DataTableColumn<any>[]}
+                  data={uniqueValues.rows}
+                  getRowId={(r: any) => r.column}
+                />
+              </CollapsiblePanel>
+            )}
+          </div>
+        )
       )}
 
       {/* Strats tab */}
       {tab === "strats" && (
         <div className="space-y-4">
-          <div className="bg-card border border-border rounded-lg p-4">
-            <h3 className="text-xs font-medium text-foreground flex items-center gap-2 mb-3">
-              <Layers className="w-3.5 h-3.5 text-primary" />
-              Stratification Dimension
-            </h3>
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="relative">
-                <select
-                  value={selectedDim}
-                  onChange={(e) => handleRunStrat(e.target.value)}
-                  className="appearance-none px-3 py-1.5 pr-8 bg-input-background border border-border rounded text-xs text-foreground min-w-[200px]"
+          <div className="flex items-center gap-2">
+            <button
+              onClick={addStratGroup}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-dashed border-border text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" /> Add Stratification
+            </button>
+            {stratGroups.some((g) => g.result) && (
+              <>
+                <button
+                  onClick={() => {
+                    const dims = stratGroups.filter((g) => g.dimension && g.result).map((g) => g.dimension);
+                    if (dims.length > 0) api.exportStrats(uploadId, dims, mappingId, "xlsx");
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
                 >
-                  <option value="">Select a column to stratify by...</option>
-                  {dimensions.map((d) => (
-                    <option key={d.column} value={d.column}>
-                      {d.column} ({d.type}, {d.unique} unique)
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-              </div>
-              {stratLoading && (
-                <span className="text-muted-foreground text-xs">Computing...</span>
-              )}
-            </div>
+                  <FileSpreadsheet className="w-3.5 h-3.5" /> Export Excel
+                </button>
+                <button
+                  onClick={() => {
+                    const dims = stratGroups.filter((g) => g.dimension && g.result).map((g) => g.dimension);
+                    if (dims.length > 0) api.exportStrats(uploadId, dims, mappingId, "csv");
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" /> Export CSV
+                </button>
+              </>
+            )}
           </div>
 
-          {stratResult && !stratLoading && (
-            <div className="border border-border rounded-lg overflow-hidden">
-              <div className="bg-grid-header px-3 py-2 flex items-center gap-2 text-xs">
-                <span className="text-primary" style={MONO}>{stratResult.group_by}</span>
-                <span className="text-muted-foreground">— {stratResult.row_count} buckets</span>
-              </div>
-              <div className="overflow-auto max-h-[500px]">
-                <table className="w-full border-collapse text-xs">
-                  <thead className="sticky top-0 z-10">
-                    <tr className="bg-grid-header text-muted-foreground border-b border-border">
-                      {stratResult.columns.map((col) => (
-                        <th
-                          key={col}
-                          className={`px-3 py-1.5 whitespace-nowrap ${col === "bucket" ? "text-left" : "text-right"}`}
-                        >
-                          {STRAT_COL_LABELS[col] ?? col}
-                        </th>
+          {stratGroups.map((sg, gi) => (
+            <div key={sg.id} className="space-y-2">
+              <div className="bg-card border border-border rounded-lg p-4">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Layers className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <div className="relative">
+                    <select
+                      value={sg.dimension}
+                      onChange={(e) => handleRunStrat(sg.id, e.target.value)}
+                      className="appearance-none px-3 py-1.5 pr-8 bg-input-background border border-border rounded text-xs text-foreground min-w-[240px]"
+                    >
+                      <option value="">Select a column to stratify by...</option>
+                      {dimensions.map((d) => (
+                        <option key={d.column} value={d.column}>
+                          {d.column} ({d.type}, {d.unique} unique)
+                        </option>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stratResult.rows.map((row, ri) => {
-                      const isTotal = row.bucket === "TOTAL";
-                      return (
-                        <tr
-                          key={ri}
-                          className={`border-b border-border/50 transition-colors ${
-                            isTotal
-                              ? "bg-primary/5 font-medium"
-                              : ri % 2 === 1
-                              ? "bg-grid-row-alt hover:bg-grid-row-hover"
-                              : "hover:bg-grid-row-hover"
-                          }`}
-                        >
-                          {stratResult.columns.map((col) => (
-                            <td
-                              key={col}
-                              className={`px-3 py-1.5 whitespace-nowrap ${col === "bucket" ? "text-left" : "text-right"}`}
-                              style={MONO}
-                            >
-                              {formatStratCell(col, row[col])}
-                            </td>
-                          ))}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                    </select>
+                    <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                  </div>
+                  {sg.loading && (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                  )}
+                  {stratGroups.length > 1 && (
+                    <button
+                      onClick={() => removeStratGroup(sg.id)}
+                      className="ml-auto text-muted-foreground hover:text-engine-red transition-colors p-1"
+                      title="Remove this stratification"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
 
-          {!stratResult && !stratLoading && (
-            <div className="text-muted-foreground text-sm p-8 text-center">
-              Select a dimension above to generate a stratification table.
+              {sg.result && !sg.loading && (
+                <CollapsiblePanel
+                  icon={Layers}
+                  title={sg.result.group_by}
+                  badge={`${sg.result.row_count} buckets`}
+                >
+                  <DataTable
+                    tableId={`strat_${sg.id}`}
+                    maxHeight="500px"
+                    columns={sg.result.columns.map((col): DataTableColumn<Record<string, unknown>> => ({
+                      id: col,
+                      header: STRAT_COL_LABELS[col] ?? col,
+                      accessorKey: col,
+                      align: col === "bucket" ? "left" : "right",
+                      cell: (v) => formatStratCell(col, v),
+                    }))}
+                    data={sg.result.rows}
+                    rowClassName={(row) => {
+                      const isTotal = (row as any).bucket === "TOTAL";
+                      return isTotal ? "bg-primary/5 font-medium border-b border-border/50" : "";
+                    }}
+                  />
+                </CollapsiblePanel>
+              )}
+
+              {!sg.dimension && !sg.loading && gi === stratGroups.length - 1 && stratGroups.length === 1 && (
+                <div className="text-muted-foreground text-sm p-8 text-center">
+                  Select a dimension above to generate a stratification table.
+                </div>
+              )}
             </div>
-          )}
+          ))}
+
         </div>
       )}
     </div>
@@ -843,91 +924,4 @@ function FilterDropdown({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Strat formatting
-// ---------------------------------------------------------------------------
-
-const STRAT_COL_LABELS: Record<string, string> = {
-  bucket: "Bucket",
-  count: "Count",
-  count_pct: "Count %",
-  orig_bal: "Orig Bal",
-  orig_bal_pct: "Orig Bal %",
-  curr_bal: "Curr Bal",
-  curr_bal_pct: "Curr Bal %",
-  factor: "Factor",
-  wa_rate: "WA Rate",
-  wa_orig_term: "WA Orig Term",
-  wa_rem_term: "WA Rem Term",
-  wala: "WALA",
-};
-
-function formatStratCell(col: string, value: unknown): string {
-  if (value == null || value === "") return "—";
-  if (col === "bucket") return String(value);
-  const n = Number(value);
-  if (!isFinite(n)) return String(value);
-  if (col === "count") return n.toLocaleString();
-  if (col.endsWith("_pct") || col === "factor") return `${n.toFixed(2)}%`;
-  if (col === "orig_bal" || col === "curr_bal") {
-    if (Math.abs(n) >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
-    if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-    if (Math.abs(n) >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
-    return `$${n.toFixed(0)}`;
-  }
-  if (col === "wa_rate") return `${n.toFixed(3)}%`;
-  if (col.startsWith("wa_") || col === "wala") return n.toFixed(1);
-  return fmtNum(n);
-}
-
-// ---------------------------------------------------------------------------
-// Shared components
-// ---------------------------------------------------------------------------
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: React.ElementType;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="bg-card border border-border rounded-lg p-3">
-      <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
-        <Icon className="w-3 h-3" />
-        <span className="text-[10px] uppercase tracking-wider">{label}</span>
-      </div>
-      <p className="text-sm font-medium text-foreground" style={MONO}>
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function TabBtn({
-  icon: Icon,
-  label,
-  active,
-  onClick,
-}: {
-  icon: React.ElementType;
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-1.5 px-3 py-2 text-xs border-b-2 transition-colors ${
-        active
-          ? "border-primary text-primary"
-          : "border-transparent text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      <Icon className="w-3.5 h-3.5" />
-      {label}
-    </button>
-  );
-}
+// Strat formatting and shared components now imported from lib/format and components/

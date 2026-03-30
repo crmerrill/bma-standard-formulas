@@ -8,8 +8,7 @@ import ResultsPage from "./pages/ResultsPage";
 import RunHistoryPage from "./pages/RunHistoryPage";
 import type { FieldMapping, RunResponse } from "./services/api";
 import * as api from "./services/api";
-
-const MONO = { fontFamily: "'JetBrains Mono', monospace" } as const;
+import { MONO } from "./lib/format";
 
 const PAGE_TITLES: Record<Page, string> = {
   intake: "Tape Intake",
@@ -118,7 +117,16 @@ export default function App() {
 
   const handleViewRun = useCallback(async (runId: string) => {
     try {
-      const r = await api.getRun(runId);
+      const [r, cfg] = await Promise.all([
+        api.getRun(runId),
+        api.getRunConfig(runId),
+      ]);
+      const rc = cfg.run_config;
+      if (rc.upload_id) setUploadId(rc.upload_id);
+      if (rc.mapping_id) setMappingId(rc.mapping_id);
+      if (rc.mappings) setMappings(rc.mappings);
+      if (rc.grouping?.keys) setGroupKeys(rc.grouping.keys);
+      if (rc.asof_date) setAsofDate(rc.asof_date);
       setRun(r);
       setPage("results");
     } catch {
@@ -131,6 +139,7 @@ export default function App() {
       const cfg = await api.getRunConfig(runId);
       const rc = cfg.run_config;
       if (rc.upload_id) setUploadId(rc.upload_id);
+      if (rc.mapping_id) setMappingId(rc.mapping_id);
       if (rc.mappings) setMappings(rc.mappings);
       if (rc.grouping?.keys) setGroupKeys(rc.grouping.keys);
       else setGroupKeys([]);

@@ -3,12 +3,13 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, File, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ...orchestrator.mapping import apply_mapping, auto_infer_mappings, profile_dataframe
 from ...orchestrator.rates import rates_preflight, save_rates_file
 from ...orchestrator.run_service import compute_tape_stats
-from ...orchestrator.strats import available_strat_dimensions, compute_strat
+from ...orchestrator.strats import available_strat_dimensions, compute_strat, summarize_tape, summarize_unique_values
 from ...orchestrator.tape_repair import (
     apply_repair,
     available_repairs,
@@ -86,6 +87,40 @@ async def tape_preview(
     }
 
 
+@router.get("/uploads/{upload_id}/tape-summary")
+async def tape_summary(upload_id: str, mapping_id: Optional[str] = Query(None)):
+    import math
+    df, _ = _load_mapped_df(upload_id, mapping_id)
+    summary_df = summarize_tape(df)
+    rows = summary_df.to_dict("records")
+    for row in rows:
+        for k, v in row.items():
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                row[k] = None
+    return {
+        "columns": list(summary_df.columns),
+        "rows": rows,
+        "row_count": len(rows),
+    }
+
+
+@router.get("/uploads/{upload_id}/unique-values")
+async def unique_values(upload_id: str, mapping_id: Optional[str] = Query(None)):
+    import math
+    df, _ = _load_mapped_df(upload_id, mapping_id)
+    uv_df = summarize_unique_values(df)
+    rows = uv_df.to_dict("records")
+    for row in rows:
+        for k, v in row.items():
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                row[k] = None
+    return {
+        "columns": list(uv_df.columns),
+        "rows": rows,
+        "row_count": len(rows),
+    }
+
+
 @router.get("/uploads/{upload_id}/strat-dimensions")
 async def strat_dimensions(upload_id: str, mapping_id: Optional[str] = Query(None)):
     df, _ = _load_mapped_df(upload_id, mapping_id)
@@ -108,6 +143,52 @@ async def compute_strats(upload_id: str, req: StratRequest):
         "rows": result.to_dict("records"),
         "row_count": len(result),
     }
+
+
+class ExportStratsRequest(BaseModel):
+    dimensions: list[str]
+    mapping_id: str | None = None
+    max_buckets: int = 10
+    format: str = "xlsx"
+
+
+@router.post("/uploads/{upload_id}/strats-export")
+async def export_strats(upload_id: str, req: ExportStratsRequest):
+    import io
+    df, _ = _load_mapped_df(upload_id, req.mapping_id)
+    tables = {dim: compute_strat(df, dim, max_buckets=req.max_buckets) for dim in req.dimensions}
+
+    if req.format == "csv":
+        buf = io.StringIO()
+        for dim, tbl in tables.items():
+            buf.write(f"# Stratification: {dim}\n")
+            tbl.to_csv(buf, index=False)
+            buf.write("\n")
+        return StreamingResponse(
+            io.BytesIO(buf.getvalue().encode()),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=strats_{upload_id[:12]}.csv"},
+        )
+
+    buf = io.BytesIO()
+    with __import__("openpyxl").Workbook() as _:
+        pass
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for dim, tbl in tables.items():
+        safe_name = dim[:31].replace("/", "_").replace("\\", "_")
+        ws = wb.create_sheet(title=safe_name)
+        ws.append(list(tbl.columns))
+        for _, row in tbl.iterrows():
+            ws.append([v for v in row])
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=strats_{upload_id[:12]}.xlsx"},
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -16,8 +16,7 @@ import type {
   MappingValidation,
 } from "../services/api";
 import * as api from "../services/api";
-
-const MONO = { fontFamily: "'JetBrains Mono', monospace" } as const;
+import { MONO } from "../lib/format";
 
 const REQUIRED_FIELDS = [
   "loan_id", "origination_date", "asof_date", "original_balance",
