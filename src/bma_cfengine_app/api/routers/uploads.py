@@ -10,6 +10,12 @@ from ...orchestrator.mapping import apply_mapping, auto_infer_mappings, profile_
 from ...orchestrator.rates import rates_preflight, save_rates_file
 from ...orchestrator.run_service import compute_tape_stats
 from ...orchestrator.strats import available_strat_dimensions, compute_strat, summarize_tape, summarize_unique_values
+from ...orchestrator.dq_normalizer import (
+    DqMapping,
+    detect_dq_pattern,
+    materialize_dq_columns,
+    suggest_dq_mapping,
+)
 from ...orchestrator.tape_repair import (
     apply_repair,
     available_repairs,
@@ -250,6 +256,49 @@ async def upload_status(upload_id: str):
     return {
         "upload_id": upload_id,
         "has_working_copy": run_store.has_working_copy(upload_id),
+    }
+
+
+# ---------------------------------------------------------------------------
+# DQ normalization
+# ---------------------------------------------------------------------------
+
+
+@router.get("/uploads/{upload_id}/dq-detect")
+async def dq_detect(upload_id: str, mapping_id: Optional[str] = Query(None)):
+    """Auto-detect the DQ pattern in the tape and return a mapping suggestion."""
+    df, _ = _load_mapped_df(upload_id, mapping_id)
+    mapping = suggest_dq_mapping(df)
+    return mapping.model_dump()
+
+
+class DqApplyRequest(BaseModel):
+    mapping_id: str | None = None
+    dq_mapping: DqMapping
+
+
+@router.post("/uploads/{upload_id}/dq-apply")
+async def dq_apply(upload_id: str, req: DqApplyRequest):
+    """Apply a DQ mapping to the tape, materializing canonical DQ columns."""
+    df, _ = _load_mapped_df(upload_id, req.mapping_id)
+    enriched = materialize_dq_columns(df, req.dq_mapping)
+    run_store.save_working_copy(upload_id, enriched)
+
+    # Persist the DQ mapping alongside the column mapping
+    dq_path = run_store.upload_dir(upload_id) / "dq_mapping.json"
+    dq_path.write_text(req.dq_mapping.model_dump_json(indent=2))
+
+    canonical_cols = ["dlq_status", "days_past_due", "is_fc", "is_reo"]
+    found = [c for c in canonical_cols if c in enriched.columns]
+
+    return {
+        "upload_id": upload_id,
+        "pattern": req.dq_mapping.pattern,
+        "columns_added": found,
+        "row_count": len(enriched),
+        "has_working_copy": True,
+        "message": f"DQ normalization applied ({req.dq_mapping.pattern}): "
+                   f"{len(found)} canonical column(s) added.",
     }
 
 
