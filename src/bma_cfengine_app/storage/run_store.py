@@ -190,6 +190,7 @@ def save_run_inputs(
     grouping: dict[str, Any] | None = None,
     run_mode: str = "actual",
     scenarios: list[dict[str, Any]] | None = None,
+    dq_mapping: dict[str, Any] | None = None,
 ) -> None:
     """Persist all run inputs in a structured inputs/ subdirectory."""
     d = _inputs_dir(run_id)
@@ -213,6 +214,9 @@ def save_run_inputs(
         "scenarios": scenarios,
     }
     (d / "assumptions.json").write_text(json.dumps(assumptions_doc, indent=2, default=str))
+
+    if dq_mapping is not None:
+        (d / "dq_mapping.json").write_text(json.dumps(dq_mapping, indent=2, default=str))
 
 
 def load_run_input(run_id: str, name: str) -> pd.DataFrame:
