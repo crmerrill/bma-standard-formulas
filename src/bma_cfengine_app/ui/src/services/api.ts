@@ -370,6 +370,56 @@ export function getUploadStatus(
   return request(`/uploads/${uploadId}/status`);
 }
 
+// ---------- DQ Normalization ----------
+
+export interface DqMapping {
+  pattern: "status_code" | "days_past_due" | "pay_through" | "boolean_flags" | "balance_buckets" | "none";
+  status_col?: string | null;
+  dpd_col?: string | null;
+  pay_thru_col?: string | null;
+  asof_col?: string | null;
+  fc_col?: string | null;
+  fc_values?: unknown[] | null;
+  reo_col?: string | null;
+  reo_values?: unknown[] | null;
+  status_code_map?: Record<string, string> | null;
+  balance_bucket_cols?: Record<string, string> | null;
+  confidence: number;
+  notes: string;
+}
+
+export interface DqApplyResult {
+  upload_id: string;
+  pattern: string;
+  columns_added: string[];
+  row_count: number;
+  has_working_copy: boolean;
+  message: string;
+}
+
+export function detectDq(
+  uploadId: string,
+  mappingId?: string
+): Promise<DqMapping> {
+  const q = mappingId ? `?mapping_id=${mappingId}` : "";
+  return request(`/uploads/${uploadId}/dq-detect${q}`);
+}
+
+export function applyDq(
+  uploadId: string,
+  dqMapping: DqMapping,
+  mappingId?: string
+): Promise<DqApplyResult> {
+  return request(`/uploads/${uploadId}/dq-apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mapping_id: mappingId || null,
+      dq_mapping: dqMapping,
+    }),
+  });
+}
+
 // ---------- Run Preflight (tape readiness) ----------
 
 export interface RunPreflightResult {

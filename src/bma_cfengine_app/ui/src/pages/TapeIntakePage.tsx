@@ -8,12 +8,14 @@ import {
   ArrowRight,
   Link2,
   Unlink2,
+  Activity,
 } from "lucide-react";
 import type {
   UploadResponse,
   TapeProfile,
   FieldMapping,
   MappingValidation,
+  DqMapping,
 } from "../services/api";
 import * as api from "../services/api";
 import { MONO } from "../lib/format";
@@ -63,6 +65,10 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
   const [validation, setValidation] = useState<MappingValidation | null>(null);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [mappingId, setMappingId] = useState<string | null>(null);
+  const [dqMapping, setDqMapping] = useState<DqMapping | null>(null);
+  const [dqLoading, setDqLoading] = useState(false);
+  const [dqApplied, setDqApplied] = useState(false);
 
   const onDrop = useCallback(async (files: File[]) => {
     if (!files.length) return;
@@ -105,18 +111,44 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
         return [...prev, ...novel];
       });
     }
-  };
 
-  const handleSaveAndContinue = async () => {
-    if (!upload || !validation?.valid) return;
-    setSaving(true);
-    try {
-      const { mapping_id } = await api.saveMapping({
+    if (res.valid) {
+      const { mapping_id: mid } = await api.saveMapping({
         upload_id: upload.upload_id,
         mappings,
         asof_date: asofDate || null,
       });
-      onComplete(upload.upload_id, mapping_id, mappings);
+      setMappingId(mid);
+
+      setDqLoading(true);
+      try {
+        const dq = await api.detectDq(upload.upload_id, mid);
+        setDqMapping(dq);
+      } finally {
+        setDqLoading(false);
+      }
+    }
+  };
+
+  const handleApplyDq = async () => {
+    if (!upload || !mappingId || !dqMapping) return;
+    setSaving(true);
+    try {
+      await api.applyDq(upload.upload_id, dqMapping, mappingId);
+      setDqApplied(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleContinue = async () => {
+    if (!upload || !mappingId || !validation?.valid) return;
+    setSaving(true);
+    try {
+      if (dqMapping && dqMapping.pattern !== "none" && !dqApplied) {
+        await api.applyDq(upload.upload_id, dqMapping, mappingId);
+      }
+      onComplete(upload.upload_id, mappingId, mappings);
     } finally {
       setSaving(false);
     }
@@ -247,6 +279,22 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
             </div>
           )}
 
+          {/* DQ Mapping Panel */}
+          {validation?.valid && dqMapping && (
+            <DqMappingPanel
+              mapping={dqMapping}
+              onChange={setDqMapping}
+              onApply={handleApplyDq}
+              applied={dqApplied}
+              loading={dqLoading}
+            />
+          )}
+          {validation?.valid && dqLoading && (
+            <div className="mt-3 p-3 rounded border border-border text-xs text-muted-foreground animate-pulse">
+              Detecting delinquency patterns...
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex items-center gap-2 mt-4">
             <button
@@ -256,8 +304,8 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
               Validate Mapping
             </button>
             <button
-              onClick={handleSaveAndContinue}
-              disabled={!validation?.valid || saving}
+              onClick={handleContinue}
+              disabled={!validation?.valid || saving || !mappingId}
               className="px-3 py-1.5 rounded bg-primary/10 border border-primary/20 text-primary text-xs hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
             >
               {saving ? "Saving..." : "Continue"}
@@ -319,5 +367,120 @@ function MappingRow({
         )}
       </td>
     </tr>
+  );
+}
+
+const PATTERN_LABELS: Record<string, string> = {
+  status_code: "Integer Status Codes",
+  days_past_due: "Days Past Due",
+  pay_through: "Pay-Through Date",
+  boolean_flags: "Boolean FC/REO Flags",
+  balance_buckets: "Pre-Bucketed Balances",
+  none: "None Detected",
+};
+
+function DqMappingPanel({
+  mapping,
+  onChange,
+  onApply,
+  applied,
+  loading,
+}: {
+  mapping: DqMapping;
+  onChange: (m: DqMapping) => void;
+  onApply: () => void;
+  applied: boolean;
+  loading: boolean;
+}) {
+  if (loading) return null;
+
+  const patternLabel = PATTERN_LABELS[mapping.pattern] ?? mapping.pattern;
+  const isNone = mapping.pattern === "none";
+
+  return (
+    <div className="mt-3 border border-border rounded-lg overflow-clip">
+      <div className="bg-grid-header px-3 py-2 flex items-center gap-2">
+        <Activity className="w-3.5 h-3.5 text-primary" />
+        <span className="text-xs font-medium">Delinquency Mapping</span>
+        {applied && (
+          <span className="ml-auto text-[10px] text-engine-green flex items-center gap-1">
+            <Check className="w-3 h-3" /> Applied
+          </span>
+        )}
+        {!applied && !isNone && (
+          <span className="ml-auto text-[10px] text-muted-foreground">
+            {Math.round(mapping.confidence * 100)}% confidence
+          </span>
+        )}
+      </div>
+      <div className="p-3 space-y-2 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground">Pattern:</span>
+          <span className={`font-medium ${isNone ? "text-muted-foreground" : "text-foreground"}`}>
+            {patternLabel}
+          </span>
+        </div>
+
+        {mapping.notes && (
+          <p className="text-muted-foreground">{mapping.notes}</p>
+        )}
+
+        {mapping.status_col && (
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">Status column:</span>
+            <span className="font-mono text-foreground">{mapping.status_col}</span>
+          </div>
+        )}
+
+        {mapping.dpd_col && (
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">DPD column:</span>
+            <span className="font-mono text-foreground">{mapping.dpd_col}</span>
+          </div>
+        )}
+
+        {mapping.pay_thru_col && (
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">Pay-through column:</span>
+            <span className="font-mono text-foreground">{mapping.pay_thru_col}</span>
+          </div>
+        )}
+
+        {mapping.fc_col && (
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">FC source:</span>
+            <span className="font-mono text-foreground">
+              {mapping.fc_col}
+              {mapping.fc_values ? ` [${mapping.fc_values.join(", ")}]` : ""}
+            </span>
+          </div>
+        )}
+
+        {mapping.reo_col && (
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">REO source:</span>
+            <span className="font-mono text-foreground">
+              {mapping.reo_col}
+              {mapping.reo_values ? ` [${mapping.reo_values.join(", ")}]` : ""}
+            </span>
+          </div>
+        )}
+
+        {isNone && (
+          <p className="text-muted-foreground italic">
+            No delinquency data detected in this tape. DQ columns will not be added.
+          </p>
+        )}
+
+        {!isNone && !applied && (
+          <button
+            onClick={onApply}
+            className="mt-1 px-3 py-1.5 rounded border border-primary/20 bg-primary/10 text-primary text-xs hover:bg-primary/20 transition-colors"
+          >
+            Apply DQ Mapping
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
