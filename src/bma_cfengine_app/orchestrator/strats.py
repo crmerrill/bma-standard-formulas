@@ -386,7 +386,7 @@ def _add_dq_columns(
 
 def compute_strat(
     df: pd.DataFrame,
-    group_by: str,
+    group_by: str | list[str],
     *,
     orig_bal_col: str = "original_balance",
     curr_bal_col: str = "current_balance",
@@ -394,6 +394,7 @@ def compute_strat(
     orig_term_col: str = "original_term",
     rem_term_col: str = "remaining_term",
     max_buckets: int = 10,
+    filter_: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """Compute a stratification table with DQ enrichment.
 
@@ -401,15 +402,23 @@ def compute_strat(
     app-level bucket function (with categorical label presets) and DQ row
     callbacks for delinquency distribution columns.
 
+    Supports both single-column strats and multi-column cross-tabulation
+    (pass a list of column names).  An optional *filter_* dict enables
+    drill-down strats by pre-filtering the data to a specific bucket before
+    re-stratifying.
+
     Args:
         df:             Loan-level DataFrame.
-        group_by:       Column name to stratify by.
+        group_by:       Column name or list of column names to stratify by.
         orig_bal_col:   Column containing original UPB.
         curr_bal_col:   Column containing current UPB.
         rate_col:       Column containing coupon/rate (for WAC computation).
         orig_term_col:  Column containing original loan term in months.
         rem_term_col:   Column containing remaining term in months.
         max_buckets:    Maximum bins for numeric columns.
+        filter_:        Optional filter dict for drill-down strats.  Maps
+                        bucket column names to bucket values (e.g.
+                        ``{"borrower_fico_bucket": "(720, 740]"}``).
 
     Returns:
         DataFrame with strat metrics plus DQ distribution columns (if DQ
@@ -442,4 +451,5 @@ def compute_strat(
         bucket_fn=add_bucket_column,
         row_callback=row_cb,
         totals_callback=totals_cb,
+        filter_=filter_,
     )

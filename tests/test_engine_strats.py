@@ -274,6 +274,60 @@ class TestComputeStrat(unittest.TestCase):
         expected_wala = total["wa_orig_term"] - total["wa_rem_term"]
         self.assertAlmostEqual(total["wala"], expected_wala, places=1)
 
+    # --- Multi-column cross-tabulation ---
+
+    def test_cross_tab_two_columns(self):
+        """group_by as list produces composite bucket labels."""
+        result = compute_strat(self.df, ["prop_state", "original_term"])
+        non_total = result[result["bucket"] != "TOTAL"]
+        for label in non_total["bucket"]:
+            self.assertIn(" | ", label)
+
+    def test_cross_tab_count_consistency(self):
+        """Total count in cross-tab matches DataFrame row count."""
+        result = compute_strat(self.df, ["prop_state", "original_term"])
+        total = result[result["bucket"] == "TOTAL"].iloc[0]
+        non_total = result[result["bucket"] != "TOTAL"]
+        self.assertEqual(int(total["count"]), 100)
+        self.assertEqual(int(non_total["count"].sum()), 100)
+
+    def test_cross_tab_with_callbacks(self):
+        """row_callback fires for each composite group."""
+        keys: list[str] = []
+
+        def row_cb(row: dict, sub: pd.DataFrame, cbc: str) -> None:
+            keys.append(row["bucket"])
+
+        result = compute_strat(
+            self.df, ["prop_state", "original_term"], row_callback=row_cb,
+        )
+        non_total = result[result["bucket"] != "TOTAL"]
+        self.assertEqual(len(keys), len(non_total))
+
+    # --- Drill-down filter ---
+
+    def test_filter_reduces_rows(self):
+        """filter_ restricts the strat to matching rows only."""
+        work = self.df.copy()
+        work["prop_state_bucket"] = work["prop_state"]
+        result = compute_strat(
+            work, "original_term",
+            filter_={"prop_state_bucket": "CA"},
+        )
+        total = result[result["bucket"] == "TOTAL"].iloc[0]
+        expected = len(work[work["prop_state_bucket"] == "CA"])
+        self.assertEqual(int(total["count"]), expected)
+
+    def test_filter_no_match_returns_empty_total(self):
+        """filter_ with no matching rows returns a TOTAL-only result."""
+        result = compute_strat(
+            self.df, "borrower_fico",
+            filter_={"prop_state": "ZZ"},
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result.iloc[0]["bucket"], "TOTAL")
+        self.assertEqual(int(result.iloc[0]["count"]), 0)
+
 
 # =============================================================================
 # available_strat_dimensions

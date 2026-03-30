@@ -248,7 +248,7 @@ def _weighted_avg(values: pd.Series, weights: pd.Series) -> float:
 
 def compute_strat(
     df: pd.DataFrame,
-    group_by: str,
+    group_by: str | list[str],
     *,
     orig_bal_col: str = "original_balance",
     curr_bal_col: str = "current_balance",
@@ -259,24 +259,33 @@ def compute_strat(
     bucket_fn: Callable[[pd.DataFrame, str, int], pd.Series] | None = None,
     row_callback: Callable[[dict[str, Any], pd.DataFrame, str], None] | None = None,
     totals_callback: Callable[[dict[str, Any], pd.DataFrame, str], None] | None = None,
+    filter_: dict[str, str] | None = None,
 ) -> pd.DataFrame:
-    """Compute a stratification table grouped by one column.
+    """Compute a stratification table grouped by one or more columns.
 
-    Produces a DataFrame with one row per bucket/category, showing loan counts,
-    original and current balance totals and percentages, pool factor, and
-    balance-weighted average rate, original term, remaining term, and WALA
-    (weighted-average loan age).  A ``TOTAL`` row is appended as the last row.
+    Produces a DataFrame with one row per bucket (or bucket combination for
+    multi-column cross-tabulation), showing loan counts, balance totals and
+    percentages, pool factor, and balance-weighted averages.  A ``TOTAL`` row
+    is always appended as the last row.
+
+    **Single-column mode** (``group_by`` is a string):
+        One row per bucket of the named column.
+
+    **Cross-tabulation mode** (``group_by`` is a list of strings):
+        Each column is bucketed independently.  The strat table has one row
+        per unique combination of buckets, with the ``bucket`` column showing
+        a pipe-delimited composite label (e.g. ``"(620, 640] | CA"``).
 
     Args:
         df:             Loan-level DataFrame.
-        group_by:       Column name to stratify by.
+        group_by:       Column name or list of column names to stratify by.
         orig_bal_col:   Column containing original UPB.
         curr_bal_col:   Column containing current UPB.
         rate_col:       Column containing coupon/rate (for WAC computation).
         orig_term_col:  Column containing original loan term in months.
         rem_term_col:   Column containing remaining term in months.
-        max_buckets:    Maximum bins for numeric columns (ignored for
-                        categorical).
+        max_buckets:    Maximum bins per numeric column (ignored for
+                        categorical columns).
         bucket_fn:      Custom bucketing function with signature
                         ``(df, column, max_buckets) -> pd.Series``.  Defaults
                         to ``add_bucket_column``.  Pass an app-layer function
@@ -288,6 +297,10 @@ def compute_strat(
                         (e.g. DQ distribution).
         totals_callback: Same as *row_callback* but invoked for the TOTAL row
                         with the full DataFrame.
+        filter_:        Optional filter dict mapping bucket column names to
+                        bucket values.  Only loans matching all filters are
+                        included.  Useful for drill-down strats (e.g. strat
+                        by state within a specific FICO bucket).
 
     Returns:
         DataFrame with columns: ``bucket``, ``count``, ``count_pct``,
@@ -297,22 +310,46 @@ def compute_strat(
 
     Examples::
 
+        # Single-column strat
         strat = compute_strat(df, "borrower_fico")
-        print(strat[["bucket", "count", "curr_bal_pct", "wa_rate"]])
+
+        # Cross-tabulation: FICO × State
+        strat = compute_strat(df, ["borrower_fico", "prop_state"])
+
+        # Drill-down: State strat within a specific FICO bucket
+        strat = compute_strat(
+            df, "prop_state",
+            filter_={"borrower_fico_bucket": "(720, 740]"},
+        )
     """
     if bucket_fn is None:
         bucket_fn = add_bucket_column
 
     work = df.copy()
 
-    # --- Bucketing ---
-    is_numeric = pd.api.types.is_numeric_dtype(work[group_by])
-    if is_numeric:
-        bucket_col = f"{group_by}_bucket"
-        work[bucket_col] = bucket_fn(work, group_by, max_buckets)
-        grp = bucket_col
-    else:
-        grp = group_by
+    # --- Apply pre-filter (drill-down) ---
+    if filter_:
+        for col, val in filter_.items():
+            if col in work.columns:
+                work = work[work[col].astype(str) == str(val)]
+        if work.empty:
+            return _empty_strat_result()
+
+    # --- Normalize group_by to list ---
+    group_cols = [group_by] if isinstance(group_by, str) else list(group_by)
+
+    # --- Bucket each grouping column independently ---
+    grp_keys: list[str] = []
+    for col in group_cols:
+        if pd.api.types.is_numeric_dtype(work[col]):
+            bucket_col = f"{col}_bucket"
+            work[bucket_col] = bucket_fn(work, col, max_buckets)
+            grp_keys.append(bucket_col)
+        else:
+            grp_keys.append(col)
+
+    # --- Determine single-key vs composite groupby ---
+    grp = grp_keys[0] if len(grp_keys) == 1 else grp_keys
 
     total_count = len(work)
     has_orig = orig_bal_col in work.columns
@@ -347,8 +384,14 @@ def compute_strat(
         )
         wala = wa_orig_term - wa_rem_term if (wa_orig_term > 0 and wa_rem_term > 0) else 0.0
 
+        # Multi-column: composite label.  Single-column: plain string.
+        if isinstance(key, tuple):
+            bucket_label = " | ".join(str(k) for k in key)
+        else:
+            bucket_label = str(key)
+
         row: dict[str, Any] = {
-            "bucket": str(key),
+            "bucket": bucket_label,
             "count": n,
             "count_pct": round(n / total_count * 100, 2) if total_count else 0.0,
             "orig_bal": round(orig, 2),
@@ -403,6 +446,17 @@ def compute_strat(
 
     result = pd.concat([result, pd.DataFrame([totals])], ignore_index=True)
     return result
+
+
+def _empty_strat_result() -> pd.DataFrame:
+    """Return a minimal strat DataFrame for empty filter results."""
+    return pd.DataFrame([{
+        "bucket": "TOTAL", "count": 0, "count_pct": 100.0,
+        "orig_bal": 0.0, "orig_bal_pct": 100.0,
+        "curr_bal": 0.0, "curr_bal_pct": 100.0,
+        "factor": 0.0, "wa_rate": 0.0,
+        "wa_orig_term": 0.0, "wa_rem_term": 0.0, "wala": 0.0,
+    }])
 
 
 # =============================================================================

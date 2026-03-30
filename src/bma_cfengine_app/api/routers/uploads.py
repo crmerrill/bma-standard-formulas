@@ -128,15 +128,20 @@ async def strat_dimensions(upload_id: str, mapping_id: Optional[str] = Query(Non
 
 
 class StratRequest(BaseModel):
-    group_by: str
+    group_by: str | list[str]
     mapping_id: str | None = None
     max_buckets: int = 10
+    filter: dict[str, str] | None = None
 
 
 @router.post("/uploads/{upload_id}/strats")
 async def compute_strats(upload_id: str, req: StratRequest):
     df, _ = _load_mapped_df(upload_id, req.mapping_id)
-    result = compute_strat(df, req.group_by, max_buckets=req.max_buckets)
+    result = compute_strat(
+        df, req.group_by,
+        max_buckets=req.max_buckets,
+        filter_=req.filter,
+    )
     return {
         "group_by": req.group_by,
         "columns": list(result.columns),
