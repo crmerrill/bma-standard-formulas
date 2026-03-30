@@ -227,7 +227,7 @@ export interface StratDimension {
 }
 
 export interface StratResult {
-  group_by: string;
+  group_by: string | string[];
   columns: string[];
   rows: Record<string, unknown>[];
   row_count: number;
@@ -243,9 +243,10 @@ export function getStratDimensions(
 
 export function computeStrat(
   uploadId: string,
-  groupBy: string,
+  groupBy: string | string[],
   mappingId?: string,
-  maxBuckets = 10
+  maxBuckets = 10,
+  filter?: Record<string, string>
 ): Promise<StratResult> {
   return request(`/uploads/${uploadId}/strats`, {
     method: "POST",
@@ -254,6 +255,7 @@ export function computeStrat(
       group_by: groupBy,
       mapping_id: mappingId || null,
       max_buckets: maxBuckets,
+      filter: filter || null,
     }),
   });
 }
