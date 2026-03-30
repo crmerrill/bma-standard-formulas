@@ -118,6 +118,14 @@ class Loan:
     rate_cap: float | None = None        # life cap: absolute max coupon (%)
     rate_floor: float | None = None      # life floor: absolute min coupon (%)
 
+    # ── Delinquency / performance status ──────────────────────────────────
+    # Optional with safe defaults — existing callers are not affected.
+    # Populated by the DQ normalizer during tape ingest; used by the strat
+    # engine for DQ distribution and by assumption resolvers for DQ-conditional
+    # curves (future).
+    days_past_due: int = 0              # 0, 30, 60, 90, 120, 150, 180+
+    loan_status: str = "current"        # "current", "30_dpd", "60_dpd", ..., "fc", "reo"
+
     def __post_init__(self) -> None:
         """Validate loan data per BMA requirements.
 
@@ -185,6 +193,21 @@ class Loan:
     def is_fixed_rate(self) -> bool:
         """True if the loan has a fixed coupon (no floating index)."""
         return self.reset_frequency == 0
+
+    @property
+    def is_delinquent(self) -> bool:
+        """True if the loan has any days past due."""
+        return self.days_past_due > 0
+
+    @property
+    def is_fc(self) -> bool:
+        """True if the loan is in foreclosure."""
+        return self.loan_status == "fc"
+
+    @property
+    def is_reo(self) -> bool:
+        """True if the loan is REO (real-estate owned / liquidated)."""
+        return self.loan_status == "reo"
 
     # ── Coupon vector construction ─────────────────────────────────────
 

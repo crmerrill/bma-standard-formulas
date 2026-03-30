@@ -299,6 +299,14 @@ class TapeSchema:
         "servicer_advancing":   "pi_advanced",
         "advance":              "pi_advanced",
         "advancing_months":     "advance_months",
+        # ── days_past_due ─────────────────────────────────────────────────────
+        "dpd":                      "days_past_due",
+        "days_delinquent":          "days_past_due",
+        "months_delinquent":        "days_past_due",
+        "dqstatus":                 "days_past_due",
+        # ── loan_status ───────────────────────────────────────────────────────
+        "performance_status":       "loan_status",
+        "dlq_status":               "loan_status",
     }
 
     # ------------------------------------------------------------------
@@ -338,6 +346,9 @@ class TapeSchema:
         FieldSpec("periodic_floor",       "float"),
         FieldSpec("rate_cap",             "float"),
         FieldSpec("rate_floor",           "float"),
+        # ── Delinquency / performance status ──────────────────────────────
+        FieldSpec("days_past_due",        "int",   default=0),
+        FieldSpec("loan_status",          "str",   default="current"),
     )
 
     # ------------------------------------------------------------------

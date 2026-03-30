@@ -208,6 +208,40 @@ class TestLoanComputedProperties(unittest.TestCase):
         loan = _loan(servicing_fee=0.0)
         self.assertEqual(loan.servicing_fee_decimal(), 0.0)
 
+    # ── Delinquency properties ───────────────────────────────────────
+
+    def test_days_past_due_defaults_to_zero(self):
+        loan = _loan()
+        self.assertEqual(loan.days_past_due, 0)
+
+    def test_loan_status_defaults_to_current(self):
+        loan = _loan()
+        self.assertEqual(loan.loan_status, "current")
+
+    def test_is_delinquent_false_for_current(self):
+        loan = _loan(days_past_due=0)
+        self.assertFalse(loan.is_delinquent)
+
+    def test_is_delinquent_true_for_30dpd(self):
+        loan = _loan(days_past_due=30)
+        self.assertTrue(loan.is_delinquent)
+
+    def test_is_fc_true(self):
+        loan = _loan(loan_status="fc")
+        self.assertTrue(loan.is_fc)
+
+    def test_is_fc_false_for_current(self):
+        loan = _loan(loan_status="current")
+        self.assertFalse(loan.is_fc)
+
+    def test_is_reo_true(self):
+        loan = _loan(loan_status="reo")
+        self.assertTrue(loan.is_reo)
+
+    def test_is_reo_false_for_fc(self):
+        loan = _loan(loan_status="fc")
+        self.assertFalse(loan.is_reo)
+
 
 # ---------------------------------------------------------------------------
 # Curve slicing (_slice_curve / actual_cashflow_from_loan age alignment)
