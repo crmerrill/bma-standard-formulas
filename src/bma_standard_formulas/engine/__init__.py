@@ -71,6 +71,16 @@ from bma_standard_formulas.engine.pricing import (
     build_price_yield_table,
     compute_risk_metrics,
 )
+
+# Stratification engine
+from bma_standard_formulas.engine.strats import (
+    compute_strat,
+    bucketize_column,
+    add_bucket_column,
+    available_strat_dimensions,
+    summarize_tape,
+    summarize_unique_values,
+)
 from bma_standard_formulas.formulas.pricing_risk import (
     PriceRiskAnalyzer,
     PriceYieldRiskTable,
@@ -119,4 +129,11 @@ __all__ = [
     "PriceYieldRiskTable",
     "PriceYieldScenarioTable",
     "RiskMetrics",
+    # Stratification
+    "compute_strat",
+    "bucketize_column",
+    "add_bucket_column",
+    "available_strat_dimensions",
+    "summarize_tape",
+    "summarize_unique_values",
 ]
