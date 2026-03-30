@@ -408,5 +408,41 @@ class TestSummarizeUniqueValues(unittest.TestCase):
         self.assertEqual(uv.iloc[0]["top_values"], [])
 
 
+# =============================================================================
+# Orchestrator strats: canonical DQ column enrichment
+# =============================================================================
+
+class TestCanonicalDqEnrichment(unittest.TestCase):
+    """Verify that compute_strat picks up canonical DQ columns from the normalizer."""
+
+    def test_canonical_dq_columns_in_strat(self):
+        from bma_cfengine_app.orchestrator.strats import compute_strat as app_compute_strat
+
+        df = _make_loan_df(20)
+        statuses = ["Current"] * 10 + ["30 DPD"] * 5 + ["FC"] * 3 + ["REO"] * 2
+        df["dlq_status"] = statuses
+        df["days_past_due"] = [0] * 10 + [30] * 5 + [0] * 3 + [0] * 2
+        df["is_fc"] = [False] * 15 + [True] * 3 + [False] * 2
+        df["is_reo"] = [False] * 18 + [True] * 2
+
+        result = app_compute_strat(df, "prop_state")
+        self.assertIn("dq_current", result.columns)
+        self.assertIn("dq_fc", result.columns)
+        self.assertIn("dq_reo", result.columns)
+
+        total = result[result["bucket"] == "TOTAL"].iloc[0]
+        self.assertGreater(total["dq_current"], 0)
+
+    def test_legacy_fallback_when_no_canonical(self):
+        from bma_cfengine_app.orchestrator.strats import compute_strat as app_compute_strat
+
+        df = _make_loan_df(10)
+        df["dqstatus"] = [0, 0, 1, 2, 3, 0, 0, 1, 0, 0]
+
+        result = app_compute_strat(df, "prop_state")
+        self.assertIn("dq_current", result.columns)
+        self.assertIn("dq_30", result.columns)
+
+
 if __name__ == "__main__":
     unittest.main()

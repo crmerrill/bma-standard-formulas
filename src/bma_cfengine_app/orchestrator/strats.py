@@ -214,12 +214,34 @@ def add_bucket_column(
 
 
 # =============================================================================
-# DQ Detection and Enrichment
+# DQ Enrichment for Strat Tables
 # =============================================================================
 #
-# Hard-coded detection of delinquency data in tapes.  This will be replaced
-# in a future step by canonical column lookup once the DQ normalizer
-# materializes standardized columns onto the working copy.
+# Prefers canonical DQ columns materialized by the DQ normalizer
+# (dlq_status, days_past_due, is_fc, is_reo).  Falls back to legacy
+# hard-coded detection for tapes that have not been through the normalizer.
+
+#: Canonical DQ columns produced by the DQ normalizer.
+CANONICAL_DQ_COLS: list[str] = ["dlq_status", "days_past_due", "is_fc", "is_reo"]
+
+#: Maps canonical dlq_status values to strat output column names.
+_DLQ_STATUS_TO_OUTPUT: dict[str, str] = {
+    "Current":   "dq_current",
+    "30 DPD":    "dq_30",
+    "60 DPD":    "dq_60",
+    "90 DPD":    "dq_90",
+    "120 DPD":   "dq_120",
+    "150 DPD":   "dq_180",
+    "180+ DPD":  "dq_180",
+    "FC":        "dq_fc",
+    "REO":       "dq_reo",
+}
+
+DQ_OUTPUT_COLS: list[str] = [
+    "dq_current", "dq_30", "dq_60", "dq_90", "dq_120", "dq_180", "dq_fc", "dq_reo",
+]
+
+# --- Legacy constants (used when canonical columns are absent) ---
 
 DQ_BALANCE_ALIASES: dict[str, list[str]] = {
     "dq_30":  ["delinq_31_60", "dq_30", "dq30", "dlq_30_59"],
@@ -239,25 +261,56 @@ ZB_CODE_ALIASES: list[str] = [
 ]
 
 DQ_STATUS_TO_BUCKETS: dict[int, str] = {
-    0: "dq_current",
-    1: "dq_30",
-    2: "dq_60",
-    3: "dq_90",
-    4: "dq_120",
-    5: "dq_150",
-    6: "dq_180",
+    0: "dq_current", 1: "dq_30", 2: "dq_60",
+    3: "dq_90", 4: "dq_120", 5: "dq_150", 6: "dq_180",
 }
 
 FC_ZB_CODES: set[int] = {2, 3, 6}
 REO_ZB_CODES: set[int] = {9, 15, 16}
 
-DQ_OUTPUT_COLS: list[str] = [
-    "dq_current", "dq_30", "dq_60", "dq_90", "dq_120", "dq_180", "dq_fc", "dq_reo",
-]
+
+def _has_canonical_dq(df: pd.DataFrame) -> bool:
+    """Check whether the canonical DQ columns are present on the DataFrame."""
+    return "dlq_status" in df.columns
+
+
+def _add_canonical_dq_columns(
+    row: dict[str, Any],
+    sub: pd.DataFrame,
+    curr_bal_col: str,
+) -> None:
+    """Add DQ distribution from canonical ``dlq_status`` column.
+
+    Computes balance-weighted percentages of each DQ status within the
+    group and writes them into *row* as ``dq_current``, ``dq_30``, etc.
+
+    Args:
+        row:          Mutable strat row dict.
+        sub:          Group DataFrame (loans in this bucket).
+        curr_bal_col: Current balance column name.
+    """
+    group_bal = float(sub[curr_bal_col].sum()) if curr_bal_col in sub.columns else 0.0
+    bal_by_bucket: dict[str, float] = {c: 0.0 for c in DQ_OUTPUT_COLS}
+
+    if group_bal <= 0:
+        for col in DQ_OUTPUT_COLS:
+            row[col] = 0.0
+        return
+
+    for status_val, output_col in _DLQ_STATUS_TO_OUTPUT.items():
+        mask = sub["dlq_status"] == status_val
+        if mask.any():
+            bal_by_bucket[output_col] += float(sub.loc[mask, curr_bal_col].sum())
+
+    for col in DQ_OUTPUT_COLS:
+        row[col] = round(bal_by_bucket.get(col, 0.0) / group_bal * 100, 3)
+
+
+# --- Legacy detection (backward compat for tapes without canonical columns) ---
 
 
 class _DqInfo:
-    """Encapsulates how DQ data is available in the tape."""
+    """Encapsulates how DQ data is available in a non-normalized tape."""
 
     def __init__(
         self,
@@ -284,22 +337,10 @@ class _DqInfo:
         return []
 
 
-def _detect_dq(df: pd.DataFrame) -> _DqInfo:
-    """Auto-detect which DQ representation the tape uses.
-
-    Checks for pre-bucketed DQ balance columns first (highest fidelity),
-    then integer status codes, falling back to ``"none"`` if no DQ data
-    is found.
-
-    Args:
-        df: Loan-level DataFrame.
-
-    Returns:
-        ``_DqInfo`` describing the detected DQ representation.
-    """
+def _detect_dq_legacy(df: pd.DataFrame) -> _DqInfo:
+    """Legacy DQ detection for tapes without canonical columns."""
     col_lower_map = {c.lower(): c for c in df.columns}
 
-    # --- Pre-bucketed DQ balance columns ---
     found_bal: dict[str, str] = {}
     for canonical, aliases in DQ_BALANCE_ALIASES.items():
         for alias in aliases:
@@ -309,14 +350,12 @@ def _detect_dq(df: pd.DataFrame) -> _DqInfo:
     if found_bal:
         return _DqInfo("balance", balance_cols=found_bal)
 
-    # --- Zero-balance code (supplementary FC/REO source) ---
     zb_col = None
     for alias in ZB_CODE_ALIASES:
         if alias.lower() in col_lower_map:
             zb_col = col_lower_map[alias.lower()]
             break
 
-    # --- Integer status code ---
     for alias in DQ_STATUS_ALIASES:
         if alias.lower() in col_lower_map:
             return _DqInfo("status", status_col=col_lower_map[alias.lower()], zb_col=zb_col)
@@ -324,22 +363,13 @@ def _detect_dq(df: pd.DataFrame) -> _DqInfo:
     return _DqInfo("none")
 
 
-def _add_dq_columns(
+def _add_legacy_dq_columns(
     row: dict[str, Any],
     sub: pd.DataFrame,
     curr_bal_col: str,
     dq: _DqInfo,
 ) -> None:
-    """Add balance-weighted delinquency percentages to a strat row dict.
-
-    Modifies *row* in place, adding one key per DQ output column.
-
-    Args:
-        row:          Mutable strat row dict.
-        sub:          Group DataFrame (loans in this bucket).
-        curr_bal_col: Current balance column name.
-        dq:           DQ detection result from ``_detect_dq``.
-    """
+    """Legacy DQ enrichment for tapes without canonical columns."""
     group_bal = float(sub[curr_bal_col].sum()) if curr_bal_col in sub.columns else 0.0
     if group_bal <= 0:
         for col in dq.output_cols:
@@ -428,16 +458,23 @@ def compute_strat(
         ``bma_standard_formulas.engine.strats.compute_strat``
             Engine-layer strat computation (no DQ, no categorical labels).
     """
-    dq = _detect_dq(df)
-
     row_cb = None
     totals_cb = None
-    if dq.available:
+
+    if _has_canonical_dq(df):
         def row_cb(row: dict, sub: pd.DataFrame, cbc: str) -> None:
-            _add_dq_columns(row, sub, cbc, dq)
+            _add_canonical_dq_columns(row, sub, cbc)
 
         def totals_cb(totals: dict, full_df: pd.DataFrame, cbc: str) -> None:
-            _add_dq_columns(totals, full_df, cbc, dq)
+            _add_canonical_dq_columns(totals, full_df, cbc)
+    else:
+        dq = _detect_dq_legacy(df)
+        if dq.available:
+            def row_cb(row: dict, sub: pd.DataFrame, cbc: str) -> None:
+                _add_legacy_dq_columns(row, sub, cbc, dq)
+
+            def totals_cb(totals: dict, full_df: pd.DataFrame, cbc: str) -> None:
+                _add_legacy_dq_columns(totals, full_df, cbc, dq)
 
     return _engine_compute_strat(
         df,
