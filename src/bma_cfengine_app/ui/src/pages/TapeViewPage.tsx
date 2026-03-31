@@ -45,14 +45,24 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
   const [uniqueValues, setUniqueValues] = useState<UniqueValuesResult | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
-  interface StratGroup {
-    id: number;
+  interface DrillDown {
+    parentBucket: string;
+    filterCol: string;
+    filterVal: string;
     dimension: string;
     result: StratResult | null;
     loading: boolean;
   }
+
+  interface StratGroup {
+    id: number;
+    dimensions: string[];
+    result: StratResult | null;
+    loading: boolean;
+    drillDown: DrillDown | null;
+  }
   const [stratGroups, setStratGroups] = useState<StratGroup[]>([
-    { id: 0, dimension: "", result: null, loading: false },
+    { id: 0, dimensions: [], result: null, loading: false, drillDown: null },
   ]);
   const nextStratId = useRef(1);
 
@@ -237,13 +247,14 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
       .finally(() => setSummaryLoading(false));
   }, [tab, uploadId, mappingId]);
 
-  const handleRunStrat = async (groupId: number, dim: string) => {
+  const runStratForGroup = async (groupId: number, dims: string[]) => {
     setStratGroups((prev) =>
-      prev.map((g) => (g.id === groupId ? { ...g, dimension: dim, result: null, loading: !!dim } : g))
+      prev.map((g) => (g.id === groupId ? { ...g, dimensions: dims, result: null, loading: dims.length > 0, drillDown: null } : g))
     );
-    if (!dim) return;
+    if (dims.length === 0) return;
     try {
-      const res = await api.computeStrat(uploadId, dim, mappingId);
+      const groupBy = dims.length === 1 ? dims[0] : dims;
+      const res = await api.computeStrat(uploadId, groupBy, mappingId);
       setStratGroups((prev) =>
         prev.map((g) => (g.id === groupId ? { ...g, result: res, loading: false } : g))
       );
@@ -254,9 +265,60 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
     }
   };
 
+  const handleSetDimension = (groupId: number, index: number, dim: string) => {
+    setStratGroups((prev) => {
+      const g = prev.find((x) => x.id === groupId);
+      if (!g) return prev;
+      const next = [...g.dimensions];
+      if (dim) {
+        next[index] = dim;
+      } else {
+        next.splice(index, 1);
+      }
+      return prev.map((x) => (x.id === groupId ? { ...x, dimensions: next } : x));
+    });
+  };
+
+  const handleRunStrat = (groupId: number) => {
+    const g = stratGroups.find((x) => x.id === groupId);
+    if (g) runStratForGroup(groupId, g.dimensions.filter(Boolean));
+  };
+
+  const handleAddDimToGroup = (groupId: number) => {
+    setStratGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, dimensions: [...g.dimensions, ""] } : g))
+    );
+  };
+
+  const handleDrillDown = async (groupId: number, bucket: string, filterCol: string, filterVal: string) => {
+    setStratGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, drillDown: { parentBucket: bucket, filterCol, filterVal, dimension: "", result: null, loading: false } } : g))
+    );
+  };
+
+  const handleRunDrillDown = async (groupId: number, dim: string) => {
+    const g = stratGroups.find((x) => x.id === groupId);
+    if (!g?.drillDown) return;
+    const dd = g.drillDown;
+    setStratGroups((prev) =>
+      prev.map((x) => (x.id === groupId ? { ...x, drillDown: { ...dd, dimension: dim, result: null, loading: !!dim } } : x))
+    );
+    if (!dim) return;
+    try {
+      const res = await api.computeStrat(uploadId, dim, mappingId, 10, { [dd.filterCol]: dd.filterVal });
+      setStratGroups((prev) =>
+        prev.map((x) => (x.id === groupId ? { ...x, drillDown: { ...dd, dimension: dim, result: res, loading: false } } : x))
+      );
+    } catch {
+      setStratGroups((prev) =>
+        prev.map((x) => (x.id === groupId ? { ...x, drillDown: { ...(x.drillDown!), loading: false } } : x))
+      );
+    }
+  };
+
   const addStratGroup = () => {
     const id = nextStratId.current++;
-    setStratGroups((prev) => [...prev, { id, dimension: "", result: null, loading: false }]);
+    setStratGroups((prev) => [...prev, { id, dimensions: [], result: null, loading: false, drillDown: null }]);
   };
 
   const removeStratGroup = (groupId: number) => {
@@ -707,7 +769,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
               <>
                 <button
                   onClick={() => {
-                    const dims = stratGroups.filter((g) => g.dimension && g.result).map((g) => g.dimension);
+                    const dims = stratGroups.filter((g) => g.dimensions.length > 0 && g.result).flatMap((g) => g.dimensions.filter(Boolean));
                     if (dims.length > 0) api.exportStrats(uploadId, dims, mappingId, "xlsx");
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
@@ -716,7 +778,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                 </button>
                 <button
                   onClick={() => {
-                    const dims = stratGroups.filter((g) => g.dimension && g.result).map((g) => g.dimension);
+                    const dims = stratGroups.filter((g) => g.dimensions.length > 0 && g.result).flatMap((g) => g.dimensions.filter(Boolean));
                     if (dims.length > 0) api.exportStrats(uploadId, dims, mappingId, "csv");
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
@@ -727,26 +789,58 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
             )}
           </div>
 
-          {stratGroups.map((sg, gi) => (
+          {stratGroups.map((sg, gi) => {
+            const dims = sg.dimensions.length > 0 ? sg.dimensions : [""];
+            const groupByLabel = Array.isArray(sg.result?.group_by)
+              ? (sg.result!.group_by as string[]).join(" × ")
+              : sg.result?.group_by ?? "";
+
+            return (
             <div key={sg.id} className="space-y-2">
-              <div className="bg-card border border-border rounded-lg p-4">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <Layers className="w-3.5 h-3.5 text-primary shrink-0" />
-                  <div className="relative">
-                    <select
-                      value={sg.dimension}
-                      onChange={(e) => handleRunStrat(sg.id, e.target.value)}
-                      className="appearance-none px-3 py-1.5 pr-8 bg-input-background border border-border rounded text-xs text-foreground min-w-[240px]"
-                    >
-                      <option value="">Select a column to stratify by...</option>
-                      {dimensions.map((d) => (
-                        <option key={d.column} value={d.column}>
-                          {d.column} ({d.type}, {d.unique} unique)
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+              <div className="bg-card border border-border rounded-lg p-4 space-y-2">
+                {dims.map((dim, di) => (
+                  <div key={di} className="flex items-center gap-3 flex-wrap">
+                    {di === 0 && <Layers className="w-3.5 h-3.5 text-primary shrink-0" />}
+                    {di > 0 && <span className="w-3.5 text-center text-[10px] text-muted-foreground shrink-0">×</span>}
+                    <div className="relative">
+                      <select
+                        value={dim}
+                        onChange={(e) => handleSetDimension(sg.id, di, e.target.value)}
+                        className="appearance-none px-3 py-1.5 pr-8 bg-input-background border border-border rounded text-xs text-foreground min-w-[240px]"
+                      >
+                        <option value="">Select a column...</option>
+                        {dimensions.map((d) => (
+                          <option key={d.column} value={d.column}>
+                            {d.column} ({d.type}, {d.unique} unique)
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                    </div>
+                    {di > 0 && (
+                      <button
+                        onClick={() => handleSetDimension(sg.id, di, "")}
+                        className="text-muted-foreground hover:text-engine-red p-0.5"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
+                ))}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={() => handleAddDimToGroup(sg.id)}
+                    className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Plus className="w-3 h-3" /> Add dimension
+                  </button>
+                  <button
+                    onClick={() => handleRunStrat(sg.id)}
+                    disabled={sg.loading || dims.filter(Boolean).length === 0}
+                    className="px-3 py-1 rounded border border-primary/20 bg-primary/10 text-primary text-[10px] hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {sg.loading ? "Computing..." : "Run Strat"}
+                  </button>
                   {sg.loading && (
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
                   )}
@@ -765,7 +859,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
               {sg.result && !sg.loading && (
                 <CollapsiblePanel
                   icon={Layers}
-                  title={sg.result.group_by}
+                  title={groupByLabel}
                   badge={`${sg.result.row_count} buckets`}
                 >
                   <DataTable
@@ -783,17 +877,93 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                       const isTotal = (row as any).bucket === "TOTAL";
                       return isTotal ? "bg-primary/5 font-medium border-b border-border/50" : "";
                     }}
+                    onRowClick={(row) => {
+                      const bucket = (row as any).bucket;
+                      if (bucket === "TOTAL") return;
+                      const firstDim = sg.dimensions[0];
+                      if (!firstDim) return;
+                      const filterCol = `${firstDim}_bucket`;
+                      handleDrillDown(sg.id, bucket, filterCol, bucket);
+                    }}
                   />
+                  {sg.dimensions.length === 1 && (
+                    <div className="px-3 py-1.5 text-[10px] text-muted-foreground border-t border-border">
+                      Click a row to drill down within that bucket.
+                    </div>
+                  )}
                 </CollapsiblePanel>
               )}
 
-              {!sg.dimension && !sg.loading && gi === stratGroups.length - 1 && stratGroups.length === 1 && (
+              {/* Drill-down sub-strat */}
+              {sg.drillDown && (
+                <div className="ml-6 border-l-2 border-primary/20 pl-4 space-y-2">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Filter className="w-3 h-3 text-primary" />
+                    <span>Drill-down: <span className="text-foreground font-medium">{sg.drillDown.parentBucket}</span></span>
+                    <button
+                      onClick={() => setStratGroups((prev) =>
+                        prev.map((g) => (g.id === sg.id ? { ...g, drillDown: null } : g))
+                      )}
+                      className="text-muted-foreground hover:text-engine-red"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <select
+                        value={sg.drillDown.dimension}
+                        onChange={(e) => handleRunDrillDown(sg.id, e.target.value)}
+                        className="appearance-none px-3 py-1.5 pr-8 bg-input-background border border-border rounded text-xs text-foreground min-w-[240px]"
+                      >
+                        <option value="">Select drill-down dimension...</option>
+                        {dimensions.map((d) => (
+                          <option key={d.column} value={d.column}>
+                            {d.column} ({d.type}, {d.unique} unique)
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                    </div>
+                    {sg.drillDown.loading && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                    )}
+                  </div>
+                  {sg.drillDown.result && !sg.drillDown.loading && (
+                    <CollapsiblePanel
+                      icon={Filter}
+                      title={`${sg.drillDown.parentBucket} → ${sg.drillDown.dimension}`}
+                      badge={`${sg.drillDown.result.row_count} buckets`}
+                    >
+                      <DataTable
+                        tableId={`strat_dd_${sg.id}`}
+                        maxHeight="400px"
+                        columns={sg.drillDown.result.columns.map((col): DataTableColumn<Record<string, unknown>> => ({
+                          id: col,
+                          header: STRAT_COL_LABELS[col] ?? col,
+                          accessorKey: col,
+                          align: col === "bucket" ? "left" : "right",
+                          cell: (v) => formatStratCell(col, v),
+                        }))}
+                        data={sg.drillDown.result.rows}
+                        rowClassName={(row) => {
+                          const isTotal = (row as any).bucket === "TOTAL";
+                          return isTotal ? "bg-primary/5 font-medium" : "";
+                        }}
+                      />
+                    </CollapsiblePanel>
+                  )}
+                </div>
+              )}
+
+              {sg.dimensions.filter(Boolean).length === 0 && !sg.loading && gi === stratGroups.length - 1 && stratGroups.length === 1 && (
                 <div className="text-muted-foreground text-sm p-8 text-center">
                   Select a dimension above to generate a stratification table.
                 </div>
               )}
             </div>
-          ))}
+          );
+          })}
 
         </div>
       )}

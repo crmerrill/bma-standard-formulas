@@ -1,29 +1,66 @@
-"""Stratification engine — ported from Mosaic/Tape cmutils.stratutils.
+"""Application-layer stratification — display presets and DQ enrichment.
 
-Provides bucket presets, auto-bucketing for numeric columns, and
-balance-weighted summary statistics per strat group.
+Wraps the engine-layer strat computation with app-specific concerns:
+
+- **Categorical label presets**: numeric columns like ``dqstatus`` and
+  ``zerobal_code`` are mapped to human-readable labels (e.g. 0 → "Current",
+  1 → "30 DPD") rather than bucketed as continuous values.
+
+- **DQ distribution columns**: when the tape contains delinquency data
+  (status codes, balance buckets, or zero-balance codes), each strat row
+  is enriched with balance-weighted DQ percentages.
+
+The engine-layer functions (``compute_strat``, ``available_strat_dimensions``,
+``summarize_tape``, etc.) are re-exported here for API compatibility so that
+existing routers can continue importing from this module unchanged.
+
+See Also:
+    ``bma_standard_formulas.engine.strats``
+        Pure analytics engine — bucketing, weighted averages, strat tables.
 """
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-
 # ---------------------------------------------------------------------------
-# Bucket presets (from Mosaic stratutils.py)
+# Engine re-exports — API compatibility for routers and orchestrator callers
 # ---------------------------------------------------------------------------
+from bma_standard_formulas.engine.strats import (
+    BUCKET_PRESETS,
+    RATE_STEP_FIELDS,
+    add_bucket_column as _engine_add_bucket_column,
+    available_strat_dimensions,
+    bucketize_column,
+    compute_strat as _engine_compute_strat,
+    summarize_tape,
+    summarize_unique_values,
+)
 
-BUCKET_PRESETS: dict[str, list[float]] = {
-    "fico": [300, 540, 580, 620, 640, 660, 680, 700, 720, 740, 760, 780, 800, 850],
-    "ltv": [30, 40, 50, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 120],
-    "dti": [10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60],
-    "term": [3, 6, 12, 24, 36, 48, 60, 84, 120, 180, 240, 360, 420],
-}
+__all__ = [
+    "BUCKET_PRESETS",
+    "RATE_STEP_FIELDS",
+    "CATEGORICAL_LABEL_PRESETS",
+    "CATEGORICAL_NUMERIC_FIELDS",
+    "LOW_CARDINALITY_THRESHOLD",
+    "add_bucket_column",
+    "available_strat_dimensions",
+    "bucketize_column",
+    "compute_strat",
+    "summarize_tape",
+    "summarize_unique_values",
+]
 
-RATE_STEP_FIELDS = {"rate", "margin", "coupon", "wac"}
+
+# =============================================================================
+# Categorical Label Presets (App-Layer Display Concern)
+# =============================================================================
+#
+# Integer-coded columns that should be displayed as discrete labels rather
+# than bucketed as continuous numeric values.  These presets map raw tape
+# values to human-readable labels for the UI strat tables.
 
 CATEGORICAL_LABEL_PRESETS: dict[str, dict[int, str]] = {
     "dqstatus": {
@@ -64,7 +101,9 @@ CATEGORICAL_LABEL_PRESETS: dict[str, dict[int, str]] = {
     },
 }
 
-CATEGORICAL_NUMERIC_FIELDS = {
+#: Column names (lowercased) that contain integer codes representing discrete
+#: categories rather than continuous measurements.
+CATEGORICAL_NUMERIC_FIELDS: set[str] = {
     "dqstatus", "dlq_status", "delinquency_status",
     "current_loan_delinquency_status",
     "zerobal_code", "zero_balance_code", "zero_bal_code",
@@ -72,67 +111,32 @@ CATEGORICAL_NUMERIC_FIELDS = {
     "int", "occupancy_status",
 }
 
-LOW_CARDINALITY_THRESHOLD = 15
+#: Numeric columns with this many or fewer unique values are auto-detected as
+#: categorical, even without an explicit entry in CATEGORICAL_NUMERIC_FIELDS.
+LOW_CARDINALITY_THRESHOLD: int = 15
 
 
-def _round_to_nearest(x: float, base: float, method: str = "down") -> float:
-    if method == "down":
-        return base * math.floor(x / base)
-    elif method == "up":
-        return base * math.ceil(x / base)
-    return base * round(x / base)
-
-
-def bucketize_column(
-    series: pd.Series,
-    column_name: str,
-    max_buckets: int = 10,
-) -> list[float]:
-    """Return bin edges for a numeric column, using presets where applicable.
-
-    The returned edges always cover the full data range: the first edge is
-    at or below the series min, and the last edge is at or above the max.
-    """
-    valid = series.dropna()
-    if valid.empty:
-        return [0, 1]
-
-    data_min = float(valid.min())
-    data_max = float(valid.max())
-    col_lower = column_name.lower()
-
-    for preset_key, preset_edges in BUCKET_PRESETS.items():
-        if preset_key in col_lower:
-            edges = [e for e in preset_edges if e <= data_max + 1e-9]
-            if not edges or edges[-1] < data_max:
-                edges.append(data_max)
-            if edges[0] > data_min:
-                edges.insert(0, data_min)
-            return edges
-
-    for rate_key in RATE_STEP_FIELDS:
-        if rate_key in col_lower:
-            if data_max <= data_min:
-                return [data_min, data_min + 0.25]
-            step = _round_to_nearest((data_max - data_min) / max_buckets, base=0.25, method="down")
-            if step <= 0:
-                step = 0.25
-            edges = [data_min + step * i for i in range(max_buckets + 1)]
-            if edges[-1] < data_max:
-                edges[-1] = data_max
-            return edges
-
-    if data_max <= data_min:
-        return [data_min, data_min + 1]
-    step = (data_max - data_min) / max_buckets
-    edges = [data_min + step * i for i in range(max_buckets + 1)]
-    if edges[-1] < data_max:
-        edges[-1] = data_max
-    return edges
+# =============================================================================
+# Categorical Detection + Labeling
+# =============================================================================
 
 
 def _is_categorical_numeric(series: pd.Series, column: str) -> bool:
-    """Detect numeric columns that should be treated as discrete categories."""
+    """Detect numeric columns that should be treated as discrete categories.
+
+    A column is categorical-numeric if:
+    1. Its lowercased name is in ``CATEGORICAL_NUMERIC_FIELDS``, OR
+    2. Its lowercased name has a label preset in ``CATEGORICAL_LABEL_PRESETS``, OR
+    3. It has few enough unique integer values (≤ ``LOW_CARDINALITY_THRESHOLD``).
+
+    Args:
+        series: Numeric pandas Series.
+        column: Column name.
+
+    Returns:
+        True if the column should be treated as categorical rather than
+        continuously bucketed.
+    """
     col_lower = column.lower()
     if col_lower in CATEGORICAL_NUMERIC_FIELDS:
         return True
@@ -141,13 +145,26 @@ def _is_categorical_numeric(series: pd.Series, column: str) -> bool:
     nunique = series.dropna().nunique()
     if nunique <= LOW_CARDINALITY_THRESHOLD and nunique > 0:
         vals = series.dropna()
-        if vals.dtype.kind in ("i", "u") or (vals.dtype.kind == "f" and (vals == vals.astype(int)).all()):
+        if vals.dtype.kind in ("i", "u") or (
+            vals.dtype.kind == "f" and (vals == vals.astype(int)).all()
+        ):
             return True
     return False
 
 
 def _label_categorical_numeric(series: pd.Series, column: str) -> pd.Series:
-    """Map numeric values to human-readable labels where presets exist."""
+    """Map numeric values to human-readable labels where presets exist.
+
+    Falls back to ``str(value)`` for values not covered by the preset map.
+    NaN values become ``"N/A"``.
+
+    Args:
+        series: Numeric pandas Series.
+        column: Column name (matched case-insensitively against presets).
+
+    Returns:
+        String Series of labeled values.
+    """
     col_lower = column.lower()
     labels = CATEGORICAL_LABEL_PRESETS.get(col_lower, {})
     if labels:
@@ -162,15 +179,30 @@ def _label_categorical_numeric(series: pd.Series, column: str) -> pd.Series:
     return result.astype(str)
 
 
+# =============================================================================
+# App-Level Bucket Function
+# =============================================================================
+
+
 def add_bucket_column(
     df: pd.DataFrame,
     column: str,
     max_buckets: int = 10,
 ) -> pd.Series:
-    """Create a bucketed category series for a column.
+    """Create a bucketed category Series with categorical label presets.
 
-    NaN values in the source column are labeled "N/A" so they are never
-    silently dropped from groupby operations.
+    Extends the engine's ``add_bucket_column`` by first checking whether the
+    column is a categorical-numeric field (e.g. ``dqstatus``, ``zerobal_code``)
+    that should be displayed with human-readable labels rather than interval
+    notation.
+
+    Args:
+        df:          Source DataFrame.
+        column:      Column name to bucketize.
+        max_buckets: Maximum number of bins (for non-categorical numerics).
+
+    Returns:
+        String Series of bucket labels, same length as *df*.
     """
     if df[column].dtype in (object, "string", "category"):
         return df[column].astype(str).fillna("N/A")
@@ -178,155 +210,108 @@ def add_bucket_column(
     if _is_categorical_numeric(df[column], column):
         return _label_categorical_numeric(df[column], column)
 
-    edges = bucketize_column(df[column], column, max_buckets)
-    result = pd.cut(df[column], bins=edges, include_lowest=True, duplicates="drop")
-    result = result.astype(str).where(df[column].notna(), "N/A")
-    return result
+    return _engine_add_bucket_column(df, column, max_buckets)
 
 
-# ---------------------------------------------------------------------------
-# Weighted average helper
-# ---------------------------------------------------------------------------
+# =============================================================================
+# DQ Enrichment for Strat Tables
+# =============================================================================
+#
+# Prefers canonical DQ columns materialized by the DQ normalizer
+# (dlq_status, days_past_due, is_fc, is_reo).  Falls back to legacy
+# hard-coded detection for tapes that have not been through the normalizer.
 
-def _weighted_avg(values: pd.Series, weights: pd.Series) -> float:
-    mask = values.notna() & weights.notna() & (weights > 0)
-    if mask.sum() == 0:
-        return 0.0
-    return float(np.average(values[mask], weights=weights[mask]))
+#: Canonical DQ columns produced by the DQ normalizer.
+CANONICAL_DQ_COLS: list[str] = ["dlq_status", "days_past_due", "is_fc", "is_reo"]
 
+#: Maps canonical dlq_status values to strat output column names.
+_DLQ_STATUS_TO_OUTPUT: dict[str, str] = {
+    "Current":   "dq_current",
+    "30 DPD":    "dq_30",
+    "60 DPD":    "dq_60",
+    "90 DPD":    "dq_90",
+    "120 DPD":   "dq_120",
+    "150 DPD":   "dq_180",
+    "180+ DPD":  "dq_180",
+    "FC":        "dq_fc",
+    "REO":       "dq_reo",
+}
 
-# ---------------------------------------------------------------------------
-# Strat table generation
-# ---------------------------------------------------------------------------
+DQ_OUTPUT_COLS: list[str] = [
+    "dq_current", "dq_30", "dq_60", "dq_90", "dq_120", "dq_180", "dq_fc", "dq_reo",
+]
 
-def compute_strat(
-    df: pd.DataFrame,
-    group_by: str,
-    *,
-    orig_bal_col: str = "original_balance",
-    curr_bal_col: str = "current_balance",
-    rate_col: str = "rate_margin",
-    orig_term_col: str = "original_term",
-    rem_term_col: str = "remaining_term",
-    max_buckets: int = 10,
-) -> pd.DataFrame:
-    """Compute a stratification table grouped by one column.
-
-    Returns a DataFrame with one row per bucket/category with columns:
-    count, count_pct, orig_bal, orig_bal_pct, curr_bal, curr_bal_pct,
-    factor, wa_rate, wa_orig_term, wa_rem_term, wala.
-    """
-    work = df.copy()
-
-    is_numeric = pd.api.types.is_numeric_dtype(work[group_by])
-    if is_numeric:
-        bucket_col = f"{group_by}_bucket"
-        work[bucket_col] = add_bucket_column(work, group_by, max_buckets)
-        grp = bucket_col
-    else:
-        grp = group_by
-
-    total_count = len(work)
-    has_orig = orig_bal_col in work.columns
-    has_curr = curr_bal_col in work.columns
-    total_orig = float(work[orig_bal_col].sum()) if has_orig else 0.0
-    total_curr = float(work[curr_bal_col].sum()) if has_curr else 0.0
-
-    dq = _detect_dq(work)
-
-    rows: list[dict[str, Any]] = []
-
-    for key, sub in work.groupby(grp, observed=True, sort=True):
-        n = len(sub)
-        orig = float(sub[orig_bal_col].sum()) if has_orig else 0.0
-        curr = float(sub[curr_bal_col].sum()) if has_curr else 0.0
-
-        w_orig = sub[orig_bal_col] if has_orig else pd.Series(dtype=float)
-        w_curr = sub[curr_bal_col] if has_curr else pd.Series(dtype=float)
-
-        wa_rate = _weighted_avg(sub[rate_col], w_curr) if rate_col in sub.columns and has_curr else 0.0
-        wa_orig_term = _weighted_avg(sub[orig_term_col], w_orig) if orig_term_col in sub.columns and has_orig else 0.0
-        wa_rem_term = _weighted_avg(sub[rem_term_col], w_curr) if rem_term_col in sub.columns and has_curr else 0.0
-
-        wala = wa_orig_term - wa_rem_term if (wa_orig_term > 0 and wa_rem_term > 0) else 0.0
-
-        row = {
-            "bucket": str(key),
-            "count": n,
-            "count_pct": round(n / total_count * 100, 2) if total_count else 0.0,
-            "orig_bal": round(orig, 2),
-            "orig_bal_pct": round(orig / total_orig * 100, 2) if total_orig else 0.0,
-            "curr_bal": round(curr, 2),
-            "curr_bal_pct": round(curr / total_curr * 100, 2) if total_curr else 0.0,
-            "factor": round(curr / orig * 100, 2) if orig else 0.0,
-            "wa_rate": round(wa_rate, 4),
-            "wa_orig_term": round(wa_orig_term, 1),
-            "wa_rem_term": round(wa_rem_term, 1),
-            "wala": round(wala, 1),
-        }
-        if dq.available:
-            _add_dq_columns(row, sub, curr_bal_col, dq)
-        rows.append(row)
-
-    result = pd.DataFrame(rows)
-
-    totals: dict[str, Any] = {
-        "bucket": "TOTAL",
-        "count": total_count,
-        "count_pct": 100.0,
-        "orig_bal": round(total_orig, 2),
-        "orig_bal_pct": 100.0,
-        "curr_bal": round(total_curr, 2),
-        "curr_bal_pct": 100.0,
-        "factor": round(total_curr / total_orig * 100, 2) if total_orig else 0.0,
-        "wa_rate": round(_weighted_avg(work[rate_col], work[curr_bal_col]), 4) if rate_col in work.columns and has_curr else 0.0,
-        "wa_orig_term": round(_weighted_avg(work[orig_term_col], work[orig_bal_col]), 1) if orig_term_col in work.columns and has_orig else 0.0,
-        "wa_rem_term": round(_weighted_avg(work[rem_term_col], work[curr_bal_col]), 1) if rem_term_col in work.columns and has_curr else 0.0,
-        "wala": 0.0,
-    }
-    totals["wala"] = round(totals["wa_orig_term"] - totals["wa_rem_term"], 1)
-    if dq.available:
-        _add_dq_columns(totals, work, curr_bal_col, dq)
-    result = pd.concat([result, pd.DataFrame([totals])], ignore_index=True)
-
-    return result
-
+# --- Legacy constants (used when canonical columns are absent) ---
 
 DQ_BALANCE_ALIASES: dict[str, list[str]] = {
-    "dq_30": ["delinq_31_60", "dq_30", "dq30", "dlq_30_59"],
-    "dq_60": ["delinq_61_90", "dq_60", "dq60", "dlq_60_89"],
-    "dq_90": ["delinq_91_120", "dq_90", "dq90", "dlq_90_119"],
+    "dq_30":  ["delinq_31_60", "dq_30", "dq30", "dlq_30_59"],
+    "dq_60":  ["delinq_61_90", "dq_60", "dq60", "dlq_60_89"],
+    "dq_90":  ["delinq_91_120", "dq_90", "dq90", "dlq_90_119"],
     "dq_120": ["delinq_121_179", "dq_120", "dq120", "dlq_120_179"],
     "dq_180": ["delinq_ge_180", "dq_180", "dq180", "dlq_180_plus"],
 }
 
-DQ_STATUS_ALIASES = [
+DQ_STATUS_ALIASES: list[str] = [
     "dqstatus", "dlq_status", "delinquency_status",
     "current_loan_delinquency_status", "dlq",
 ]
 
-ZB_CODE_ALIASES = [
+ZB_CODE_ALIASES: list[str] = [
     "zerobal_code", "zero_balance_code", "zero_bal_code", "zb_code",
 ]
 
 DQ_STATUS_TO_BUCKETS: dict[int, str] = {
-    0: "dq_current",
-    1: "dq_30",
-    2: "dq_60",
-    3: "dq_90",
-    4: "dq_120",
-    5: "dq_150",
-    6: "dq_180",
+    0: "dq_current", 1: "dq_30", 2: "dq_60",
+    3: "dq_90", 4: "dq_120", 5: "dq_150", 6: "dq_180",
 }
 
-FC_ZB_CODES = {2, 3, 6}
-REO_ZB_CODES = {9, 15, 16}
+FC_ZB_CODES: set[int] = {2, 3, 6}
+REO_ZB_CODES: set[int] = {9, 15, 16}
 
-DQ_OUTPUT_COLS = ["dq_current", "dq_30", "dq_60", "dq_90", "dq_120", "dq_180", "dq_fc", "dq_reo"]
+
+def _has_canonical_dq(df: pd.DataFrame) -> bool:
+    """Check whether the canonical DQ columns are present on the DataFrame."""
+    return "dlq_status" in df.columns
+
+
+def _add_canonical_dq_columns(
+    row: dict[str, Any],
+    sub: pd.DataFrame,
+    curr_bal_col: str,
+) -> None:
+    """Add DQ distribution from canonical ``dlq_status`` column.
+
+    Computes balance-weighted percentages of each DQ status within the
+    group and writes them into *row* as ``dq_current``, ``dq_30``, etc.
+
+    Args:
+        row:          Mutable strat row dict.
+        sub:          Group DataFrame (loans in this bucket).
+        curr_bal_col: Current balance column name.
+    """
+    group_bal = float(sub[curr_bal_col].sum()) if curr_bal_col in sub.columns else 0.0
+    bal_by_bucket: dict[str, float] = {c: 0.0 for c in DQ_OUTPUT_COLS}
+
+    if group_bal <= 0:
+        for col in DQ_OUTPUT_COLS:
+            row[col] = 0.0
+        return
+
+    for status_val, output_col in _DLQ_STATUS_TO_OUTPUT.items():
+        mask = sub["dlq_status"] == status_val
+        if mask.any():
+            bal_by_bucket[output_col] += float(sub.loc[mask, curr_bal_col].sum())
+
+    for col in DQ_OUTPUT_COLS:
+        row[col] = round(bal_by_bucket.get(col, 0.0) / group_bal * 100, 3)
+
+
+# --- Legacy detection (backward compat for tapes without canonical columns) ---
 
 
 class _DqInfo:
-    """Encapsulates how DQ data is available in the tape."""
+    """Encapsulates how DQ data is available in a non-normalized tape."""
+
     def __init__(
         self,
         mode: str,
@@ -352,7 +337,8 @@ class _DqInfo:
         return []
 
 
-def _detect_dq(df: pd.DataFrame) -> _DqInfo:
+def _detect_dq_legacy(df: pd.DataFrame) -> _DqInfo:
+    """Legacy DQ detection for tapes without canonical columns."""
     col_lower_map = {c.lower(): c for c in df.columns}
 
     found_bal: dict[str, str] = {}
@@ -377,13 +363,13 @@ def _detect_dq(df: pd.DataFrame) -> _DqInfo:
     return _DqInfo("none")
 
 
-def _add_dq_columns(
+def _add_legacy_dq_columns(
     row: dict[str, Any],
     sub: pd.DataFrame,
     curr_bal_col: str,
     dq: _DqInfo,
 ) -> None:
-    """Add balance-weighted delinquency percentages to a strat row."""
+    """Legacy DQ enrichment for tapes without canonical columns."""
     group_bal = float(sub[curr_bal_col].sum()) if curr_bal_col in sub.columns else 0.0
     if group_bal <= 0:
         for col in dq.output_cols:
@@ -423,128 +409,84 @@ def _add_dq_columns(
             row[col] = round(bal_by_bucket.get(col, 0.0) / group_bal * 100, 3)
 
 
-def available_strat_dimensions(df: pd.DataFrame) -> list[dict[str, str]]:
-    """Return a list of columns suitable for stratification with their types."""
-    dims: list[dict[str, str]] = []
-    for col in df.columns:
-        if col.startswith("_"):
-            continue
-        dtype = str(df[col].dtype)
-        nunique = df[col].nunique()
-        if nunique <= 1:
-            continue
-        if pd.api.types.is_numeric_dtype(df[col]):
-            dims.append({"column": col, "type": "numeric", "unique": nunique})
-        elif nunique <= 200:
-            dims.append({"column": col, "type": "categorical", "unique": nunique})
-    return dims
+# =============================================================================
+# App-Level compute_strat (Engine + DQ Enrichment)
+# =============================================================================
 
 
-# ---------------------------------------------------------------------------
-# Tape summary functions (from Mosaic cmutils.stratutils)
-# ---------------------------------------------------------------------------
-
-
-def _json_safe(v: Any) -> Any:
-    """Convert numpy scalars and other non-JSON-safe types to Python builtins."""
-    if isinstance(v, (np.integer,)):
-        return int(v)
-    if isinstance(v, (np.floating,)):
-        f = float(v)
-        if not np.isfinite(f):
-            return None
-        return f
-    if isinstance(v, (np.bool_,)):
-        return bool(v)
-    if isinstance(v, (np.datetime64, pd.Timestamp)):
-        return str(v)
-    return v
-
-
-def _get_unique_values(
-    series: pd.Series,
-    max_display: int = 25,
-    absolute_threshold: int = 500,
-) -> list[Any] | str:
-    """Get top unique values for a column, sorted by frequency."""
-    nunique = series.nunique()
-    if nunique > absolute_threshold:
-        return ""
-    non_null = series.dropna()
-    if len(non_null) == 0:
-        return ""
-    if nunique > max_display:
-        vc = non_null.value_counts()
-        return [_json_safe(v) for v in vc.index[:max_display]]
-    return [_json_safe(v) for v in non_null.unique()]
-
-
-def summarize_unique_values(
+def compute_strat(
     df: pd.DataFrame,
-    max_display: int = 25,
-    absolute_threshold: int = 500,
+    group_by: str | list[str],
+    *,
+    orig_bal_col: str = "original_balance",
+    curr_bal_col: str = "current_balance",
+    rate_col: str = "rate_margin",
+    orig_term_col: str = "original_term",
+    rem_term_col: str = "remaining_term",
+    max_buckets: int = 10,
+    filter_: dict[str, str] | None = None,
 ) -> pd.DataFrame:
-    """Per-column summary: type, count, missing, missing%, unique count, top values."""
-    rows: list[dict[str, Any]] = []
-    for col in df.columns:
-        s = df[col]
-        missing = int(s.isna().sum())
-        total = len(s)
-        uv = _get_unique_values(s, max_display, absolute_threshold)
-        rows.append({
-            "column": col,
-            "dtype": str(s.dtype),
-            "count": int(s.count()),
-            "missing": missing,
-            "missing_pct": round(missing / total * 100, 2) if total else 0.0,
-            "unique": int(s.nunique()),
-            "top_values": uv if isinstance(uv, list) else [],
-        })
-    return pd.DataFrame(rows)
+    """Compute a stratification table with DQ enrichment.
 
+    Delegates core computation to the engine's ``compute_strat``, passing the
+    app-level bucket function (with categorical label presets) and DQ row
+    callbacks for delinquency distribution columns.
 
-def summarize_tape(df: pd.DataFrame) -> pd.DataFrame:
-    """Per-column descriptive statistics: mean, median, quartiles, deciles, extremes."""
-    rows: list[dict[str, Any]] = []
-    for col in df.columns:
-        s = df[col]
-        is_num = pd.api.types.is_numeric_dtype(s)
-        valid = s.dropna()
-        missing = int(s.isna().sum())
-        total = len(s)
+    Supports both single-column strats and multi-column cross-tabulation
+    (pass a list of column names).  An optional *filter_* dict enables
+    drill-down strats by pre-filtering the data to a specific bucket before
+    re-stratifying.
 
-        row: dict[str, Any] = {
-            "column": col,
-            "dtype": str(s.dtype),
-            "count": int(s.count()),
-            "missing": missing,
-            "missing_pct": round(missing / total * 100, 2) if total else 0.0,
-            "unique": int(s.nunique()),
-        }
+    Args:
+        df:             Loan-level DataFrame.
+        group_by:       Column name or list of column names to stratify by.
+        orig_bal_col:   Column containing original UPB.
+        curr_bal_col:   Column containing current UPB.
+        rate_col:       Column containing coupon/rate (for WAC computation).
+        orig_term_col:  Column containing original loan term in months.
+        rem_term_col:   Column containing remaining term in months.
+        max_buckets:    Maximum bins for numeric columns.
+        filter_:        Optional filter dict for drill-down strats.  Maps
+                        bucket column names to bucket values (e.g.
+                        ``{"borrower_fico_bucket": "(720, 740]"}``).
 
-        if is_num and len(valid) > 0:
-            row.update({
-                "mean": round(float(valid.mean()), 6),
-                "median": round(float(valid.median()), 6),
-                "min": float(valid.min()),
-                "q25": float(valid.quantile(0.25)),
-                "q50": float(valid.quantile(0.50)),
-                "q75": float(valid.quantile(0.75)),
-                "p90": float(valid.quantile(0.90)),
-                "p95": float(valid.quantile(0.95)),
-                "p99": float(valid.quantile(0.99)),
-                "p995": float(valid.quantile(0.995)),
-                "p999": float(valid.quantile(0.999)),
-                "max": float(valid.max()),
-                "std": round(float(valid.std()), 6) if len(valid) > 1 else 0.0,
-            })
-        else:
-            for k in ("mean", "median", "min", "q25", "q50", "q75",
-                       "p90", "p95", "p99", "p995", "p999", "max", "std"):
-                row[k] = None
+    Returns:
+        DataFrame with strat metrics plus DQ distribution columns (if DQ
+        data is detected in the tape).
 
-        uv = _get_unique_values(s, max_display=10, absolute_threshold=200)
-        row["top_values"] = uv if isinstance(uv, list) else []
-        rows.append(row)
+    See Also:
+        ``bma_standard_formulas.engine.strats.compute_strat``
+            Engine-layer strat computation (no DQ, no categorical labels).
+    """
+    row_cb = None
+    totals_cb = None
 
-    return pd.DataFrame(rows)
+    if _has_canonical_dq(df):
+        def row_cb(row: dict, sub: pd.DataFrame, cbc: str) -> None:
+            _add_canonical_dq_columns(row, sub, cbc)
+
+        def totals_cb(totals: dict, full_df: pd.DataFrame, cbc: str) -> None:
+            _add_canonical_dq_columns(totals, full_df, cbc)
+    else:
+        dq = _detect_dq_legacy(df)
+        if dq.available:
+            def row_cb(row: dict, sub: pd.DataFrame, cbc: str) -> None:
+                _add_legacy_dq_columns(row, sub, cbc, dq)
+
+            def totals_cb(totals: dict, full_df: pd.DataFrame, cbc: str) -> None:
+                _add_legacy_dq_columns(totals, full_df, cbc, dq)
+
+    return _engine_compute_strat(
+        df,
+        group_by,
+        orig_bal_col=orig_bal_col,
+        curr_bal_col=curr_bal_col,
+        rate_col=rate_col,
+        orig_term_col=orig_term_col,
+        rem_term_col=rem_term_col,
+        max_buckets=max_buckets,
+        bucket_fn=add_bucket_column,
+        row_callback=row_cb,
+        totals_callback=totals_cb,
+        filter_=filter_,
+    )

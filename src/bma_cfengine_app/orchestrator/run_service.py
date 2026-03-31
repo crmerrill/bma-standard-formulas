@@ -294,6 +294,13 @@ def execute_run(
         from .rates import load_rates_df
         rates_df = load_rates_df(upload_id)
 
+        # Load DQ mapping if it was persisted during tape intake
+        dq_mapping_data: dict | None = None
+        dq_mapping_path = run_store.upload_dir(upload_id) / "dq_mapping.json"
+        if dq_mapping_path.exists():
+            import json as _json
+            dq_mapping_data = _json.loads(dq_mapping_path.read_text())
+
         scenario_list_early = scenarios or [
             {"name": "Base Case", "assumptions": assumptions.model_dump(), "run_mode": run_mode}
         ]
@@ -307,6 +314,7 @@ def execute_run(
             grouping=grouping.model_dump() if grouping else None,
             run_mode=run_mode,
             scenarios=scenario_list_early,
+            dq_mapping=dq_mapping_data,
         )
 
         df_mapped = _dedup_cols(apply_mapping(df_raw, mappings))
@@ -417,6 +425,7 @@ def execute_run(
                 "mappings": "inputs/mappings.json",
                 "assumptions": "inputs/assumptions.json",
                 "rates": "inputs/rates.csv" if rates_df is not None else None,
+                "dq_mapping": "inputs/dq_mapping.json" if dq_mapping_data is not None else None,
             },
         })
 

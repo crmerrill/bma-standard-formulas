@@ -42,6 +42,7 @@ interface Props<T> {
   emptyMessage?: string;
   rowClassName?: (row: T, index: number) => string;
   onHeaderClick?: (columnId: string) => void;
+  onRowClick?: (row: T) => void;
   headerExtra?: (columnId: string) => React.ReactNode;
   getRowId?: (row: T, index: number) => string;
   pinFirstColumn?: boolean;
@@ -127,6 +128,7 @@ export default function DataTable<T>({
   emptyMessage = "No data.",
   rowClassName,
   onHeaderClick,
+  onRowClick,
   headerExtra,
   getRowId,
   pinFirstColumn = true,
@@ -300,7 +302,7 @@ export default function DataTable<T>({
               ri % 2 === 1 ? "bg-grid-row-alt" : ""
             }`;
             return (
-              <tr key={row.id} className={extraCls || defaultCls}>
+              <tr key={row.id} className={`${extraCls || defaultCls}${onRowClick ? " cursor-pointer" : ""}`} onClick={onRowClick ? () => onRowClick(row.original as T) : undefined}>
                 {row.getVisibleCells().map((cell) => {
                   const meta = cell.column.columnDef.meta as any;
                   const align = meta?.align ?? "left";

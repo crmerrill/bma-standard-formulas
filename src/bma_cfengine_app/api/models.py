@@ -38,6 +38,8 @@ OPTIONAL_FIELDS: list[str] = [
     "periodic_floor",
     "rate_cap",
     "rate_floor",
+    "days_past_due",
+    "loan_status",
 ]
 
 ALL_CANONICAL_FIELDS: list[str] = REQUIRED_FIELDS + OPTIONAL_FIELDS
