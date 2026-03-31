@@ -211,7 +211,8 @@ def add_bucket_column(
         ``bucketize_column``: Returns raw bin edges without applying ``pd.cut``.
     """
     if df[column].dtype in (object, "string", "category"):
-        return df[column].astype(str).fillna("N/A")
+        # Fill nulls before casting to str so None does not become literal "None".
+        return df[column].astype("object").fillna("N/A").astype(str)
 
     edges = bucketize_column(df[column], column, max_buckets)
     result = pd.cut(df[column], bins=edges, include_lowest=True, duplicates="drop")

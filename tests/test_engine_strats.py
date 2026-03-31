@@ -130,7 +130,7 @@ class TestAddBucketColumn(unittest.TestCase):
     def test_string_passthrough(self):
         df = pd.DataFrame({"state": ["CA", "TX", None, "NY"]})
         result = add_bucket_column(df, "state")
-        self.assertEqual(list(result), ["CA", "TX", "None", "NY"])
+        self.assertEqual(list(result), ["CA", "TX", "N/A", "NY"])
 
     def test_numeric_bucketing(self):
         df = _make_loan_df(50)
