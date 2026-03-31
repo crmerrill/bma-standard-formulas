@@ -281,6 +281,7 @@ def execute_run(
     run_mode: str,
     include_period_zero: bool = False,
     scenarios: list[dict[str, Any]] | None = None,
+    mapping_id: str | None = None,
 ) -> RunResponse:
     created_at = datetime.now(timezone.utc).isoformat()
     t_start = time.perf_counter()
@@ -290,14 +291,23 @@ def execute_run(
 
         df_raw, raw_name = run_store.load_upload_df(upload_id)
 
-        tape_snap = run_store.run_dir(run_id) / "tape_snapshot.parquet"
-        df_raw.to_parquet(tape_snap, index=False)
-
         from .rates import load_rates_df
         rates_df = load_rates_df(upload_id)
-        if rates_df is not None:
-            rates_snap = run_store.run_dir(run_id) / "rates_snapshot.csv"
-            rates_df.to_csv(rates_snap, index=False)
+
+        scenario_list_early = scenarios or [
+            {"name": "Base Case", "assumptions": assumptions.model_dump(), "run_mode": run_mode}
+        ]
+        run_store.save_run_inputs(
+            run_id=run_id,
+            tape_df=df_raw,
+            mappings=[m.model_dump() for m in mappings],
+            assumptions=assumptions.model_dump(),
+            asof_date=asof_date,
+            rates_df=rates_df,
+            grouping=grouping.model_dump() if grouping else None,
+            run_mode=run_mode,
+            scenarios=scenario_list_early,
+        )
 
         df_mapped = _dedup_cols(apply_mapping(df_raw, mappings))
         df_mapped = _coerce_int_columns(df_mapped)
@@ -327,9 +337,7 @@ def execute_run(
         if not pf.all_fixed and pf.resolved_mapping:
             rate_index = build_rate_index_from_file(upload_id, pf.resolved_mapping)
 
-        scenario_list = scenarios or [
-            {"name": "Base Case", "assumptions": assumptions.model_dump(), "run_mode": run_mode}
-        ]
+        scenario_list = scenario_list_early
 
         all_sections: list[str] = []
         all_group_names: list[str] = []
@@ -381,7 +389,7 @@ def execute_run(
 
         run_config = {
             "upload_id": upload_id,
-            "mapping_id": None,
+            "mapping_id": mapping_id,
             "mappings": [m.model_dump() for m in mappings],
             "asof_date": asof_date,
             "grouping": grouping.model_dump() if grouping else None,
@@ -402,8 +410,14 @@ def execute_run(
             "elapsed_seconds": elapsed_sec,
             "summary": summary.model_dump(),
             "run_config": run_config,
-            "tape_snapshot": "tape_snapshot.parquet",
-            "rates_snapshot": "rates_snapshot.csv" if rates_df is not None else None,
+            "has_inputs": True,
+            "inputs": {
+                "tape": "inputs/tape.parquet",
+                "tape_csv": "inputs/tape.csv",
+                "mappings": "inputs/mappings.json",
+                "assumptions": "inputs/assumptions.json",
+                "rates": "inputs/rates.csv" if rates_df is not None else None,
+            },
         })
 
         return RunResponse(
@@ -541,6 +555,7 @@ def list_all_runs() -> list[dict[str, Any]]:
             import json
             m = json.loads(mf.read_text())
             summary = m.get("summary", {})
+            has_inputs = m.get("has_inputs", (d / "inputs").is_dir())
             runs.append({
                 "run_id": d.name,
                 "status": m.get("status", "unknown"),
@@ -552,6 +567,7 @@ def list_all_runs() -> list[dict[str, Any]]:
                 "total_balance": summary.get("total_balance", 0),
                 "wac": summary.get("wac", 0),
                 "error": m.get("error"),
+                "has_inputs": has_inputs,
             })
         except Exception:
             pass
@@ -567,7 +583,59 @@ def get_run_config(run_id: str) -> dict[str, Any]:
         "scenarios": manifest.get("scenarios", []),
         "group_names": manifest.get("group_names", []),
         "summary": manifest.get("summary", {}),
+        "has_inputs": manifest.get("has_inputs", run_store.has_run_inputs(run_id)),
     }
+
+
+def get_run_input_tape_preview(run_id: str, max_rows: int = 500) -> CashflowPreview:
+    """Return the tape that was used for a given run."""
+    df = run_store.load_run_input(run_id, "tape")
+    truncated = len(df) > max_rows
+    total = len(df)
+    if truncated:
+        df = df.head(max_rows)
+    df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
+    rows = df.to_dict("records")
+    for row in rows:
+        for k, v in row.items():
+            if isinstance(v, (np.integer,)):
+                row[k] = int(v)
+            elif isinstance(v, (np.floating,)):
+                row[k] = float(v)
+    return CashflowPreview(
+        section="input_tape",
+        columns=list(df.columns),
+        rows=rows,
+        row_count=total,
+        truncated=truncated,
+    )
+
+
+def get_run_input_assumptions(run_id: str) -> dict[str, Any]:
+    """Return the assumptions used for a given run."""
+    try:
+        return run_store.load_run_input_json(run_id, "assumptions")
+    except FileNotFoundError:
+        manifest = run_store.load_manifest(run_id)
+        return {
+            "run_mode": manifest.get("run_config", {}).get("run_mode", "actual"),
+            "grouping": manifest.get("run_config", {}).get("grouping"),
+            "base_assumptions": manifest.get("scenarios", [{}])[0].get("assumptions", {}),
+            "scenarios": manifest.get("scenarios", []),
+        }
+
+
+def get_run_input_mappings(run_id: str) -> dict[str, Any]:
+    """Return the column mappings used for a given run."""
+    try:
+        return run_store.load_run_input_json(run_id, "mappings")
+    except FileNotFoundError:
+        manifest = run_store.load_manifest(run_id)
+        rc = manifest.get("run_config", {})
+        return {
+            "asof_date": rc.get("asof_date"),
+            "mappings": rc.get("mappings", []),
+        }
 
 
 def get_run_groups(run_id: str) -> tuple[list[str], dict[str, str]]:

@@ -155,6 +155,69 @@ export function getTapePreview(
   return request(`/uploads/${uploadId}/preview?${params}`);
 }
 
+// ---------- Tape Summary ----------
+
+export interface TapeSummaryRow {
+  column: string;
+  dtype: string;
+  count: number;
+  missing: number;
+  missing_pct: number;
+  unique: number;
+  mean: number | null;
+  median: number | null;
+  min: number | null;
+  q25: number | null;
+  q50: number | null;
+  q75: number | null;
+  p90: number | null;
+  p95: number | null;
+  p99: number | null;
+  p995: number | null;
+  p999: number | null;
+  max: number | null;
+  std: number | null;
+  top_values: unknown[];
+}
+
+export interface TapeSummaryResult {
+  columns: string[];
+  rows: TapeSummaryRow[];
+  row_count: number;
+}
+
+export function getTapeSummary(
+  uploadId: string,
+  mappingId?: string
+): Promise<TapeSummaryResult> {
+  const q = mappingId ? `?mapping_id=${mappingId}` : "";
+  return request(`/uploads/${uploadId}/tape-summary${q}`);
+}
+
+export interface UniqueValuesRow {
+  column: string;
+  dtype: string;
+  count: number;
+  missing: number;
+  missing_pct: number;
+  unique: number;
+  top_values: unknown[];
+}
+
+export interface UniqueValuesResult {
+  columns: string[];
+  rows: UniqueValuesRow[];
+  row_count: number;
+}
+
+export function getUniqueValues(
+  uploadId: string,
+  mappingId?: string
+): Promise<UniqueValuesResult> {
+  const q = mappingId ? `?mapping_id=${mappingId}` : "";
+  return request(`/uploads/${uploadId}/unique-values${q}`);
+}
+
 // ---------- Strats ----------
 
 export interface StratDimension {
@@ -193,6 +256,33 @@ export function computeStrat(
       max_buckets: maxBuckets,
     }),
   });
+}
+
+export function exportStrats(
+  uploadId: string,
+  dimensions: string[],
+  mappingId?: string,
+  format: "xlsx" | "csv" = "xlsx"
+): void {
+  const body = JSON.stringify({
+    dimensions,
+    mapping_id: mappingId || null,
+    format,
+  });
+  fetch(`${BASE}/uploads/${uploadId}/strats-export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  })
+    .then((res) => res.blob())
+    .then((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `strats.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
 }
 
 // ---------- Data Quality / Repair ----------
@@ -447,6 +537,7 @@ export interface RunListItem {
   total_balance: number;
   wac: number;
   error?: string;
+  has_inputs?: boolean;
 }
 
 export function listRuns(): Promise<RunListItem[]> {
@@ -474,6 +565,43 @@ export interface RunConfig {
 
 export function getRunConfig(runId: string): Promise<RunConfig> {
   return request(`/runs/${runId}/config`);
+}
+
+// ---------- Run Inputs ----------
+
+export function getRunInputTape(
+  runId: string,
+  maxRows = 500
+): Promise<CashflowPreview> {
+  return request(`/runs/${runId}/inputs/tape?max_rows=${maxRows}`);
+}
+
+export interface RunInputAssumptions {
+  run_mode: string;
+  grouping: { keys: string[] } | null;
+  base_assumptions: Record<string, unknown>;
+  scenarios: Array<{
+    name: string;
+    run_mode: string;
+    assumptions: Record<string, unknown>;
+  }> | null;
+}
+
+export function getRunInputAssumptions(
+  runId: string
+): Promise<RunInputAssumptions> {
+  return request(`/runs/${runId}/inputs/assumptions`);
+}
+
+export interface RunInputMappings {
+  asof_date: string | null;
+  mappings: FieldMapping[];
+}
+
+export function getRunInputMappings(
+  runId: string
+): Promise<RunInputMappings> {
+  return request(`/runs/${runId}/inputs/mappings`);
 }
 
 // ---------- Risk ----------

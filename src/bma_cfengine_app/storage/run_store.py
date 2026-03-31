@@ -144,6 +144,21 @@ def revert_to_raw(upload_id: str) -> None:
 # Run manifests and artifacts
 # ---------------------------------------------------------------------------
 
+INPUTS_SUBDIR = "inputs"
+OUTPUTS_SUBDIR = "outputs"
+
+
+def _inputs_dir(run_id: str) -> Path:
+    d = run_dir(run_id) / INPUTS_SUBDIR
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def _outputs_dir(run_id: str) -> Path:
+    d = run_dir(run_id) / OUTPUTS_SUBDIR
+    d.mkdir(exist_ok=True)
+    return d
+
 
 def save_manifest(run_id: str, manifest: dict[str, Any]) -> Path:
     d = run_dir(run_id)
@@ -160,38 +175,118 @@ def load_manifest(run_id: str) -> dict[str, Any]:
     return json.loads(p.read_text())
 
 
-def save_artifact(run_id: str, name: str, df: pd.DataFrame) -> Path:
-    d = run_dir(run_id) / "artifacts"
-    d.mkdir(exist_ok=True)
-    dest = d / f"{name}.parquet"
-    df.to_parquet(dest, index=False)
-    return dest
+# ---------------------------------------------------------------------------
+# Run inputs: tape, rates, mappings, assumptions
+# ---------------------------------------------------------------------------
 
 
-def save_artifact_csv(run_id: str, name: str, df: pd.DataFrame) -> Path:
-    d = run_dir(run_id) / "artifacts"
-    d.mkdir(exist_ok=True)
-    dest = d / f"{name}.csv"
-    df.to_csv(dest, index=False)
-    return dest
+def save_run_inputs(
+    run_id: str,
+    tape_df: pd.DataFrame,
+    mappings: list[dict[str, Any]],
+    assumptions: dict[str, Any],
+    asof_date: str | None,
+    rates_df: pd.DataFrame | None = None,
+    grouping: dict[str, Any] | None = None,
+    run_mode: str = "actual",
+    scenarios: list[dict[str, Any]] | None = None,
+) -> None:
+    """Persist all run inputs in a structured inputs/ subdirectory."""
+    d = _inputs_dir(run_id)
+
+    tape_df.to_parquet(d / "tape.parquet", index=False)
+    tape_df.to_csv(d / "tape.csv", index=False)
+
+    if rates_df is not None:
+        rates_df.to_csv(d / "rates.csv", index=False)
+
+    mapping_doc = {
+        "asof_date": asof_date,
+        "mappings": mappings,
+    }
+    (d / "mappings.json").write_text(json.dumps(mapping_doc, indent=2, default=str))
+
+    assumptions_doc = {
+        "run_mode": run_mode,
+        "grouping": grouping,
+        "base_assumptions": assumptions,
+        "scenarios": scenarios,
+    }
+    (d / "assumptions.json").write_text(json.dumps(assumptions_doc, indent=2, default=str))
 
 
-def load_artifact(run_id: str, name: str) -> pd.DataFrame:
-    d = run_dir(run_id) / "artifacts"
+def load_run_input(run_id: str, name: str) -> pd.DataFrame:
+    """Load a run input (tape or rates) as a DataFrame."""
+    d = run_dir(run_id) / INPUTS_SUBDIR
     parquet = d / f"{name}.parquet"
     if parquet.exists():
         return pd.read_parquet(parquet)
     csv = d / f"{name}.csv"
     if csv.exists():
         return pd.read_csv(csv)
+    legacy = run_dir(run_id) / f"{name}_snapshot.parquet"
+    if legacy.exists():
+        return pd.read_parquet(legacy)
+    legacy_csv = run_dir(run_id) / f"{name}_snapshot.csv"
+    if legacy_csv.exists():
+        return pd.read_csv(legacy_csv)
+    raise FileNotFoundError(f"Input '{name}' not found for run {run_id}")
+
+
+def load_run_input_json(run_id: str, name: str) -> dict[str, Any]:
+    """Load a JSON input file (mappings.json or assumptions.json)."""
+    d = run_dir(run_id) / INPUTS_SUBDIR
+    p = d / f"{name}.json"
+    if p.exists():
+        return json.loads(p.read_text())
+    raise FileNotFoundError(f"Input '{name}' not found for run {run_id}")
+
+
+def has_run_inputs(run_id: str) -> bool:
+    d = run_dir(run_id) / INPUTS_SUBDIR
+    return d.exists() and any(d.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# Run outputs (artifacts)
+# ---------------------------------------------------------------------------
+
+
+def save_artifact(run_id: str, name: str, df: pd.DataFrame) -> Path:
+    d = _outputs_dir(run_id)
+    dest = d / f"{name}.parquet"
+    df.to_parquet(dest, index=False)
+    return dest
+
+
+def save_artifact_csv(run_id: str, name: str, df: pd.DataFrame) -> Path:
+    d = _outputs_dir(run_id)
+    dest = d / f"{name}.csv"
+    df.to_csv(dest, index=False)
+    return dest
+
+
+def load_artifact(run_id: str, name: str) -> pd.DataFrame:
+    for subdir in (OUTPUTS_SUBDIR, "artifacts"):
+        d = run_dir(run_id) / subdir
+        parquet = d / f"{name}.parquet"
+        if parquet.exists():
+            return pd.read_parquet(parquet)
+        csv = d / f"{name}.csv"
+        if csv.exists():
+            return pd.read_csv(csv)
     raise FileNotFoundError(f"Artifact '{name}' not found for run {run_id}")
 
 
 def list_artifacts(run_id: str) -> list[str]:
-    d = run_dir(run_id) / "artifacts"
-    if not d.exists():
-        return []
-    return [f.stem for f in d.iterdir() if f.is_file()]
+    seen: set[str] = set()
+    for subdir in (OUTPUTS_SUBDIR, "artifacts"):
+        d = run_dir(run_id) / subdir
+        if d.exists():
+            for f in d.iterdir():
+                if f.is_file():
+                    seen.add(f.stem)
+    return sorted(seen)
 
 
 # ---------------------------------------------------------------------------

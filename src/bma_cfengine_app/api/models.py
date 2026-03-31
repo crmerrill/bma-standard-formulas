@@ -26,7 +26,6 @@ OPTIONAL_FIELDS: list[str] = [
     "pi_advanced",
     "advance_months",
     "reset_frequency",
-    "group_id",
     "maturity_date",
     "first_payment_date",
     "next_payment_date",

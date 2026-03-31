@@ -8,6 +8,7 @@ import {
   RotateCcw,
   Clock,
 } from "lucide-react";
+import { MONO } from "../lib/format";
 
 export type Page = "intake" | "tape" | "setup" | "results" | "history";
 
@@ -47,7 +48,7 @@ export default function Layout({
         <div className="px-4 py-4 border-b border-border">
           <h1
             className="text-primary font-semibold text-base tracking-tight"
-            style={{ fontFamily: "'JetBrains Mono', monospace" }}
+            style={MONO}
           >
             BMA Engine
           </h1>
