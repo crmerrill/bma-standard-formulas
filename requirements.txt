@@ -3,3 +3,4 @@ scipy
 pandas
 pyarrow
 openpyxl
+pydantic
