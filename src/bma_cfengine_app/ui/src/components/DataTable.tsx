@@ -245,7 +245,7 @@ export default function DataTable<T>({
       style={{ maxHeight: typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight }}
     >
       <table
-        className="border-collapse text-xs"
+        className="border-separate border-spacing-0 text-xs"
         style={{ width: totalWidth, minWidth: "100%" }}
       >
         <colgroup>
@@ -253,9 +253,9 @@ export default function DataTable<T>({
             <col key={h.id} style={{ width: h.getSize() }} />
           ))}
         </colgroup>
-        <thead className="sticky top-0 z-10">
+        <thead className="sticky top-0 z-20">
           {headerGroups.map((hg) => (
-            <tr key={hg.id} className="bg-grid-header text-muted-foreground border-b border-border">
+            <tr key={hg.id} className="text-muted-foreground">
               {hg.headers.map((header) => {
                 const meta = header.column.columnDef.meta as any;
                 const align = meta?.align ?? "left";
@@ -264,9 +264,9 @@ export default function DataTable<T>({
                 return (
                   <th
                     key={header.id}
-                    className={`relative px-3 py-1.5 whitespace-nowrap select-none ${
+                    className={`relative px-3 py-1.5 whitespace-nowrap select-none bg-grid-header border-b border-border ${
                       align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left"
-                    } ${pinLeft ? "sticky left-0 bg-grid-header z-30 overflow-visible" : ""} ${headerCls}`}
+                    } ${pinLeft ? "sticky left-0 z-30 overflow-visible" : ""} ${headerCls}`}
                   >
                     <div className="flex items-center gap-1">
                       <DragHandle
@@ -299,7 +299,7 @@ export default function DataTable<T>({
           {rows.map((row, ri) => {
             const extraCls = rowClassName ? rowClassName(row.original, ri) : "";
             const defaultCls = `border-b border-border/50 hover:bg-grid-row-hover transition-colors ${
-              ri % 2 === 1 ? "bg-grid-row-alt" : ""
+              ri % 2 === 1 ? "bg-grid-row-alt" : "bg-background"
             }`;
             return (
               <tr key={row.id} className={`${extraCls || defaultCls}${onRowClick ? " cursor-pointer" : ""}`} onClick={onRowClick ? () => onRowClick(row.original as T) : undefined}>
@@ -312,9 +312,9 @@ export default function DataTable<T>({
                   return (
                     <td
                       key={cell.id}
-                      className={`px-3 py-1 whitespace-nowrap border-r border-border/20 last:border-r-0 ${
+                      className={`px-3 py-1 whitespace-nowrap border-r border-border/75 last:border-r-0 ${
                         align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left"
-                      } ${pinLeft ? "sticky left-0 bg-inherit z-20" : ""} ${cellCls}`}
+                      } ${pinLeft ? `sticky left-0 z-10 ${ri % 2 === 1 ? "bg-grid-row-alt" : "bg-background"}` : ""} ${cellCls}`}
                       style={mono ? MONO : undefined}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
