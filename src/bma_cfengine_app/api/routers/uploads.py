@@ -3,10 +3,16 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, File, Query, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ...orchestrator.mapping import apply_mapping, auto_infer_mappings, profile_dataframe
+from ...orchestrator.mapping import (
+    apply_mapping,
+    auto_infer_mappings,
+    profile_dataframe,
+    sanitize_field_mappings,
+)
 from ...orchestrator.rates import rates_preflight, save_rates_file
 from ...orchestrator.run_service import compute_tape_stats
 from ...orchestrator.strats import available_strat_dimensions, compute_strat, summarize_tape, summarize_unique_values
@@ -34,7 +40,9 @@ def _load_mapped_df(upload_id: str, mapping_id: str | None = None):
     if mapping_id:
         try:
             mapping_data = run_store.load_mapping(upload_id, mapping_id)
-            mappings = [FieldMapping(**m) for m in mapping_data["mappings"]]
+            mappings = sanitize_field_mappings(
+                [FieldMapping(**m) for m in mapping_data["mappings"]]
+            )
             df = apply_mapping(df, mappings)
         except FileNotFoundError:
             pass
@@ -60,15 +68,14 @@ async def upload_tape(file: UploadFile = File(...)):
 @router.get("/uploads/{upload_id}/profile", response_model=TapeProfile)
 async def get_profile(upload_id: str):
     df, file_name = run_store.load_upload_df(upload_id)
-    file_path = run_store.upload_dir(upload_id) / file_name
-    file_size = file_path.stat().st_size if file_path.exists() else 0
+    file_size = run_store.raw_upload_byte_size(upload_id)
     return profile_dataframe(df, upload_id, file_name, file_size)
 
 
 @router.get("/uploads/{upload_id}/auto-map", response_model=list[FieldMapping])
 async def auto_map(upload_id: str):
     df, _ = run_store.load_upload_df(upload_id)
-    return auto_infer_mappings(list(df.columns))
+    return sanitize_field_mappings(auto_infer_mappings(list(df.columns)))
 
 
 @router.get("/uploads/{upload_id}/stats", response_model=TapeStats)
@@ -103,11 +110,12 @@ async def tape_summary(upload_id: str, mapping_id: Optional[str] = Query(None)):
         for k, v in row.items():
             if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
                 row[k] = None
-    return {
+    payload = {
         "columns": list(summary_df.columns),
         "rows": rows,
         "row_count": len(rows),
     }
+    return jsonable_encoder(payload)
 
 
 @router.get("/uploads/{upload_id}/unique-values")
@@ -120,11 +128,12 @@ async def unique_values(upload_id: str, mapping_id: Optional[str] = Query(None))
         for k, v in row.items():
             if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
                 row[k] = None
-    return {
+    payload = {
         "columns": list(uv_df.columns),
         "rows": rows,
         "row_count": len(rows),
     }
+    return jsonable_encoder(payload)
 
 
 @router.get("/uploads/{upload_id}/strat-dimensions")

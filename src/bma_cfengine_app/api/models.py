@@ -40,6 +40,9 @@ OPTIONAL_FIELDS: list[str] = [
     "rate_floor",
     "days_past_due",
     "loan_status",
+    # Loan field; CFEngine grouping uses Run Setup keys — we still allow the name so
+    # validate never fails on legacy/auto maps; persist layer strips it from saved mappings.
+    "group_id",
 ]
 
 ALL_CANONICAL_FIELDS: list[str] = REQUIRED_FIELDS + OPTIONAL_FIELDS

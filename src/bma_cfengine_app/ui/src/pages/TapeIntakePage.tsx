@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import {
   Upload,
@@ -26,7 +26,7 @@ const REQUIRED_FIELDS = [
 ];
 
 const OPTIONAL_GENERAL_FIELDS = [
-  "servicing_fee", "accrued_interest", "group_id",
+  "servicing_fee", "accrued_interest",
   "maturity_date", "first_payment_date", "next_payment_date", "last_payment_date",
 ];
 
@@ -53,6 +53,11 @@ const FIELD_SECTIONS: FieldSection[] = [
   { label: "Optional — Floating Rate / ARM", fields: OPTIONAL_FLOATING_FIELDS, required: false },
 ];
 
+/** Pool/group comes from Run Setup keys, not tape mapping (never send to /mappings/*). */
+function stripGroupId(maps: FieldMapping[]): FieldMapping[] {
+  return maps.filter((m) => m.canonical_field.trim().toLowerCase() !== "group_id");
+}
+
 interface Props {
   onComplete: (uploadId: string, mappingId: string, mappings: FieldMapping[]) => void;
   asofDate: string;
@@ -69,19 +74,31 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
   const [dqMapping, setDqMapping] = useState<DqMapping | null>(null);
   const [dqLoading, setDqLoading] = useState(false);
   const [dqApplied, setDqApplied] = useState(false);
+  const [flowError, setFlowError] = useState<string | null>(null);
 
   const onDrop = useCallback(async (files: File[]) => {
     if (!files.length) return;
     setUploading(true);
+    setFlowError(null);
     try {
       const res = await api.uploadTape(files[0]);
-      setUpload(res);
       const [prof, autoMap] = await Promise.all([
         api.getProfile(res.upload_id),
         api.getAutoMap(res.upload_id),
       ]);
+      setUpload(res);
       setProfile(prof);
-      setMappings(autoMap);
+      setMappings(stripGroupId(autoMap));
+      setValidation(null);
+      setMappingId(null);
+      setDqMapping(null);
+      setDqApplied(false);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setFlowError(msg);
+      setUpload(null);
+      setProfile(null);
+      setMappings([]);
     } finally {
       setUploading(false);
     }
@@ -98,44 +115,60 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
 
   const handleValidate = async () => {
     if (!upload) return;
-    const res = await api.validateMapping({
-      upload_id: upload.upload_id,
-      mappings,
-      asof_date: asofDate || null,
-    });
-    setValidation(res);
-    if (res.inferred_mappings.length) {
-      setMappings((prev) => {
-        const existing = new Set(prev.map((m) => m.canonical_field));
-        const novel = res.inferred_mappings.filter((m) => !existing.has(m.canonical_field));
-        return [...prev, ...novel];
-      });
-    }
-
-    if (res.valid) {
-      const { mapping_id: mid } = await api.saveMapping({
+    setFlowError(null);
+    try {
+      const mapsForApi = stripGroupId(mappings);
+      const res = await api.validateMapping({
         upload_id: upload.upload_id,
-        mappings,
+        mappings: mapsForApi,
         asof_date: asofDate || null,
       });
-      setMappingId(mid);
+      setValidation(res);
 
-      setDqLoading(true);
-      try {
-        const dq = await api.detectDq(upload.upload_id, mid);
-        setDqMapping(dq);
-      } finally {
-        setDqLoading(false);
+      const inferred = stripGroupId(res.inferred_mappings);
+      let nextMaps = mapsForApi;
+      if (inferred.length) {
+        const byCanon = new Map(mapsForApi.map((m) => [m.canonical_field, m]));
+        for (const m of inferred) {
+          if (!byCanon.has(m.canonical_field)) byCanon.set(m.canonical_field, m);
+        }
+        nextMaps = Array.from(byCanon.values());
       }
+      setMappings(nextMaps);
+
+      if (res.valid) {
+        const { mapping_id: mid } = await api.saveMapping({
+          upload_id: upload.upload_id,
+          mappings: nextMaps,
+          asof_date: asofDate || null,
+        });
+        setMappingId(mid);
+
+        setDqLoading(true);
+        try {
+          const dq = await api.detectDq(upload.upload_id, mid);
+          setDqMapping(dq);
+        } finally {
+          setDqLoading(false);
+        }
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setFlowError(msg);
     }
   };
 
-  const handleApplyDq = async () => {
-    if (!upload || !mappingId || !dqMapping) return;
+  const handleApplyDq = async (mappingToApply?: DqMapping) => {
+    const payload = mappingToApply ?? dqMapping;
+    if (!upload || !mappingId || !payload) return;
     setSaving(true);
+    setFlowError(null);
     try {
-      await api.applyDq(upload.upload_id, dqMapping, mappingId);
+      await api.applyDq(upload.upload_id, payload, mappingId);
+      setDqMapping(payload);
       setDqApplied(true);
+    } catch (e: unknown) {
+      setFlowError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -144,11 +177,14 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
   const handleContinue = async () => {
     if (!upload || !mappingId || !validation?.valid) return;
     setSaving(true);
+    setFlowError(null);
     try {
       if (dqMapping && dqMapping.pattern !== "none" && !dqApplied) {
         await api.applyDq(upload.upload_id, dqMapping, mappingId);
       }
-      onComplete(upload.upload_id, mappingId, mappings);
+      onComplete(upload.upload_id, mappingId, stripGroupId(mappings));
+    } catch (e: unknown) {
+      setFlowError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -168,6 +204,29 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
 
   return (
     <div className="space-y-6 max-w-5xl">
+      {flowError && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive flex gap-3 items-start">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium text-foreground">Something went wrong</p>
+            <p className="text-xs mt-1 break-words opacity-90">{flowError}</p>
+            <p className="text-[10px] text-muted-foreground mt-2">
+              From repo root with deps installed:{" "}
+              <code className="text-foreground/80 break-all" style={MONO}>
+                PYTHONPATH=src uvicorn bma_cfengine_app.api.main:app --reload --port 8000
+              </code>
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setFlowError(null)}
+            className="text-xs text-muted-foreground hover:text-foreground shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Upload zone */}
       {!upload && (
         <div
@@ -287,6 +346,7 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
               onApply={handleApplyDq}
               applied={dqApplied}
               loading={dqLoading}
+              tapeColumns={profile?.columns.map((c) => c.name) ?? []}
             />
           )}
           {validation?.valid && dqLoading && (
@@ -379,23 +439,62 @@ const PATTERN_LABELS: Record<string, string> = {
   none: "None Detected",
 };
 
+/** Parse comma/semicolon-separated disposition codes (numbers, strings, true/false). */
+function parseDispositionCodes(raw: string): unknown[] {
+  return raw
+    .split(/[,;]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .map((p) => {
+      const lower = p.toLowerCase();
+      if (lower === "true") return true;
+      if (lower === "false") return false;
+      const n = Number(p);
+      if (p !== "" && !Number.isNaN(n) && /^-?\d+(\.\d+)?$/.test(p)) return n;
+      return p;
+    });
+}
+
 function DqMappingPanel({
   mapping,
   onChange,
   onApply,
   applied,
   loading,
+  tapeColumns,
 }: {
   mapping: DqMapping;
   onChange: (m: DqMapping) => void;
-  onApply: () => void;
+  /** Pass final mapping (after parsing FC/REO code fields). */
+  onApply: (mapping: DqMapping) => void;
   applied: boolean;
   loading: boolean;
+  tapeColumns: string[];
 }) {
+  const [fcCodesText, setFcCodesText] = useState("");
+  const [reoCodesText, setReoCodesText] = useState("");
+
+  useEffect(() => {
+    setFcCodesText(mapping.fc_values?.map((v) => String(v)).join(", ") ?? "");
+    setReoCodesText(mapping.reo_values?.map((v) => String(v)).join(", ") ?? "");
+  }, [mapping.fc_values, mapping.reo_values]);
+
   if (loading) return null;
 
   const patternLabel = PATTERN_LABELS[mapping.pattern] ?? mapping.pattern;
   const isNone = mapping.pattern === "none";
+  const hasManualFcReo =
+    (!!mapping.fc_col && (mapping.fc_values?.length ?? 0) > 0) ||
+    (!!mapping.reo_col && (mapping.reo_values?.length ?? 0) > 0);
+  const canApplyDq = !isNone || hasManualFcReo;
+
+  const commitFcReoCodes = () => {
+    onChange({
+      ...mapping,
+      fc_values: parseDispositionCodes(fcCodesText),
+      reo_values: parseDispositionCodes(reoCodesText),
+    });
+  };
 
   return (
     <div className="mt-3 border border-border rounded-lg overflow-clip">
@@ -466,15 +565,98 @@ function DqMappingPanel({
           </div>
         )}
 
-        {isNone && (
+        {isNone && !hasManualFcReo && (
           <p className="text-muted-foreground italic">
-            No delinquency data detected in this tape. DQ columns will not be added.
+            No delinquency data detected in this tape. You can still map FC/REO from a code column
+            below (e.g. zero-balance or loan-status codes).
           </p>
         )}
 
-        {!isNone && !applied && (
+        {tapeColumns.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-border space-y-2">
+            <p className="text-[11px] font-medium text-foreground">FC / REO code mapping</p>
+            <p className="text-muted-foreground text-[10px] leading-snug">
+              When FC/REO are not simple Y/N flags, choose the source column(s) and enter which
+              raw values mean foreclosure vs REO (comma-separated). Often the same column for both
+              (e.g. <span className="font-mono">zerobal_code</span>).
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-muted-foreground">FC column</span>
+                <select
+                  className="rounded border border-border bg-background px-2 py-1 font-mono text-[11px]"
+                  value={mapping.fc_col ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value || null;
+                    onChange({ ...mapping, fc_col: v, fc_values: mapping.fc_values ?? [] });
+                  }}
+                >
+                  <option value="">—</option>
+                  {tapeColumns.map((c) => (
+                    <option key={`fc-${c}`} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-muted-foreground">REO column</span>
+                <select
+                  className="rounded border border-border bg-background px-2 py-1 font-mono text-[11px]"
+                  value={mapping.reo_col ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value || null;
+                    onChange({ ...mapping, reo_col: v, reo_values: mapping.reo_values ?? [] });
+                  }}
+                >
+                  <option value="">—</option>
+                  {tapeColumns.map((c) => (
+                    <option key={`reo-${c}`} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-muted-foreground">Values = FC</span>
+                <input
+                  type="text"
+                  className="rounded border border-border bg-background px-2 py-1 font-mono text-[11px]"
+                  placeholder="e.g. 2, 3, 6"
+                  value={fcCodesText}
+                  onChange={(e) => setFcCodesText(e.target.value)}
+                  onBlur={commitFcReoCodes}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-muted-foreground">Values = REO</span>
+                <input
+                  type="text"
+                  className="rounded border border-border bg-background px-2 py-1 font-mono text-[11px]"
+                  placeholder="e.g. 9, 15, 16"
+                  value={reoCodesText}
+                  onChange={(e) => setReoCodesText(e.target.value)}
+                  onBlur={commitFcReoCodes}
+                />
+              </label>
+            </div>
+          </div>
+        )}
+
+        {canApplyDq && !applied && (
           <button
-            onClick={onApply}
+            type="button"
+            onClick={() => {
+              const next: DqMapping = {
+                ...mapping,
+                fc_values: parseDispositionCodes(fcCodesText),
+                reo_values: parseDispositionCodes(reoCodesText),
+              };
+              onChange(next);
+              onApply(next);
+            }}
             className="mt-1 px-3 py-1.5 rounded border border-primary/20 bg-primary/10 text-primary text-xs hover:bg-primary/20 transition-colors"
           >
             Apply DQ Mapping

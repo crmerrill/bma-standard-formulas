@@ -585,11 +585,23 @@ def summarize_unique_values(
     return pd.DataFrame(rows)
 
 
+def _is_numeric_for_summary_stats(s: pd.Series) -> bool:
+    """True for columns where mean/quantile/std are defined (excludes bool).
+
+    Pandas reports ``bool`` as numeric, but quantile/std on boolean data use
+    numpy ops that raise (e.g. "numpy boolean subtract ... is not supported").
+    """
+    if pd.api.types.is_bool_dtype(s):
+        return False
+    return pd.api.types.is_numeric_dtype(s)
+
+
 def summarize_tape(df: pd.DataFrame) -> pd.DataFrame:
     """Per-column descriptive statistics: mean, median, quartiles, deciles, extremes.
 
     Numeric columns get full statistical profiles (mean, median, percentiles,
     min/max, std).  Non-numeric columns get ``None`` for all numeric stats.
+    Boolean columns are treated as categorical (no mean/quantiles).
     All columns get count, missing count/pct, unique count, and top values.
 
     Args:
@@ -602,7 +614,7 @@ def summarize_tape(df: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for col in df.columns:
         s = df[col]
-        is_num = pd.api.types.is_numeric_dtype(s)
+        is_num = _is_numeric_for_summary_stats(s)
         valid = s.dropna()
         missing = int(s.isna().sum())
         total = len(s)

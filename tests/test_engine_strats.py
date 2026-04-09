@@ -388,6 +388,14 @@ class TestSummarizeTape(unittest.TestCase):
         a_row = summary[summary["column"] == "a"].iloc[0]
         self.assertEqual(a_row["missing"], 1)
 
+    def test_boolean_column_skips_numeric_stats(self):
+        """Bool is numeric in pandas but quantile/std must not run (numpy error)."""
+        df = pd.DataFrame({"flag": [True, False, True, False]})
+        summary = summarize_tape(df)
+        row = summary[summary["column"] == "flag"].iloc[0]
+        self.assertTrue(row["mean"] is None or pd.isna(row["mean"]))
+        self.assertIsInstance(row["top_values"], list)
+
 
 class TestSummarizeUniqueValues(unittest.TestCase):
 

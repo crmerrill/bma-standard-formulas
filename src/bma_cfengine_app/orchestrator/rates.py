@@ -75,14 +75,16 @@ def rates_preflight(
     mapping_id: str | None = None,
 ) -> RatesPreflightResponse:
     """Run preflight checks on the rates file vs. the tape's index requirements."""
-    from .mapping import apply_mapping
+    from .mapping import apply_mapping, sanitize_field_mappings
     from ..api.models import FieldMapping
 
     df_tape, _ = run_store.load_upload_df(upload_id)
     if mapping_id:
         try:
             mapping_data = run_store.load_mapping(upload_id, mapping_id)
-            mappings = [FieldMapping(**m) for m in mapping_data["mappings"]]
+            mappings = sanitize_field_mappings(
+                [FieldMapping(**m) for m in mapping_data["mappings"]]
+            )
             df_tape = apply_mapping(df_tape, mappings)
         except FileNotFoundError:
             pass

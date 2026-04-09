@@ -7,10 +7,11 @@ import {
   ChevronRight,
   RotateCcw,
   Clock,
+  Layers,
 } from "lucide-react";
 import { MONO } from "../lib/format";
 
-export type Page = "intake" | "tape" | "setup" | "results" | "history";
+export type Page = "intake" | "tape" | "setup" | "results" | "history" | "structuring";
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "intake", label: "Tape Intake", icon: Upload },
@@ -18,6 +19,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "setup", label: "Run Setup", icon: Settings2 },
   { id: "results", label: "Results", icon: BarChart3 },
   { id: "history", label: "Run History", icon: Clock },
+  { id: "structuring", label: "Structuring Studio", icon: Layers },
 ];
 
 interface LayoutProps {
@@ -106,7 +108,7 @@ export default function Layout({
           {actions}
         </header>
         {/* Page content */}
-        <main className="flex-1 overflow-auto p-4">{children}</main>
+        <main className="flex-1 min-h-0 overflow-auto p-4">{children}</main>
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ import TapeViewPage from "./pages/TapeViewPage";
 import RunSetupPage from "./pages/RunSetupPage";
 import ResultsPage from "./pages/ResultsPage";
 import RunHistoryPage from "./pages/RunHistoryPage";
+import DealEditor from "./features/deals/DealEditor";
 import type { FieldMapping, RunResponse } from "./services/api";
 import * as api from "./services/api";
 import { MONO } from "./lib/format";
@@ -16,6 +17,7 @@ const PAGE_TITLES: Record<Page, string> = {
   setup: "Run Setup",
   results: "Results",
   history: "Run History",
+  structuring: "Structuring Studio",
 };
 
 // ---------------------------------------------------------------------------
@@ -80,7 +82,7 @@ export default function App() {
     saveSession({ page, uploadId, mappingId, mappings, run, asofDate, groupKeys });
   }, [page, uploadId, mappingId, mappings, run, asofDate, groupKeys]);
 
-  const enabledPages = new Set<Page>(["intake", "history"]);
+  const enabledPages = new Set<Page>(["intake", "history", "structuring"]);
   if (uploadId && mappingId) {
     enabledPages.add("tape");
     enabledPages.add("setup");
@@ -201,6 +203,7 @@ export default function App() {
       {page === "history" && (
         <RunHistoryPage onViewRun={handleViewRun} onRerun={handleRerun} />
       )}
+      {page === "structuring" && <DealEditor />}
     </Layout>
   );
 }

@@ -39,7 +39,7 @@ from ..api.models import (
 from ..storage import run_store
 from .assumptions_resolver import resolve_portfolio_curves
 from .grouping import compute_group_ids
-from .mapping import apply_mapping
+from .mapping import apply_mapping, sanitize_field_mappings
 from .rates import build_rate_index_from_file, rates_preflight
 
 INT_FIELDS = {
@@ -288,6 +288,8 @@ def execute_run(
 
     try:
         run_store.save_manifest(run_id, {"status": "running", "upload_id": upload_id})
+
+        mappings = sanitize_field_mappings(mappings)
 
         df_raw, raw_name = run_store.load_upload_df(upload_id)
 

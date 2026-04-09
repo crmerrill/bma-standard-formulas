@@ -44,6 +44,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
   const [tapeSummary, setTapeSummary] = useState<TapeSummaryResult | null>(null);
   const [uniqueValues, setUniqueValues] = useState<UniqueValuesResult | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryErrors, setSummaryErrors] = useState<{ tape?: string; unique?: string }>({});
 
   interface DrillDown {
     parentBucket: string;
@@ -237,15 +238,49 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
   };
 
   useEffect(() => {
-    if (tab !== "summary" || tapeSummary || summaryLoading) return;
+    if (tab !== "summary") return;
+    let cancelled = false;
     setSummaryLoading(true);
-    Promise.all([
+    setSummaryErrors({});
+    setTapeSummary(null);
+    setUniqueValues(null);
+
+    Promise.allSettled([
       api.getTapeSummary(uploadId, mappingId),
       api.getUniqueValues(uploadId, mappingId),
-    ])
-      .then(([ts, uv]) => { setTapeSummary(ts); setUniqueValues(uv); })
-      .finally(() => setSummaryLoading(false));
-  }, [tab, uploadId, mappingId]);
+    ]).then((results) => {
+      if (cancelled) return;
+      const nextErr: { tape?: string; unique?: string } = {};
+      if (results[0].status === "fulfilled") {
+        const ts = results[0].value;
+        setTapeSummary({
+          ...ts,
+          rows: Array.isArray(ts.rows) ? ts.rows : [],
+          row_count: ts.row_count ?? (Array.isArray(ts.rows) ? ts.rows.length : 0),
+        });
+      } else {
+        const reason = results[0].reason;
+        nextErr.tape = reason instanceof Error ? reason.message : String(reason);
+      }
+      if (results[1].status === "fulfilled") {
+        const uv = results[1].value;
+        setUniqueValues({
+          ...uv,
+          rows: Array.isArray(uv.rows) ? uv.rows : [],
+          row_count: uv.row_count ?? (Array.isArray(uv.rows) ? uv.rows.length : 0),
+        });
+      } else {
+        const reason = results[1].reason;
+        nextErr.unique = reason instanceof Error ? reason.message : String(reason);
+      }
+      setSummaryErrors(nextErr);
+      setSummaryLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, uploadId, mappingId, refreshKey]);
 
   const runStratForGroup = async (groupId: number, dims: string[]) => {
     setStratGroups((prev) =>
@@ -635,6 +670,21 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
           </div>
         ) : (
           <div className="space-y-3">
+            {(summaryErrors.tape || summaryErrors.unique) && (
+              <div className="rounded-lg border border-destructive/35 bg-destructive/10 px-3 py-2 text-xs text-destructive space-y-1">
+                {summaryErrors.tape && (
+                  <p>
+                    <span className="font-medium text-foreground">Tape summary</span> (missing-value analysis &amp; column statistics):{" "}
+                    {summaryErrors.tape}
+                  </p>
+                )}
+                {summaryErrors.unique && (
+                  <p>
+                    <span className="font-medium text-foreground">Unique values</span>: {summaryErrors.unique}
+                  </p>
+                )}
+              </div>
+            )}
             {/* Aggregate tape stats */}
             {stats && (
               <CollapsiblePanel icon={PieChart} title="Tape Aggregates">
@@ -726,7 +776,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
 
             {/* Unique values analysis */}
             {uniqueValues && (
-              <CollapsiblePanel icon={ListTree} title="Unique Values" badge={`${uniqueValues.row_count} columns`} defaultOpen={false}>
+              <CollapsiblePanel icon={ListTree} title="Unique Values" badge={`${uniqueValues.row_count} columns`}>
                 <DataTable
                   tableId="unique_values"
                   maxHeight="600px"

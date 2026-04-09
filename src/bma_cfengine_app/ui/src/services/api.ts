@@ -1,12 +1,38 @@
 const BASE = "/api";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init);
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, init);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg === "Failed to fetch" || msg.includes("NetworkError")) {
+      throw new Error(
+        "Cannot reach the API. Start the engine server (e.g. uvicorn on port 8000) so /api is available."
+      );
+    }
+    throw e;
+  }
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status}: ${body}`);
+    try {
+      const j = JSON.parse(body) as { detail?: unknown };
+      if (j?.detail != null) {
+        const d = j.detail;
+        const msg =
+          typeof d === "string"
+            ? d
+            : Array.isArray(d)
+              ? d.map((x: { msg?: string }) => x?.msg ?? String(x)).join("; ")
+              : JSON.stringify(d);
+        throw new Error(`${res.status}: ${msg}`);
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith(String(res.status))) throw e;
+    }
+    throw new Error(`${res.status}: ${body || res.statusText}`);
   }
-  return res.json();
+  return res.json() as Promise<T>;
 }
 
 export interface UploadResponse {
@@ -668,6 +694,54 @@ export function computeRisk(
   }
 ): Promise<RiskResponse> {
   return request(`/runs/${runId}/risk`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// ---------- Structuring studio deals (Blockly IR snapshots) ----------
+
+export interface StudioDealSummary {
+  deal_id: string;
+  deal_name: string;
+  current_version: number;
+  updated_at: string;
+}
+
+export interface StudioDealSaveResponse {
+  deal_id: string;
+  deal_name: string;
+  version: number;
+  created_at: string;
+}
+
+export interface StudioDealSnapshot {
+  deal_id: string;
+  deal_name: string;
+  schema_version: string;
+  saved_at: string;
+  ir: Record<string, unknown>;
+}
+
+export function listStudioDeals(): Promise<StudioDealSummary[]> {
+  return request("/deals");
+}
+
+export function getStudioDeal(
+  dealId: string,
+  version?: number
+): Promise<StudioDealSnapshot> {
+  const q = version != null ? `?version=${version}` : "";
+  return request(`/deals/${dealId}${q}`);
+}
+
+export function saveStudioDeal(body: {
+  deal_id?: string | null;
+  deal_name: string;
+  ir: Record<string, unknown>;
+}): Promise<StudioDealSaveResponse> {
+  return request("/deals", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

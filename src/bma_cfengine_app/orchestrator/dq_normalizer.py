@@ -140,10 +140,10 @@ class DqMapping(BaseModel):
         dpd_col:         Column containing days-past-due values.
         pay_thru_col:    Column containing pay-through date.
         asof_col:        Column containing as-of / reporting date.
-        fc_col:          Column containing FC indicator.
-        fc_values:       Values in *fc_col* that mean "in foreclosure".
-        reo_col:         Column containing REO indicator.
-        reo_values:      Values in *reo_col* that mean "REO".
+        fc_col:          Column containing FC indicator (boolean, or codes).
+        fc_values:       Values in *fc_col* that mean "in foreclosure" (auto or user-edited).
+        reo_col:         Column containing REO indicator (boolean, or codes).
+        reo_values:      Values in *reo_col* that mean "REO" (auto or user-edited).
         status_code_map: Override map from status code → canonical label.
         balance_bucket_cols: Map of canonical bucket → actual column name
                           (for ``balance_buckets`` pattern).
@@ -424,6 +424,31 @@ def suggest_dq_mapping(df: pd.DataFrame) -> DqMapping:
 # =============================================================================
 
 
+def _mask_disposition_codes(series: pd.Series, codes: list[Any] | None) -> pd.Series:
+    """Row mask: *series* matches any value in *codes*.
+
+    Tolerates CSV type drift (``"2"`` vs ``2``) and mixed string/numeric codes.
+    """
+    if not codes:
+        return pd.Series(False, index=series.index)
+    mask = pd.Series(False, index=series.index)
+    sn = pd.to_numeric(series, errors="coerce")
+    for code in codes:
+        mask |= series == code
+        if isinstance(code, bool):
+            continue
+        if isinstance(code, (int, float)) and not isinstance(code, bool):
+            mask |= sn == float(code)
+            continue
+        cs = str(code).strip()
+        mask |= series.astype(str).str.strip().str.upper() == cs.upper()
+        try:
+            mask |= sn == float(cs)
+        except (ValueError, TypeError):
+            pass
+    return mask
+
+
 def materialize_dq_columns(
     df: pd.DataFrame,
     mapping: DqMapping,
@@ -473,12 +498,12 @@ def materialize_dq_columns(
 
     # --- FC/REO overlay (applies regardless of primary pattern) ---
     if mapping.fc_col and mapping.fc_col in result.columns and mapping.fc_values:
-        fc_mask = result[mapping.fc_col].isin(mapping.fc_values)
+        fc_mask = _mask_disposition_codes(result[mapping.fc_col], mapping.fc_values)
         is_fc = is_fc | fc_mask
         dlq_status = dlq_status.where(~fc_mask, "FC")
 
     if mapping.reo_col and mapping.reo_col in result.columns and mapping.reo_values:
-        reo_mask = result[mapping.reo_col].isin(mapping.reo_values)
+        reo_mask = _mask_disposition_codes(result[mapping.reo_col], mapping.reo_values)
         is_reo = is_reo | reo_mask
         dlq_status = dlq_status.where(~reo_mask, "REO")
 

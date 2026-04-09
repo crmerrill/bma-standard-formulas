@@ -81,6 +81,15 @@ def _raw_file(upload_id: str) -> Path:
     return files[0]
 
 
+def raw_upload_byte_size(upload_id: str) -> int:
+    """Size of the original uploaded file on disk (under raw/ or legacy layout)."""
+    try:
+        p = _raw_file(upload_id)
+        return int(p.stat().st_size) if p.exists() else 0
+    except FileNotFoundError:
+        return 0
+
+
 def _working_file(upload_id: str) -> Path | None:
     working_dir = upload_dir(upload_id) / WORKING_SUBDIR
     if not working_dir.exists():
@@ -98,7 +107,16 @@ def _read_file(path: Path) -> pd.DataFrame:
         return pd.read_parquet(path)
     if ext in (".xlsx", ".xls"):
         return pd.read_excel(path)
-    return pd.read_csv(path)
+    # CSV: tolerate Windows encodings and malformed UTF-8 (common tape export issue)
+    try:
+        return pd.read_csv(
+            path,
+            encoding="utf-8",
+            encoding_errors="replace",
+            low_memory=False,
+        )
+    except Exception:
+        return pd.read_csv(path, encoding="latin-1", low_memory=False)
 
 
 def load_upload_df(upload_id: str) -> tuple[pd.DataFrame, str]:
