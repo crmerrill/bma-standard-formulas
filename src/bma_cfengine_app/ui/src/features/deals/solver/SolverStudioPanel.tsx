@@ -5,7 +5,14 @@ import CollapsiblePanel from "../../../components/CollapsiblePanel";
 import DataTable, { type DataTableColumn } from "../../../components/DataTable";
 import MetricCard from "../../../components/MetricCard";
 import type { RunListItem } from "../../../services/api";
+import AdvancedJsonEditor from "./AdvancedJsonEditor";
+import ConstraintBuilder from "./ConstraintBuilder";
 import ExistingRunSelector from "./ExistingRunSelector";
+import KnobCatalog from "./KnobCatalog";
+import ObjectiveBuilder from "./ObjectiveBuilder";
+import PresetLibrary from "./PresetLibrary";
+import { builderToSolverSpec } from "./builderToSolverSpec";
+import { solverSpecToBuilder } from "./solverSpecToBuilder";
 import type {
   AdvancedJsonState,
   SensitivitySweepConfig,
@@ -78,6 +85,70 @@ export default function SolverStudioPanel({
       })),
     [availableRuns],
   );
+
+  const builderValidationErrors = useMemo(() => {
+    const errors: string[] = [];
+    if (!solverSpecDraft.objectives.length) errors.push("Add at least one objective.");
+    if (!solverSpecDraft.knobs.length) errors.push("Add at least one knob.");
+    solverSpecDraft.objectives.forEach((objective, idx) => {
+      if (!objective.name.trim()) errors.push(`Objective ${idx + 1} requires a name.`);
+      if (!objective.metricPath.trim()) errors.push(`Objective ${idx + 1} requires a metric path.`);
+      if (objective.objectiveType === "TARGET" && objective.targetValue == null) {
+        errors.push(`Objective ${idx + 1} target value is required for TARGET.`);
+      }
+    });
+    solverSpecDraft.constraints.forEach((constraint, idx) => {
+      if (!constraint.name.trim()) errors.push(`Constraint ${idx + 1} requires a name.`);
+      if (!constraint.metricPath.trim()) errors.push(`Constraint ${idx + 1} requires a metric path.`);
+      if (constraint.operator === "BETWEEN") {
+        if (constraint.minValue == null || constraint.maxValue == null) {
+          errors.push(`Constraint ${idx + 1} requires min and max for BETWEEN.`);
+        }
+      } else if (constraint.operator === "GE") {
+        if (constraint.minValue == null) errors.push(`Constraint ${idx + 1} requires value for GE.`);
+      } else if (constraint.maxValue == null) {
+        errors.push(`Constraint ${idx + 1} requires value for ${constraint.operator}.`);
+      }
+    });
+    return errors;
+  }, [solverSpecDraft]);
+
+  function syncBuilderToJson() {
+    const solverSpec = builderToSolverSpec(solverSpecDraft);
+    setAdvancedJson((prev) => ({
+      ...prev,
+      jsonText: JSON.stringify(solverSpec, null, 2),
+      parseError: null,
+      lastSyncedAt: new Date().toISOString(),
+    }));
+  }
+
+  function applyJsonToBuilder() {
+    try {
+      const parsed = JSON.parse(advancedJson.jsonText || "{}") as Record<string, unknown>;
+      const next = solverSpecToBuilder(parsed);
+      setSolverSpecDraft((prev) => ({
+        ...prev,
+        ...next,
+        sourceMode: prev.sourceMode,
+        sourceRunId: prev.sourceRunId,
+        sourceScenarioName: prev.sourceScenarioName,
+        scenarioSetText: prev.scenarioSetText,
+        nativeRunInputJson: prev.nativeRunInputJson,
+      }));
+      setAdvancedJson((prev) => ({
+        ...prev,
+        parseError: null,
+        lastSyncedAt: new Date().toISOString(),
+      }));
+      toast.success("Applied JSON to visual builder.");
+    } catch (error) {
+      setAdvancedJson((prev) => ({
+        ...prev,
+        parseError: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -182,33 +253,60 @@ export default function SolverStudioPanel({
         </div>
       </CollapsiblePanel>
 
-      <CollapsiblePanel title="Solver Builder (Phase A shell)" defaultOpen>
+      <CollapsiblePanel title="Preset Library" defaultOpen>
+        <div className="p-3 text-xs">
+          <PresetLibrary
+            draft={solverSpecDraft}
+            onApplyPreset={(next) => {
+              setSolverSpecDraft(next);
+              setAdvancedJson((prev) => ({ ...prev, lastSyncedAt: null }));
+            }}
+          />
+        </div>
+      </CollapsiblePanel>
+
+      <CollapsiblePanel title="Objective Builder" defaultOpen>
+        <div className="p-3 text-xs">
+          <ObjectiveBuilder
+            rows={solverSpecDraft.objectives}
+            onChange={(rows) => {
+              setSolverSpecDraft((prev) => ({ ...prev, objectives: rows }));
+              setAdvancedJson((prev) => ({ ...prev, lastSyncedAt: null }));
+            }}
+          />
+        </div>
+      </CollapsiblePanel>
+
+      <CollapsiblePanel title="Constraint Builder" defaultOpen>
+        <div className="p-3 text-xs">
+          <ConstraintBuilder
+            rows={solverSpecDraft.constraints}
+            onChange={(rows) => {
+              setSolverSpecDraft((prev) => ({ ...prev, constraints: rows }));
+              setAdvancedJson((prev) => ({ ...prev, lastSyncedAt: null }));
+            }}
+          />
+        </div>
+      </CollapsiblePanel>
+
+      <CollapsiblePanel title="Knob Catalog + Bounds" defaultOpen>
+        <div className="p-3 text-xs">
+          <KnobCatalog
+            rows={solverSpecDraft.knobs}
+            onChange={(rows) => {
+              setSolverSpecDraft((prev) => ({ ...prev, knobs: rows }));
+              setAdvancedJson((prev) => ({ ...prev, lastSyncedAt: null }));
+            }}
+          />
+        </div>
+      </CollapsiblePanel>
+
+      <CollapsiblePanel title="Advanced JSON Editor" defaultOpen>
         <div className="p-3 space-y-2 text-xs">
-          <p className="text-muted-foreground">
-            Objective, constraint, knob, and preset builders are landing in Phase B. This shell
-            already persists canonical advanced JSON and source selection state.
-          </p>
-          <label className="block space-y-1">
-            <span className="text-muted-foreground">Advanced solver spec (JSON)</span>
-            <textarea
-              value={advancedJson.jsonText}
-              onChange={(e) =>
-                setAdvancedJson((prev) => ({
-                  ...prev,
-                  jsonText: e.target.value,
-                  parseError: null,
-                }))
-              }
-              rows={12}
-              className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
-            />
-          </label>
-          {advancedJson.parseError && (
-            <div className="text-[11px] text-destructive">{advancedJson.parseError}</div>
-          )}
-          <button
-            type="button"
-            onClick={() => {
+          <AdvancedJsonEditor
+            state={advancedJson}
+            onChange={setAdvancedJson}
+            onValidate={() => {
               try {
                 JSON.parse(advancedJson.jsonText || "{}");
                 setAdvancedJson((prev) => ({
@@ -224,10 +322,16 @@ export default function SolverStudioPanel({
                 }));
               }
             }}
-            className="px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground"
-          >
-            Validate JSON
-          </button>
+            onSyncFromBuilder={syncBuilderToJson}
+            onApplyToBuilder={applyJsonToBuilder}
+          />
+          {builderValidationErrors.length > 0 && (
+            <div className="rounded border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive">
+              {builderValidationErrors.map((error) => (
+                <div key={error}>{error}</div>
+              ))}
+            </div>
+          )}
         </div>
       </CollapsiblePanel>
 

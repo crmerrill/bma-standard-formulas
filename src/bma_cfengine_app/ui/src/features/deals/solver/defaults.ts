@@ -4,6 +4,7 @@ import type {
   SolverSpecDraft,
   TelemetryState,
 } from "./types";
+import { builderToSolverSpec } from "./builderToSolverSpec";
 
 export function getDefaultSolverSpecDraft(): SolverSpecDraft {
   return {
@@ -45,41 +46,7 @@ export function getDefaultSolverSpecDraft(): SolverSpecDraft {
 }
 
 export function solverSpecDraftToCanonicalJson(draft: SolverSpecDraft): string {
-  const canonical = {
-    solver_name: draft.solverName,
-    layers: [
-      {
-        layer_name: draft.layerName,
-        objectives: draft.objectives.map((o) => ({
-          name: o.name,
-          metric_path: o.metricPath,
-          objective_type: o.objectiveType,
-          target_value: o.targetValue ?? undefined,
-          weight: o.weight,
-        })),
-        constraints: draft.constraints.map((c) => ({
-          name: c.name,
-          metric_path: c.metricPath,
-          operator: c.operator,
-          min_value: c.minValue ?? undefined,
-          max_value: c.maxValue ?? undefined,
-        })),
-        knobs: draft.knobs.map((k) => ({
-          knob_path: k.knobPath,
-          lower: k.lower,
-          upper: k.upper,
-          initial: k.initial,
-          step_hint: k.stepHint,
-        })),
-        max_iterations: draft.maxIterations,
-        convergence_tolerance: draft.convergenceTolerance,
-        warm_start_from_prior: draft.warmStartFromPrior,
-      },
-    ],
-    checkpoint_every_n: draft.checkpointEveryN,
-    global_max_iterations: draft.globalMaxIterations,
-    description: draft.description,
-  };
+  const canonical = builderToSolverSpec(draft);
   return JSON.stringify(canonical, null, 2);
 }
 
