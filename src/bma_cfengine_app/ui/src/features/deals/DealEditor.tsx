@@ -1,12 +1,8 @@
 /**
- * DealEditor — composition root.
- *
- * Left: Blockly workspace (pay rules with targets inside)
- * Right: Property panel (synced bond/account editing) + collapsible IR preview
- * Drag handles resize sidebar width and (when IR is open) the split between Properties and IR.
+ * DealEditor — composition root for Structuring + Solver Studio.
  */
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Code2, GripVertical, Play, Save, Settings2, Sigma } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Code2, GripVertical, LayoutDashboard, Save, Settings2, Sigma } from "lucide-react";
 import { toast } from "sonner";
 import BlocklyCanvas from "./BlocklyCanvas";
 import PropertyPanel from "./PropertyPanel";
@@ -14,77 +10,95 @@ import { generateDealIR } from "./irGenerator";
 import { applyDynamicColors } from "./blockColors";
 import { MONO } from "../../lib/format";
 import * as api from "../../services/api";
-import CollapsiblePanel from "../../components/CollapsiblePanel";
+import TabBar from "../../components/TabBar";
+import SolverStudioPanel from "./solver/SolverStudioPanel";
+import {
+  getDefaultAdvancedJsonState,
+  getDefaultSensitivitySweepConfig,
+  getDefaultSolverSpecDraft,
+  getDefaultTelemetryState,
+  solverSpecDraftToCanonicalJson,
+} from "./solver/defaults";
+import type {
+  AdvancedJsonState,
+  SensitivitySweepConfig,
+  SolverSpecDraft,
+  TelemetryState,
+} from "./solver/types";
 
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 640;
 const PROPERTIES_PCT_MIN = 22;
 const PROPERTIES_PCT_MAX = 82;
 
+type StudioTab = "design" | "solver" | "ir";
+
+function parseScenarioSet(text: string): string[] {
+  const names = text
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return names.length ? names : ["Base Case"];
+}
+
 export default function DealEditor() {
+  const [studioTab, setStudioTab] = useState<StudioTab>("design");
   const [irJson, setIrJson] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [workspace, setWorkspace] = useState<any>(null);
-  const [showIr, setShowIr] = useState(false);
+  const [showDesignIr, setShowDesignIr] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(288);
-  /** Share of right column height for Properties (%) when Deal IR is expanded */
   const [propertiesPct, setPropertiesPct] = useState(58);
   const [dealName, setDealName] = useState("Deal");
   const [savedDealId, setSavedDealId] = useState<string | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [sourceMode, setSourceMode] = useState<"runsetup_ref" | "deal_native">("runsetup_ref");
-  const [runSetupRunId, setRunSetupRunId] = useState("");
-  const [scenarioSet, setScenarioSet] = useState("Base Case");
-  const [nativeRunInputJson, setNativeRunInputJson] = useState("{}");
-  const [solverSpecJson, setSolverSpecJson] = useState(
-    JSON.stringify(
-      {
-        solver_name: "studio_solver",
-        layers: [
-          {
-            layer_name: "base",
-            objectives: [
-              {
-                name: "target_A_yield",
-                metric_path: "tranche_risk_summary[A].yield_pct",
-                objective_type: "TARGET",
-                target_value: 6.0,
-                weight: 1.0,
-              },
-            ],
-            constraints: [],
-            knobs: [
-              {
-                knob_path: "deal_knobs.class_a_coupon",
-                lower: 3.0,
-                upper: 10.0,
-                initial: 6.0,
-                step_hint: 0.25,
-              },
-            ],
-            max_iterations: 12,
-            convergence_tolerance: 0.001,
-            warm_start_from_prior: true,
-          },
-        ],
-        checkpoint_every_n: 4,
-        global_max_iterations: 60,
-        description: "Studio automated solve",
-      },
-      null,
-      2
-    )
-  );
   const [runBusy, setRunBusy] = useState(false);
   const [solveBusy, setSolveBusy] = useState(false);
-  const scenarioNames = scenarioSet
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const [availableRuns, setAvailableRuns] = useState<api.RunListItem[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError, setRunsError] = useState<string | null>(null);
+
+  const [solverSpecDraft, setSolverSpecDraft] = useState<SolverSpecDraft>(() => getDefaultSolverSpecDraft());
+  const [advancedJson, setAdvancedJson] = useState<AdvancedJsonState>(() =>
+    getDefaultAdvancedJsonState(),
+  );
+  const [telemetryState, setTelemetryState] = useState<TelemetryState>(() =>
+    getDefaultTelemetryState(),
+  );
+  const [sensitivitySweepConfig, setSensitivitySweepConfig] = useState<SensitivitySweepConfig>(() =>
+    getDefaultSensitivitySweepConfig(),
+  );
 
   const rightColRef = useRef<HTMLDivElement>(null);
   const colDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const rowDragRef = useRef<{ startY: number; startPct: number; height: number } | null>(null);
+  const scenarioNames = useMemo(
+    () => parseScenarioSet(solverSpecDraft.scenarioSetText),
+    [solverSpecDraft.scenarioSetText],
+  );
+
+  const refreshRuns = useCallback(async () => {
+    setRunsLoading(true);
+    setRunsError(null);
+    try {
+      const runs = await api.listRuns();
+      const sorted = [...runs].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+      setAvailableRuns(sorted);
+      setSolverSpecDraft((prev) => {
+        if (prev.sourceRunId) return prev;
+        const defaultRun = sorted.find((r) => r.status === "completed");
+        return {
+          ...prev,
+          sourceRunId: defaultRun?.run_id ?? null,
+          sourceScenarioName: defaultRun?.scenario_names?.[0] ?? null,
+        };
+      });
+    } catch (error) {
+      setRunsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunsLoading(false);
+    }
+  }, []);
 
   const handleWorkspaceChange = useCallback((ws: any) => {
     setWorkspace(ws);
@@ -107,24 +121,29 @@ export default function DealEditor() {
       return;
     }
     let ir: Record<string, unknown>;
+    let solverSpec: Record<string, unknown>;
     try {
       ir = JSON.parse(irJson) as Record<string, unknown>;
-    } catch {
-      toast.error("Deal IR is not valid JSON.");
+      solverSpec = JSON.parse(advancedJson.jsonText || "{}");
+      setAdvancedJson((prev) => ({
+        ...prev,
+        parseError: null,
+        lastSyncedAt: new Date().toISOString(),
+      }));
+    } catch (error) {
+      const parseError = error instanceof Error ? error.message : String(error);
+      setAdvancedJson((prev) => ({ ...prev, parseError }));
+      toast.error("Solver spec JSON is invalid.");
       return;
     }
     ir.deal_name = dealName.trim() || "Deal";
     ir.solver_presets = {
-      source_mode: sourceMode,
-      runsetup_ref_run_id: runSetupRunId.trim() || null,
+      source_mode: solverSpecDraft.sourceMode,
+      runsetup_ref_run_id: solverSpecDraft.sourceRunId,
       scenario_set: scenarioNames,
-      solver_spec: (() => {
-        try {
-          return JSON.parse(solverSpecJson || "{}");
-        } catch {
-          return {};
-        }
-      })(),
+      source_scenario_name: solverSpecDraft.sourceScenarioName,
+      sensitivity_sweep: sensitivitySweepConfig,
+      solver_spec: solverSpec,
     };
     setSaveBusy(true);
     try {
@@ -140,7 +159,18 @@ export default function DealEditor() {
     } finally {
       setSaveBusy(false);
     }
-  }, [errors.length, irJson, dealName, savedDealId, sourceMode, runSetupRunId, scenarioNames, solverSpecJson]);
+  }, [
+    errors.length,
+    irJson,
+    advancedJson.jsonText,
+    dealName,
+    savedDealId,
+    solverSpecDraft.sourceMode,
+    solverSpecDraft.sourceRunId,
+    solverSpecDraft.sourceScenarioName,
+    scenarioNames,
+    sensitivitySweepConfig,
+  ]);
 
   const handleRunDeal = useCallback(async () => {
     if (!savedDealId) {
@@ -150,27 +180,40 @@ export default function DealEditor() {
     setRunBusy(true);
     try {
       const source =
-        sourceMode === "runsetup_ref"
-          ? { source_mode: "runsetup_ref" as const, run_id: runSetupRunId.trim(), scenario_names: scenarioNames }
+        solverSpecDraft.sourceMode === "runsetup_ref"
+          ? {
+              source_mode: "runsetup_ref" as const,
+              run_id: solverSpecDraft.sourceRunId ?? "",
+              scenario_names: scenarioNames,
+            }
           : {
               source_mode: "deal_native" as const,
-              scenario_name: scenarioNames[0] || "Base Case",
-              run_input: JSON.parse(nativeRunInputJson || "{}"),
+              scenario_name: solverSpecDraft.sourceScenarioName ?? scenarioNames[0] ?? "Base Case",
+              run_input: JSON.parse(solverSpecDraft.nativeRunInputJson || "{}"),
             };
-      if (sourceMode === "runsetup_ref" && !runSetupRunId.trim()) {
-        throw new Error("Run Setup ref mode requires a run id.");
+      if (solverSpecDraft.sourceMode === "runsetup_ref" && !solverSpecDraft.sourceRunId) {
+        throw new Error("Run Setup ref mode requires selecting a base CF run.");
       }
       const res = await api.runDeal(savedDealId, {
         source,
         scenario_names: scenarioNames,
       });
       toast.success(`Deal run created: ${res.run_id ?? savedDealId}`);
+      refreshRuns();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setRunBusy(false);
     }
-  }, [savedDealId, sourceMode, runSetupRunId, scenarioNames, nativeRunInputJson]);
+  }, [
+    savedDealId,
+    solverSpecDraft.sourceMode,
+    solverSpecDraft.sourceRunId,
+    solverSpecDraft.sourceScenarioName,
+    solverSpecDraft.nativeRunInputJson,
+    scenarioNames,
+    refreshRuns,
+  ]);
 
   const handleSolveDeal = useCallback(async () => {
     if (!savedDealId) {
@@ -178,31 +221,76 @@ export default function DealEditor() {
       return;
     }
     setSolveBusy(true);
+    setTelemetryState({
+      status: "running",
+      stage: "Submitting solve request",
+      iteration: 0,
+      objectiveTrajectory: [],
+      cancelToken: savedDealId,
+      runId: null,
+    });
     try {
       const source =
-        sourceMode === "runsetup_ref"
-          ? { source_mode: "runsetup_ref" as const, run_id: runSetupRunId.trim(), scenario_names: scenarioNames }
+        solverSpecDraft.sourceMode === "runsetup_ref"
+          ? {
+              source_mode: "runsetup_ref" as const,
+              run_id: solverSpecDraft.sourceRunId ?? "",
+              scenario_names: scenarioNames,
+            }
           : {
               source_mode: "deal_native" as const,
-              scenario_name: scenarioNames[0] || "Base Case",
-              run_input: JSON.parse(nativeRunInputJson || "{}"),
+              scenario_name: solverSpecDraft.sourceScenarioName ?? scenarioNames[0] ?? "Base Case",
+              run_input: JSON.parse(solverSpecDraft.nativeRunInputJson || "{}"),
             };
-      if (sourceMode === "runsetup_ref" && !runSetupRunId.trim()) {
-        throw new Error("Run Setup ref mode requires a run id.");
+      if (solverSpecDraft.sourceMode === "runsetup_ref" && !solverSpecDraft.sourceRunId) {
+        throw new Error("Run Setup ref mode requires selecting a base CF run.");
       }
-      const solverSpec = JSON.parse(solverSpecJson || "{}");
+      const solverSpec = JSON.parse(advancedJson.jsonText || "{}");
+      const scenarioName = solverSpecDraft.sourceScenarioName ?? scenarioNames[0] ?? "Base Case";
       const res = await api.solveDeal(savedDealId, {
         source,
-        scenario_name: scenarioNames[0] || "Base Case",
+        scenario_name: scenarioName,
         solver_spec: solverSpec,
       });
+      setTelemetryState((prev) => ({
+        ...prev,
+        status: "completed",
+        stage: "Solve completed",
+        runId: res.run_id ?? null,
+      }));
       toast.success(`Solver run created: ${res.run_id ?? savedDealId}`);
+      refreshRuns();
     } catch (e: unknown) {
+      setTelemetryState((prev) => ({
+        ...prev,
+        status: "failed",
+        stage: "Solve failed",
+      }));
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setSolveBusy(false);
     }
-  }, [savedDealId, sourceMode, runSetupRunId, scenarioNames, nativeRunInputJson, solverSpecJson]);
+  }, [
+    savedDealId,
+    solverSpecDraft.sourceMode,
+    solverSpecDraft.sourceRunId,
+    solverSpecDraft.sourceScenarioName,
+    solverSpecDraft.nativeRunInputJson,
+    scenarioNames,
+    advancedJson.jsonText,
+    refreshRuns,
+  ]);
+
+  useEffect(() => {
+    setAdvancedJson((prev) => {
+      if (prev.lastSyncedAt) return prev;
+      return { ...prev, jsonText: solverSpecDraftToCanonicalJson(solverSpecDraft) };
+    });
+  }, [solverSpecDraft]);
+
+  useEffect(() => {
+    refreshRuns();
+  }, [refreshRuns]);
 
   useEffect(() => {
     const onColMove = (e: MouseEvent) => {
@@ -276,7 +364,7 @@ export default function DealEditor() {
           className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <Save className="w-3.5 h-3.5" />
-          {saveBusy ? "Saving…" : "Save deal"}
+          {saveBusy ? "Saving..." : "Save deal"}
         </button>
         {savedDealId && (
           <span className="text-[10px] text-muted-foreground" style={MONO}>
@@ -284,173 +372,148 @@ export default function DealEditor() {
           </span>
         )}
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 px-1">
-        <CollapsiblePanel title="Manual Deal Run Controls" defaultOpen>
-          <div className="p-3 space-y-2 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Collateral/Assumptions Source</span>
-              <select
-                value={sourceMode}
-                onChange={(e) => setSourceMode(e.target.value as "runsetup_ref" | "deal_native")}
-                className="px-2 py-1 rounded border border-border bg-input-background text-foreground"
-              >
-                <option value="runsetup_ref">Run Setup ref</option>
-                <option value="deal_native">Deal-native</option>
-              </select>
-            </div>
-            <label className="block space-y-1">
-              <span className="text-muted-foreground">Scenario set (comma-separated)</span>
-              <input
-                value={scenarioSet}
-                onChange={(e) => setScenarioSet(e.target.value)}
-                className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
-                style={MONO}
-              />
-            </label>
-            {sourceMode === "runsetup_ref" ? (
-              <label className="block space-y-1">
-                <span className="text-muted-foreground">Run Setup run_id</span>
-                <input
-                  value={runSetupRunId}
-                  onChange={(e) => setRunSetupRunId(e.target.value)}
-                  className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
-                  style={MONO}
-                />
-              </label>
-            ) : (
-              <label className="block space-y-1">
-                <span className="text-muted-foreground">deal_native run_input (JSON)</span>
-                <textarea
-                  value={nativeRunInputJson}
-                  onChange={(e) => setNativeRunInputJson(e.target.value)}
-                  rows={7}
-                  className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
-                  style={MONO}
-                />
-              </label>
-            )}
-            <button
-              type="button"
-              onClick={handleRunDeal}
-              disabled={!savedDealId || runBusy}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <Play className="w-3.5 h-3.5" />
-              {runBusy ? "Running…" : "Run deal"}
-            </button>
-          </div>
-        </CollapsiblePanel>
-        <CollapsiblePanel title="Automated Solver Runs" defaultOpen>
-          <div className="p-3 space-y-2 text-xs">
-            <label className="block space-y-1">
-              <span className="text-muted-foreground">Solver spec (JSON)</span>
-              <textarea
-                value={solverSpecJson}
-                onChange={(e) => setSolverSpecJson(e.target.value)}
-                rows={11}
-                className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
-                style={MONO}
-              />
-            </label>
-            <button
-              type="button"
-              onClick={handleSolveDeal}
-              disabled={!savedDealId || solveBusy}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <Sigma className="w-3.5 h-3.5" />
-              {solveBusy ? "Solving…" : "Solve deal"}
-            </button>
-          </div>
-        </CollapsiblePanel>
-      </div>
-      <div className="flex min-h-0 flex-1 gap-0">
-      {/* Blockly workspace */}
-      <BlocklyCanvas onChange={handleWorkspaceChange} />
 
-      {/* Column resize handle */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize sidebar"
-        onMouseDown={onColumnResizeStart}
-        className="group relative w-2 shrink-0 cursor-col-resize flex items-center justify-center hover:bg-primary/15"
-      >
-        <div className="absolute inset-y-2 w-px bg-border group-hover:bg-primary/50" />
-        <GripVertical className="w-3 h-3 text-muted-foreground/60 group-hover:text-muted-foreground relative z-[1]" />
-      </div>
+      <TabBar
+        tabs={[
+          { id: "design", label: "Design", icon: LayoutDashboard },
+          { id: "solver", label: "Solver", icon: Sigma },
+          { id: "ir", label: "IR", icon: Code2 },
+        ]}
+        active={studioTab}
+        onSelect={(id) => setStudioTab(id as StudioTab)}
+      />
 
-      {/* Right panel: properties + IR */}
-      <div
-        ref={rightColRef}
-        style={{ width: sidebarWidth }}
-        className="flex h-full min-h-0 min-w-0 shrink-0 flex-col"
-      >
-        {/* Property panel */}
-        <div
-          className={
-            showIr
-              ? "flex flex-col min-h-0 overflow-hidden rounded-md border border-border bg-[#0d1220]"
-              : "flex flex-1 flex-col min-h-0 overflow-hidden rounded-md border border-border bg-[#0d1220]"
-          }
-          style={showIr ? { height: `${propertiesPct}%`, minHeight: 120 } : undefined}
-        >
-          <div className="shrink-0 flex items-center gap-1.5 px-3 pt-3 pb-2 border-b border-border/60">
-            <Settings2 className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-xs font-medium text-foreground">Properties</span>
-          </div>
-          <div className="flex-1 min-h-0 overflow-auto p-3 pt-2">
-            <PropertyPanel workspace={workspace} />
-          </div>
+      {studioTab === "solver" && (
+        <SolverStudioPanel
+          savedDealId={savedDealId}
+          runBusy={runBusy}
+          solveBusy={solveBusy}
+          availableRuns={availableRuns}
+          runsLoading={runsLoading}
+          runsError={runsError}
+          refreshRuns={refreshRuns}
+          solverSpecDraft={solverSpecDraft}
+          setSolverSpecDraft={setSolverSpecDraft}
+          advancedJson={advancedJson}
+          setAdvancedJson={setAdvancedJson}
+          telemetryState={telemetryState}
+          setTelemetryState={setTelemetryState}
+          sensitivitySweepConfig={sensitivitySweepConfig}
+          setSensitivitySweepConfig={setSensitivitySweepConfig}
+          onRunDeal={handleRunDeal}
+          onSolveDeal={handleSolveDeal}
+          onCancelSolve={() => toast.info("Cancellation endpoint lands in Phase D.")}
+          irJson={irJson}
+          irErrors={errors}
+        />
+      )}
+
+      {studioTab === "ir" && (
+        <div className="flex-1 min-h-0 px-1">
+          <pre
+            className="h-full min-h-[200px] overflow-auto rounded-md border border-border bg-[#0d1220] px-3 py-2 text-[11px] leading-relaxed text-secondary-foreground"
+            style={MONO}
+          >
+            {errors.length > 0
+              ? errors.map((e, i) => (
+                  <div key={i} className="text-destructive">
+                    {e}
+                  </div>
+                ))
+              : irJson || "// Build the waterfall to see IR"}
+          </pre>
         </div>
+      )}
 
-        {showIr && (
+      {studioTab === "design" && (
+        <div className="flex min-h-0 flex-1 gap-0">
+          <BlocklyCanvas onChange={handleWorkspaceChange} />
           <div
             role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize Properties and Deal IR"
-            onMouseDown={onRowResizeStart}
-            className="group relative h-2 shrink-0 cursor-row-resize flex items-center justify-center hover:bg-primary/15"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            onMouseDown={onColumnResizeStart}
+            className="group relative w-2 shrink-0 cursor-col-resize flex items-center justify-center hover:bg-primary/15"
           >
-            <div className="absolute inset-x-2 h-px bg-border group-hover:bg-primary/50" />
-            <GripVertical className="w-3 h-3 text-muted-foreground/60 group-hover:text-muted-foreground rotate-90 relative z-[1]" />
+            <div className="absolute inset-y-2 w-px bg-border group-hover:bg-primary/50" />
+            <GripVertical className="w-3 h-3 text-muted-foreground/60 group-hover:text-muted-foreground relative z-[1]" />
           </div>
-        )}
-
-        {/* Collapsible IR preview */}
-        <div
-          className={
-            showIr
-              ? "flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-[#0d1220]"
-              : "shrink-0 rounded-md border border-border bg-[#0d1220]"
-          }
-        >
-          <button
-            type="button"
-            onClick={() => setShowIr(!showIr)}
-            className="w-full flex items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+          <div
+            ref={rightColRef}
+            style={{ width: sidebarWidth }}
+            className="flex h-full min-h-0 min-w-0 shrink-0 flex-col"
           >
-            {showIr ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            <Code2 className="w-3 h-3" />
-            <span>Deal IR</span>
-            {errors.length > 0 && (
-              <span className="ml-auto text-destructive text-[10px]">error</span>
-            )}
-          </button>
-          {showIr && (
-            <pre
-              className="flex-1 min-h-[120px] overflow-auto px-3 pb-2 text-[10px] leading-relaxed text-secondary-foreground border-t border-border"
-              style={MONO}
-            >
-              {errors.length > 0
-                ? errors.map((e, i) => <div key={i} className="text-destructive">{e}</div>)
-                : irJson || "// Build the waterfall to see IR"
+            <div
+              className={
+                showDesignIr
+                  ? "flex flex-col min-h-0 overflow-hidden rounded-md border border-border bg-[#0d1220]"
+                  : "flex flex-1 flex-col min-h-0 overflow-hidden rounded-md border border-border bg-[#0d1220]"
               }
-            </pre>
-          )}
+              style={showDesignIr ? { height: `${propertiesPct}%`, minHeight: 120 } : undefined}
+            >
+              <div className="shrink-0 flex items-center gap-1.5 px-3 pt-3 pb-2 border-b border-border/60">
+                <Settings2 className="w-3.5 h-3.5 text-muted-foreground" />
+                <span className="text-xs font-medium text-foreground">Properties</span>
+              </div>
+              <div className="flex-1 min-h-0 overflow-auto p-3 pt-2">
+                <PropertyPanel workspace={workspace} />
+              </div>
+            </div>
+
+            {showDesignIr && (
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize Properties and Deal IR"
+                onMouseDown={onRowResizeStart}
+                className="group relative h-2 shrink-0 cursor-row-resize flex items-center justify-center hover:bg-primary/15"
+              >
+                <div className="absolute inset-x-2 h-px bg-border group-hover:bg-primary/50" />
+                <GripVertical className="w-3 h-3 text-muted-foreground/60 group-hover:text-muted-foreground rotate-90 relative z-[1]" />
+              </div>
+            )}
+
+            <div
+              className={
+                showDesignIr
+                  ? "flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-[#0d1220]"
+                  : "shrink-0 rounded-md border border-border bg-[#0d1220]"
+              }
+            >
+              <button
+                type="button"
+                onClick={() => setShowDesignIr(!showDesignIr)}
+                className="w-full flex items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+              >
+                {showDesignIr ? (
+                  <ChevronDown className="w-3 h-3" />
+                ) : (
+                  <ChevronRight className="w-3 h-3" />
+                )}
+                <Code2 className="w-3 h-3" />
+                <span>Deal IR</span>
+                {errors.length > 0 && (
+                  <span className="ml-auto text-destructive text-[10px]">error</span>
+                )}
+              </button>
+              {showDesignIr && (
+                <pre
+                  className="flex-1 min-h-[120px] overflow-auto px-3 pb-2 text-[10px] leading-relaxed text-secondary-foreground border-t border-border"
+                  style={MONO}
+                >
+                  {errors.length > 0
+                    ? errors.map((e, i) => (
+                        <div key={i} className="text-destructive">
+                          {e}
+                        </div>
+                      ))
+                    : irJson || "// Build the waterfall to see IR"}
+                </pre>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
-      </div>
+      )}
     </div>
   );
 }
