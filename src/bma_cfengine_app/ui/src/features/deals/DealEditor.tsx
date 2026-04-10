@@ -6,7 +6,7 @@
  * Drag handles resize sidebar width and (when IR is open) the split between Properties and IR.
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Code2, GripVertical, Save, Settings2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Code2, GripVertical, Play, Save, Settings2, Sigma } from "lucide-react";
 import { toast } from "sonner";
 import BlocklyCanvas from "./BlocklyCanvas";
 import PropertyPanel from "./PropertyPanel";
@@ -14,6 +14,7 @@ import { generateDealIR } from "./irGenerator";
 import { applyDynamicColors } from "./blockColors";
 import { MONO } from "../../lib/format";
 import * as api from "../../services/api";
+import CollapsiblePanel from "../../components/CollapsiblePanel";
 
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 640;
@@ -31,6 +32,51 @@ export default function DealEditor() {
   const [dealName, setDealName] = useState("Deal");
   const [savedDealId, setSavedDealId] = useState<string | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
+  const [sourceMode, setSourceMode] = useState<"runsetup_ref" | "deal_native">("runsetup_ref");
+  const [runSetupRunId, setRunSetupRunId] = useState("");
+  const [scenarioSet, setScenarioSet] = useState("Base Case");
+  const [nativeRunInputJson, setNativeRunInputJson] = useState("{}");
+  const [solverSpecJson, setSolverSpecJson] = useState(
+    JSON.stringify(
+      {
+        solver_name: "studio_solver",
+        layers: [
+          {
+            layer_name: "base",
+            objectives: [
+              {
+                name: "target_A_yield",
+                metric_path: "tranche_risk_summary[A].yield_pct",
+                objective_type: "TARGET",
+                target_value: 6.0,
+                weight: 1.0,
+              },
+            ],
+            constraints: [],
+            knobs: [
+              {
+                knob_path: "deal_knobs.class_a_coupon",
+                lower: 3.0,
+                upper: 10.0,
+                initial: 6.0,
+                step_hint: 0.25,
+              },
+            ],
+            max_iterations: 12,
+            convergence_tolerance: 0.001,
+            warm_start_from_prior: true,
+          },
+        ],
+        checkpoint_every_n: 4,
+        global_max_iterations: 60,
+        description: "Studio automated solve",
+      },
+      null,
+      2
+    )
+  );
+  const [runBusy, setRunBusy] = useState(false);
+  const [solveBusy, setSolveBusy] = useState(false);
 
   const rightColRef = useRef<HTMLDivElement>(null);
   const colDragRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -79,6 +125,73 @@ export default function DealEditor() {
       setSaveBusy(false);
     }
   }, [errors.length, irJson, dealName, savedDealId]);
+
+  const scenarioNames = scenarioSet
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const handleRunDeal = useCallback(async () => {
+    if (!savedDealId) {
+      toast.error("Save the deal first before running.");
+      return;
+    }
+    setRunBusy(true);
+    try {
+      const source =
+        sourceMode === "runsetup_ref"
+          ? { source_mode: "runsetup_ref" as const, run_id: runSetupRunId.trim(), scenario_names: scenarioNames }
+          : {
+              source_mode: "deal_native" as const,
+              scenario_name: scenarioNames[0] || "Base Case",
+              run_input: JSON.parse(nativeRunInputJson || "{}"),
+            };
+      if (sourceMode === "runsetup_ref" && !runSetupRunId.trim()) {
+        throw new Error("Run Setup ref mode requires a run id.");
+      }
+      const res = await api.runDeal(savedDealId, {
+        source,
+        scenario_names: scenarioNames,
+      });
+      toast.success(`Deal run created: ${res.run_id ?? savedDealId}`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunBusy(false);
+    }
+  }, [savedDealId, sourceMode, runSetupRunId, scenarioNames, nativeRunInputJson]);
+
+  const handleSolveDeal = useCallback(async () => {
+    if (!savedDealId) {
+      toast.error("Save the deal first before solving.");
+      return;
+    }
+    setSolveBusy(true);
+    try {
+      const source =
+        sourceMode === "runsetup_ref"
+          ? { source_mode: "runsetup_ref" as const, run_id: runSetupRunId.trim(), scenario_names: scenarioNames }
+          : {
+              source_mode: "deal_native" as const,
+              scenario_name: scenarioNames[0] || "Base Case",
+              run_input: JSON.parse(nativeRunInputJson || "{}"),
+            };
+      if (sourceMode === "runsetup_ref" && !runSetupRunId.trim()) {
+        throw new Error("Run Setup ref mode requires a run id.");
+      }
+      const solverSpec = JSON.parse(solverSpecJson || "{}");
+      const res = await api.solveDeal(savedDealId, {
+        source,
+        scenario_name: scenarioNames[0] || "Base Case",
+        solver_spec: solverSpec,
+      });
+      toast.success(`Solver run created: ${res.run_id ?? savedDealId}`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSolveBusy(false);
+    }
+  }, [savedDealId, sourceMode, runSetupRunId, scenarioNames, nativeRunInputJson, solverSpecJson]);
 
   useEffect(() => {
     const onColMove = (e: MouseEvent) => {
@@ -159,6 +272,86 @@ export default function DealEditor() {
             {savedDealId}
           </span>
         )}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 px-1">
+        <CollapsiblePanel title="Manual Deal Run Controls" defaultOpen>
+          <div className="p-3 space-y-2 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">Collateral/Assumptions Source</span>
+              <select
+                value={sourceMode}
+                onChange={(e) => setSourceMode(e.target.value as "runsetup_ref" | "deal_native")}
+                className="px-2 py-1 rounded border border-border bg-input-background text-foreground"
+              >
+                <option value="runsetup_ref">Run Setup ref</option>
+                <option value="deal_native">Deal-native</option>
+              </select>
+            </div>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Scenario set (comma-separated)</span>
+              <input
+                value={scenarioSet}
+                onChange={(e) => setScenarioSet(e.target.value)}
+                className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
+                style={MONO}
+              />
+            </label>
+            {sourceMode === "runsetup_ref" ? (
+              <label className="block space-y-1">
+                <span className="text-muted-foreground">Run Setup run_id</span>
+                <input
+                  value={runSetupRunId}
+                  onChange={(e) => setRunSetupRunId(e.target.value)}
+                  className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
+                  style={MONO}
+                />
+              </label>
+            ) : (
+              <label className="block space-y-1">
+                <span className="text-muted-foreground">deal_native run_input (JSON)</span>
+                <textarea
+                  value={nativeRunInputJson}
+                  onChange={(e) => setNativeRunInputJson(e.target.value)}
+                  rows={7}
+                  className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
+                  style={MONO}
+                />
+              </label>
+            )}
+            <button
+              type="button"
+              onClick={handleRunDeal}
+              disabled={!savedDealId || runBusy}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Play className="w-3.5 h-3.5" />
+              {runBusy ? "Running…" : "Run deal"}
+            </button>
+          </div>
+        </CollapsiblePanel>
+        <CollapsiblePanel title="Automated Solver Runs" defaultOpen>
+          <div className="p-3 space-y-2 text-xs">
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Solver spec (JSON)</span>
+              <textarea
+                value={solverSpecJson}
+                onChange={(e) => setSolverSpecJson(e.target.value)}
+                rows={11}
+                className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
+                style={MONO}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={handleSolveDeal}
+              disabled={!savedDealId || solveBusy}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Sigma className="w-3.5 h-3.5" />
+              {solveBusy ? "Solving…" : "Solve deal"}
+            </button>
+          </div>
+        </CollapsiblePanel>
       </div>
       <div className="flex min-h-0 flex-1 gap-0">
       {/* Blockly workspace */}

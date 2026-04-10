@@ -608,18 +608,25 @@ export interface RunListItem {
   run_id: string;
   status: string;
   created_at: string;
+  run_type?: "portfolio" | "structured_deal";
+  run_kind?: string | null;
   loan_count: number;
   group_count: number;
   scenario_names: string[];
   elapsed_seconds: number | null;
   total_balance: number;
   wac: number;
+  deal_id?: string | null;
+  deal_name?: string | null;
+  deal_context?: Record<string, unknown>;
   error?: string;
   has_inputs?: boolean;
 }
 
-export function listRuns(): Promise<RunListItem[]> {
-  return request("/runs-list");
+export function listRuns(runType?: "portfolio" | "structured_deal"): Promise<RunListItem[]> {
+  return request<RunListItem[]>("/runs-list").then((rows) =>
+    runType ? rows.filter((r) => (r.run_type ?? "portfolio") === runType) : rows
+  );
 }
 
 export interface RunConfig {
@@ -746,4 +753,60 @@ export function saveStudioDeal(body: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+export interface DealRunResult {
+  status: string;
+  run_id?: string;
+  run_type?: string;
+  run_kind?: string;
+  deal_id: string;
+  deal_name?: string;
+  scenario_names: string[];
+  artifact_keys?: string[];
+  error?: string;
+}
+
+export interface DealRunRequest {
+  deal_version?: number | null;
+  source:
+    | {
+        source_mode: "runsetup_ref";
+        run_id: string;
+        scenario_names?: string[];
+      }
+    | {
+        source_mode: "deal_native";
+        run_input?: Record<string, unknown>;
+        scenario_name?: string;
+        scenario_inputs?: Record<string, Record<string, unknown>>;
+      };
+  scenario_names?: string[];
+}
+
+export interface DealSolveRequest {
+  deal_version?: number | null;
+  scenario_name?: string;
+  source: DealRunRequest["source"];
+  solver_spec: Record<string, unknown>;
+}
+
+export function runDeal(dealId: string, body: DealRunRequest): Promise<DealRunResult> {
+  return request(`/deals/${dealId}/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function solveDeal(dealId: string, body: DealSolveRequest): Promise<DealRunResult> {
+  return request(`/deals/${dealId}/solve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function listDealRuns(dealId: string): Promise<RunListItem[]> {
+  return request(`/deals/${dealId}/runs`);
 }

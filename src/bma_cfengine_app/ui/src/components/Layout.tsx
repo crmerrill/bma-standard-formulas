@@ -8,10 +8,11 @@ import {
   RotateCcw,
   Clock,
   Layers,
+  Sigma,
 } from "lucide-react";
 import { MONO } from "../lib/format";
 
-export type Page = "intake" | "tape" | "setup" | "results" | "history" | "structuring";
+export type Page = "intake" | "tape" | "setup" | "results" | "history" | "structuring" | "structured_analysis";
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "intake", label: "Tape Intake", icon: Upload },
@@ -20,6 +21,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "results", label: "Results", icon: BarChart3 },
   { id: "history", label: "Run History", icon: Clock },
   { id: "structuring", label: "Structuring Studio", icon: Layers },
+  { id: "structured_analysis", label: "Structured Deal Analysis", icon: Sigma },
 ];
 
 interface LayoutProps {

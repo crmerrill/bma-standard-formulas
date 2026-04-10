@@ -7,6 +7,7 @@ import RunSetupPage from "./pages/RunSetupPage";
 import ResultsPage from "./pages/ResultsPage";
 import RunHistoryPage from "./pages/RunHistoryPage";
 import DealEditor from "./features/deals/DealEditor";
+import StructuredDealAnalysisPage from "./pages/StructuredDealAnalysisPage";
 import type { FieldMapping, RunResponse } from "./services/api";
 import * as api from "./services/api";
 import { MONO } from "./lib/format";
@@ -18,6 +19,7 @@ const PAGE_TITLES: Record<Page, string> = {
   results: "Results",
   history: "Run History",
   structuring: "Structuring Studio",
+  structured_analysis: "Structured Deal Analysis",
 };
 
 // ---------------------------------------------------------------------------
@@ -34,6 +36,7 @@ interface SessionState {
   run: RunResponse | null;
   asofDate: string;
   groupKeys: string[];
+  structuredRunId: string | null;
 }
 
 const DEFAULTS: SessionState = {
@@ -44,6 +47,7 @@ const DEFAULTS: SessionState = {
   run: null,
   asofDate: new Date().toISOString().slice(0, 10),
   groupKeys: [],
+  structuredRunId: null,
 };
 
 function loadSession(): SessionState {
@@ -77,12 +81,13 @@ export default function App() {
   const [run, setRun] = useState<RunResponse | null>(initial.run);
   const [asofDate, setAsofDate] = useState<string>(initial.asofDate);
   const [groupKeys, setGroupKeys] = useState<string[]>(initial.groupKeys);
+  const [structuredRunId, setStructuredRunId] = useState<string | null>(initial.structuredRunId);
 
   useEffect(() => {
-    saveSession({ page, uploadId, mappingId, mappings, run, asofDate, groupKeys });
-  }, [page, uploadId, mappingId, mappings, run, asofDate, groupKeys]);
+    saveSession({ page, uploadId, mappingId, mappings, run, asofDate, groupKeys, structuredRunId });
+  }, [page, uploadId, mappingId, mappings, run, asofDate, groupKeys, structuredRunId]);
 
-  const enabledPages = new Set<Page>(["intake", "history", "structuring"]);
+  const enabledPages = new Set<Page>(["intake", "history", "structuring", "structured_analysis"]);
   if (uploadId && mappingId) {
     enabledPages.add("tape");
     enabledPages.add("setup");
@@ -111,6 +116,7 @@ export default function App() {
     setMappingId(null);
     setMappings([]);
     setRun(null);
+    setStructuredRunId(null);
     setAsofDate(new Date().toISOString().slice(0, 10));
     setGroupKeys([]);
     setPage("intake");
@@ -131,10 +137,20 @@ export default function App() {
       if (rc.asof_date) setAsofDate(rc.asof_date);
       setRun(r);
       setPage("results");
+      setStructuredRunId(null);
     } catch {
       /* ignore */
     }
   }, []);
+
+  const handleViewHistoryRun = useCallback(async (runId: string, runType?: "portfolio" | "structured_deal") => {
+    if (runType === "structured_deal") {
+      setStructuredRunId(runId);
+      setPage("structured_analysis");
+      return;
+    }
+    await handleViewRun(runId);
+  }, [handleViewRun]);
 
   const handleRerun = useCallback(async (runId: string) => {
     try {
@@ -201,9 +217,10 @@ export default function App() {
         <ResultsPage run={run} onSwitchRun={handleViewRun} />
       )}
       {page === "history" && (
-        <RunHistoryPage onViewRun={handleViewRun} onRerun={handleRerun} />
+        <RunHistoryPage onViewRun={handleViewHistoryRun} onRerun={handleRerun} />
       )}
       {page === "structuring" && <DealEditor />}
+      {page === "structured_analysis" && <StructuredDealAnalysisPage runId={structuredRunId} />}
     </Layout>
   );
 }
