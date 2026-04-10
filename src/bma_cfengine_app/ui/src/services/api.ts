@@ -810,3 +810,7 @@ export function solveDeal(dealId: string, body: DealSolveRequest): Promise<DealR
 export function listDealRuns(dealId: string): Promise<RunListItem[]> {
   return request(`/deals/${dealId}/runs`);
 }
+
+export function listDealSolverRuns(dealId: string): Promise<RunListItem[]> {
+  return request(`/deals/${dealId}/solver-runs`);
+}

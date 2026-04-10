@@ -10,11 +10,8 @@ The solver loop:
    e. Repeats until convergence or max iterations
 3. Produces a SolverRunSummary with iteration logs and solved deal version
 """
-import copy
 import time
 from typing import Any
-
-import numpy as np
 
 from .runtime import run_deal
 from .risk import compute_tranche_risk
@@ -157,6 +154,8 @@ def solve_deal(
     final_status = SolverStatus.RUNNING
     final_obj = 0.0
     final_feasible = False
+    final_metrics: dict[str, float] = {}
+    knob_values: dict[str, float] = {}
 
     for layer in solver_spec.layers:
         knob_values = {}
@@ -177,6 +176,7 @@ def solve_deal(
             obj_value = 0.0
             for obj in layer.objectives:
                 metric = _extract_metric(scenario_result, risk_results, obj.metric_path)
+                final_metrics[obj.metric_path] = metric
                 if obj.objective_type == ObjectiveType.TARGET:
                     obj_value += obj.weight * abs(metric - (obj.target_value or 0.0))
                 elif obj.objective_type == ObjectiveType.MINIMIZE:
@@ -187,6 +187,7 @@ def solve_deal(
             violation_norm = 0.0
             for constraint in layer.constraints:
                 metric = _extract_metric(scenario_result, risk_results, constraint.metric_path)
+                final_metrics[constraint.metric_path] = metric
                 violation_norm += _evaluate_constraint(constraint, metric) ** 2
             violation_norm = violation_norm ** 0.5
 
@@ -201,7 +202,7 @@ def solve_deal(
                 feasible_flag=feasible,
                 step_size=0.0,
                 convergence_metric=obj_value + violation_norm,
-                status=SolverStatus.RUNNING,
+                status=SolverStatus.CONVERGED if (obj_value < layer.convergence_tolerance and feasible) else SolverStatus.RUNNING,
                 mutated_knobs_json=dict(knob_values),
             )
             all_iterations.append(iter_row)
@@ -265,7 +266,15 @@ def solve_deal(
         final_objective_value=final_obj,
         final_feasible=final_feasible,
         elapsed_seconds=elapsed,
-        solved_knobs={k: v for k, v in knob_values.items()} if 'knob_values' in dir() else {},
+        solved_knobs={k: v for k, v in knob_values.items()},
+        iteration_log=all_iterations,
+        selected_solution={
+            "scenario_name": scenario_name,
+            "objective_value": final_obj,
+            "feasible": final_feasible,
+            "metrics": final_metrics,
+            "knobs": {k: v for k, v in knob_values.items()},
+        },
     )
 
     return deal, summary

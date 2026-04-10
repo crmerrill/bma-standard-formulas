@@ -176,10 +176,17 @@ async def solve_deal_endpoint(deal_id: str, body: DealSolveRequest):
 
 
 @router.get("/deals/{deal_id}/runs")
-async def list_deal_runs(deal_id: str):
+async def list_deal_runs(deal_id: str, run_kind: str | None = Query(None)):
     all_runs = list_all_runs()
     runs = [r for r in all_runs if r.get("deal_id") == deal_id and r.get("run_type") == "structured_deal"]
+    if run_kind:
+        runs = [r for r in runs if r.get("run_kind") == run_kind]
     return runs
+
+
+@router.get("/deals/{deal_id}/solver-runs")
+async def list_solver_runs(deal_id: str):
+    return await list_deal_runs(deal_id, run_kind="solver")
 
 
 @router.get("/deals/{deal_id}/runs/{run_id}")

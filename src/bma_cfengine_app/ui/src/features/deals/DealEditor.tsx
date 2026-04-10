@@ -77,6 +77,10 @@ export default function DealEditor() {
   );
   const [runBusy, setRunBusy] = useState(false);
   const [solveBusy, setSolveBusy] = useState(false);
+  const scenarioNames = scenarioSet
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   const rightColRef = useRef<HTMLDivElement>(null);
   const colDragRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -110,6 +114,18 @@ export default function DealEditor() {
       return;
     }
     ir.deal_name = dealName.trim() || "Deal";
+    ir.solver_presets = {
+      source_mode: sourceMode,
+      runsetup_ref_run_id: runSetupRunId.trim() || null,
+      scenario_set: scenarioNames,
+      solver_spec: (() => {
+        try {
+          return JSON.parse(solverSpecJson || "{}");
+        } catch {
+          return {};
+        }
+      })(),
+    };
     setSaveBusy(true);
     try {
       const res = await api.saveStudioDeal({
@@ -124,12 +140,7 @@ export default function DealEditor() {
     } finally {
       setSaveBusy(false);
     }
-  }, [errors.length, irJson, dealName, savedDealId]);
-
-  const scenarioNames = scenarioSet
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  }, [errors.length, irJson, dealName, savedDealId, sourceMode, runSetupRunId, scenarioNames, solverSpecJson]);
 
   const handleRunDeal = useCallback(async () => {
     if (!savedDealId) {

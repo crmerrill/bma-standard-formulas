@@ -120,3 +120,22 @@ def test_post_deal_solve_contract(monkeypatch):
     body = res.json()
     assert body["run_id"] == "run_solver"
     assert body["status"] == "completed"
+
+
+def test_list_solver_runs_contract(monkeypatch):
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    monkeypatch.setattr(
+        deals_router,
+        "list_all_runs",
+        lambda: [
+            {"run_id": "run_1", "deal_id": "deal_x", "run_type": "structured_deal", "run_kind": "solver"},
+            {"run_id": "run_2", "deal_id": "deal_x", "run_type": "structured_deal", "run_kind": "deal_run"},
+        ],
+    )
+    client = TestClient(app)
+    res = client.get("/api/deals/deal_x/solver-runs")
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["run_kind"] == "solver"

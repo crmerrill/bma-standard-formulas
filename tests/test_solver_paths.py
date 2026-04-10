@@ -73,3 +73,5 @@ def test_solver_returns_summary_and_knobs():
     _, summary = solve_deal(deal, run_input, spec, scenario_name="Base Case")
     assert summary.total_iterations >= 1
     assert "deal_knobs.class_a_coupon" in summary.solved_knobs
+    assert len(summary.iteration_log) >= 1
+    assert summary.selected_solution.get("scenario_name") == "Base Case"

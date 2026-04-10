@@ -53,7 +53,15 @@ export default function RunHistoryPage({ onViewRun, onRerun }: Props) {
         columns={[
           { id: "run_id", header: "Run ID", accessorFn: (r: RunListItem) => r.run_id.replace("run_", "").slice(0, 8), cell: (v) => <span className="text-primary">{String(v)}</span> },
           { id: "run_type", header: "Type", accessorFn: (r: RunListItem) => (r.run_type ?? "portfolio").replace("_", " "), mono: false },
-          { id: "deal_name", header: "Deal / Run", accessorFn: (r: RunListItem) => r.deal_name ?? "Portfolio Run", mono: false },
+          {
+            id: "deal_name",
+            header: "Deal / Run",
+            accessorFn: (r: RunListItem) =>
+              (r.run_type ?? "portfolio") === "structured_deal"
+                ? `${r.deal_name ?? "Structured Deal"} :: ${r.scenario_names.join(", ") || "Base Case"}`
+                : "Portfolio Run",
+            mono: false,
+          },
           { id: "created_at", header: "Date", accessorKey: "created_at", mono: false, cell: (v) => fmtDate(String(v ?? "")) },
           { id: "status", header: "Status", accessorKey: "status", align: "center", mono: false, cell: (_v, r: RunListItem) => <StatusBadge status={r.status} /> },
           { id: "loan_count", header: "Loans", accessorKey: "loan_count", align: "right", cell: (v) => Number(v).toLocaleString() },

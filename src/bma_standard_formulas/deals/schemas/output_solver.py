@@ -35,3 +35,5 @@ class SolverRunSummary(BaseModel):
     elapsed_seconds: float = 0.0
     solved_knobs: dict[str, Any] = Field(default_factory=dict)
     solved_deal_version: int | None = None
+    iteration_log: list[SolverIterationRow] = Field(default_factory=list)
+    selected_solution: dict[str, Any] = Field(default_factory=dict)

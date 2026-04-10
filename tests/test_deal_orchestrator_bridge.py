@@ -154,3 +154,4 @@ def test_persist_scenario_artifacts_writes_extended_outputs(monkeypatch, tmp_pat
     assert "Base_Case_tranche_risk_summary" in keys
     assert "Base_Case_credit_enhancement" in keys
     assert "Base_Case_decrement_table" in keys
+    assert "Base_Case_stress_matrix" in keys

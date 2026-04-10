@@ -1,9 +1,9 @@
 """Deal solver orchestration and persistence."""
 from __future__ import annotations
 
+import re
 import traceback
 from datetime import datetime, timezone
-from typing import Any
 
 import pandas as pd
 
@@ -16,6 +16,10 @@ from bma_standard_formulas.deals.schemas.solver import SolverSpec
 from ...storage import run_store
 from .deal_run_service import _persist_scenario_artifacts
 from .deal_store import load_deal, save_deal
+
+
+def _safe_artifact_name(name: str) -> str:
+    return re.sub(r"[^\w\-.]", "_", name)[:80]
 
 
 def execute_deal_solve(
@@ -48,28 +52,16 @@ def execute_deal_solve(
             )
         artifact_keys = _persist_scenario_artifacts(run_id, scenario_name, result)
 
-        iter_rows = []
-        for idx in range(int(solver_summary.total_iterations)):
-            iter_rows.append(
-                {
-                    "solver_job_id": solver_summary.solver_job_id,
-                    "solver_layer": solver_summary.solver_layers_run[0] if solver_summary.solver_layers_run else "layer",
-                    "iteration": idx,
-                    "objective_value": solver_summary.final_objective_value,
-                    "constraint_violation_norm": 0.0,
-                    "feasible_flag": solver_summary.final_feasible,
-                    "step_size": 0.0,
-                    "convergence_metric": solver_summary.final_objective_value,
-                    "status": str(solver_summary.final_status),
-                    "mutated_knobs_json": solver_summary.solved_knobs,
-                    "checkpoint_deal_version": saved_version,
-                }
-            )
-        if iter_rows:
-            iter_df = pd.DataFrame(iter_rows)
-            run_store.save_artifact(run_id, f"{scenario_name}_solver_iterations", iter_df)
-            run_store.save_artifact_csv(run_id, f"{scenario_name}_solver_iterations", iter_df)
-            artifact_keys.append(f"{scenario_name}_solver_iterations")
+        scenario_prefix = _safe_artifact_name(scenario_name)
+        if solver_summary.iteration_log:
+            iter_df = pd.DataFrame([row.model_dump() for row in solver_summary.iteration_log])
+            run_store.save_artifact(run_id, f"{scenario_prefix}_solver_iterations", iter_df)
+            run_store.save_artifact_csv(run_id, f"{scenario_prefix}_solver_iterations", iter_df)
+            artifact_keys.append(f"{scenario_prefix}_solver_iterations")
+        selected_df = pd.DataFrame([solver_summary.selected_solution | {"solver_job_id": solver_summary.solver_job_id}])
+        run_store.save_artifact(run_id, f"{scenario_prefix}_solver_selected_solution", selected_df)
+        run_store.save_artifact_csv(run_id, f"{scenario_prefix}_solver_selected_solution", selected_df)
+        artifact_keys.append(f"{scenario_prefix}_solver_selected_solution")
 
         run_store.save_run_input_json(
             run_id,

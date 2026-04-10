@@ -153,6 +153,15 @@ def _persist_scenario_artifacts(
     _persist_model_rows(run_id, f"{prefix}_credit_enhancement", result.credit_enhancement, artifact_keys)
     _persist_model_rows(run_id, f"{prefix}_pac_tac_diagnostics", result.pac_tac_diagnostics, artifact_keys)
     _persist_model_rows(run_id, f"{prefix}_structure_composition", result.structure_composition, artifact_keys)
+    stress_df = _build_stress_matrix(
+        scenario_name=scenario_name,
+        bond_cashflows=result.bond_cashflows,
+        trigger_state_history=result.trigger_state_history,
+    )
+    if not stress_df.empty:
+        run_store.save_artifact(run_id, f"{prefix}_stress_matrix", stress_df)
+        run_store.save_artifact_csv(run_id, f"{prefix}_stress_matrix", stress_df)
+        artifact_keys.append(f"{prefix}_stress_matrix")
     return artifact_keys
 
 
@@ -199,6 +208,55 @@ def _build_decrement_table(
         )
     wal_df = pd.DataFrame(wal_rows)
     return grouped.merge(wal_df, on="tranche_id", how="left")
+
+
+def _build_stress_matrix(
+    scenario_name: str,
+    bond_cashflows: list[Any],
+    trigger_state_history: list[Any],
+) -> pd.DataFrame:
+    if not bond_cashflows:
+        return pd.DataFrame()
+    cf_df = pd.DataFrame([row.model_dump() for row in bond_cashflows])
+    if cf_df.empty or "tranche_id" not in cf_df.columns:
+        return pd.DataFrame()
+    trigger_breaches = 0
+    if trigger_state_history:
+        trig_df = pd.DataFrame([row.model_dump() for row in trigger_state_history])
+        if not trig_df.empty and "state" in trig_df.columns:
+            trigger_breaches = int((trig_df["state"].astype(str).str.lower() != "inactive").sum())
+    rows: list[dict[str, Any]] = []
+    for tranche_id, tdf in cf_df.groupby("tranche_id"):
+        principal_loss = float(tdf.get("writedown", pd.Series(dtype=float)).sum())
+        shortfall_peak = float(tdf.get("interest_shortfall", pd.Series(dtype=float)).max() or 0.0)
+        final_balance = float(tdf.get("end_balance", pd.Series(dtype=float)).iloc[-1] if len(tdf) else 0.0)
+        principal_sum = float(tdf.get("total_principal", pd.Series(dtype=float)).sum())
+        wal = 0.0
+        if principal_sum > 0:
+            wal = float((tdf["period"] * tdf["total_principal"]).sum() / principal_sum / 12.0)
+        ext_months = 0
+        if "end_balance" in tdf.columns:
+            positive_periods = tdf.loc[tdf["end_balance"] > 0, "period"]
+            if not positive_periods.empty:
+                ext_months = int(positive_periods.max())
+        rows.append(
+            {
+                "stress_set_name": f"{scenario_name}_base_stress",
+                "tranche_id": tranche_id,
+                "prepay_vector_id": "base",
+                "default_vector_id": "base",
+                "severity_vector_id": "base",
+                "rate_path_id": "base",
+                "pass_fail": principal_loss <= 0.0 and shortfall_peak <= 0.0,
+                "principal_loss": principal_loss,
+                "interest_shortfall_peak": shortfall_peak,
+                "final_balance": final_balance,
+                "wal": wal,
+                "maturity_extension_months": ext_months,
+                "trigger_breach_count": trigger_breaches,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def replay_deal_with_new_collateral(

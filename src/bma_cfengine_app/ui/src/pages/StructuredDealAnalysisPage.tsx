@@ -58,7 +58,7 @@ export default function StructuredDealAnalysisPage({ runId }: Props) {
       waterfall: artifacts.filter((a) => a.includes("waterfall_trace") || a.includes("trigger_state_history")),
       bond_risk: artifacts.filter((a) => a.includes("tranche_risk_summary") || a.includes("credit_enhancement")),
       deal_risk: artifacts.filter((a) => a.includes("decrement_table") || a.includes("stress_matrix")),
-      solver_runs: artifacts.filter((a) => a.includes("solver_iterations")),
+      solver_runs: artifacts.filter((a) => a.includes("solver_iterations") || a.includes("solver_selected_solution")),
     } as const;
     return byTab[tab];
   }, [artifacts, tab]);
@@ -114,6 +114,13 @@ export default function StructuredDealAnalysisPage({ runId }: Props) {
 
       <CollapsiblePanel title="Artifacts" defaultOpen>
         <div className="p-3">
+          <p className="text-xs text-muted-foreground mb-2">
+            {tab === "bond_cashflows" && "Scenario-level tranche cashflow paths."}
+            {tab === "waterfall" && "Waterfall trace and trigger timelines."}
+            {tab === "bond_risk" && "Per-tranche WAL, CE and risk metrics."}
+            {tab === "deal_risk" && "Stress/decrement diagnostics and aggregate risk views."}
+            {tab === "solver_runs" && "Solver iteration trajectory and selected-solution diagnostics."}
+          </p>
           {!filteredArtifacts.length ? (
             <EmptyState message="No artifacts available for this view in the selected run." />
           ) : (
