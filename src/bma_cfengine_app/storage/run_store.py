@@ -264,6 +264,14 @@ def load_run_input_json(run_id: str, name: str) -> dict[str, Any]:
     raise FileNotFoundError(f"Input '{name}' not found for run {run_id}")
 
 
+def save_run_input_json(run_id: str, name: str, payload: dict[str, Any]) -> Path:
+    """Persist an additional JSON run input under inputs/{name}.json."""
+    d = _inputs_dir(run_id)
+    p = d / f"{name}.json"
+    p.write_text(json.dumps(payload, indent=2, default=str))
+    return p
+
+
 def has_run_inputs(run_id: str) -> bool:
     d = run_dir(run_id) / INPUTS_SUBDIR
     return d.exists() and any(d.iterdir())

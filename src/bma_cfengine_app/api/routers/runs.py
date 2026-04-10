@@ -71,6 +71,7 @@ async def create_run(req: RunRequest, background_tasks: BackgroundTasks):
 
     run_store.save_manifest(run_id, {
         "status": "queued",
+        "run_type": "portfolio",
         "upload_id": req.upload_id,
         "run_mode": req.run_mode,
     })

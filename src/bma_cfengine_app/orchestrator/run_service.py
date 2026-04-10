@@ -287,7 +287,10 @@ def execute_run(
     t_start = time.perf_counter()
 
     try:
-        run_store.save_manifest(run_id, {"status": "running", "upload_id": upload_id})
+        run_store.save_manifest(
+            run_id,
+            {"status": "running", "upload_id": upload_id, "run_type": "portfolio"},
+        )
 
         mappings = sanitize_field_mappings(mappings)
 
@@ -409,6 +412,7 @@ def execute_run(
 
         run_store.save_manifest(run_id, {
             "status": "completed",
+            "run_type": "portfolio",
             "upload_id": upload_id,
             "loan_count": len(loans),
             "group_count": group_count,
@@ -439,7 +443,10 @@ def execute_run(
     except Exception as exc:
         error_msg = f"{type(exc).__name__}: {exc}"
         run_store.save_manifest(run_id, {
-            "status": "failed", "error": error_msg, "traceback": traceback.format_exc(),
+            "status": "failed",
+            "run_type": "portfolio",
+            "error": error_msg,
+            "traceback": traceback.format_exc(),
         })
         return RunResponse(run_id=run_id, status=RunStatus.failed, created_at=created_at, error=error_msg)
 
@@ -571,12 +578,17 @@ def list_all_runs() -> list[dict[str, Any]]:
                 "run_id": d.name,
                 "status": m.get("status", "unknown"),
                 "created_at": m.get("created_at", ""),
+                "run_type": m.get("run_type", "portfolio"),
+                "run_kind": m.get("run_kind"),
                 "loan_count": summary.get("loan_count", m.get("loan_count", 0)),
                 "group_count": summary.get("group_count", m.get("group_count", 0)),
                 "scenario_names": m.get("scenario_names", []),
                 "elapsed_seconds": summary.get("elapsed_seconds", m.get("elapsed_seconds")),
                 "total_balance": summary.get("total_balance", 0),
                 "wac": summary.get("wac", 0),
+                "deal_id": m.get("deal_id"),
+                "deal_name": m.get("deal_name", m.get("deal_context", {}).get("deal_name")),
+                "deal_context": m.get("deal_context", {}),
                 "error": m.get("error"),
                 "has_inputs": has_inputs,
             })
