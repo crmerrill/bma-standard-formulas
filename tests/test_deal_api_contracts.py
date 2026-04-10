@@ -119,7 +119,8 @@ def test_post_deal_solve_contract(monkeypatch):
     assert res.status_code == 200
     body = res.json()
     assert body["run_id"] == "run_solver"
-    assert body["status"] == "completed"
+    assert body["status"] == "running"
+    assert body["progress_handle"]["run_id"] == "run_solver"
 
 
 def test_list_solver_runs_contract(monkeypatch):
@@ -139,3 +140,132 @@ def test_list_solver_runs_contract(monkeypatch):
     body = res.json()
     assert len(body) == 1
     assert body[0]["run_kind"] == "solver"
+
+
+def test_solver_catalog_contract(monkeypatch):
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    monkeypatch.setattr(deals_router, "_ensure_canonical_deal", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        deals_router,
+        "build_solver_catalog",
+        lambda deal_id, canonical_deal: {
+            "deal_id": deal_id,
+            "metric_paths": ["tranche_risk_summary[A].yield_pct"],
+            "knobs": [{"knob_path": "deal_knobs.class_a_coupon"}],
+            "suggested_defaults": {"solver_name": "studio_solver"},
+            "source_run_id": "run_abc",
+        },
+    )
+    client = TestClient(app)
+    res = client.get("/api/deals/deal_x/solver-catalog")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["deal_id"] == "deal_x"
+    assert body["source_run_id"] == "run_abc"
+
+
+def test_solver_presets_contract(monkeypatch):
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    monkeypatch.setattr(
+        deals_router,
+        "list_solver_presets",
+        lambda deal_id: [{"preset_name": "balanced", "solver_spec": {"solver_name": "s1"}}],
+    )
+    monkeypatch.setattr(
+        deals_router,
+        "save_solver_preset",
+        lambda deal_id, preset_name, solver_spec, notes=None: {
+            "preset_name": preset_name,
+            "solver_spec": solver_spec,
+            "notes": notes or "",
+            "created_at": "t1",
+            "updated_at": "t1",
+        },
+    )
+    client = TestClient(app)
+    get_res = client.get("/api/deals/deal_x/solver-presets")
+    assert get_res.status_code == 200
+    assert get_res.json()["presets"][0]["preset_name"] == "balanced"
+
+    post_res = client.post(
+        "/api/deals/deal_x/solver-presets",
+        json={"preset_name": "balanced", "solver_spec": {"solver_name": "s1"}},
+    )
+    assert post_res.status_code == 200
+    assert post_res.json()["preset"]["preset_name"] == "balanced"
+
+
+def test_deal_run_sources_query_contract(monkeypatch):
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    monkeypatch.setattr(
+        deals_router,
+        "list_all_runs",
+        lambda: [
+            {
+                "run_id": "run_1",
+                "deal_id": "deal_x",
+                "deal_name": "Deal X",
+                "run_type": "structured_deal",
+                "run_kind": "solver",
+                "status": "completed",
+                "scenario_names": ["Base Case"],
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+            {
+                "run_id": "run_2",
+                "deal_id": "deal_x",
+                "deal_name": "Deal X",
+                "run_type": "structured_deal",
+                "run_kind": "deal_run",
+                "status": "failed",
+                "scenario_names": ["Stress"],
+                "created_at": "2025-01-01T00:00:00Z",
+            },
+        ],
+    )
+    client = TestClient(app)
+    res = client.get(
+        "/api/deals/deal_x/run-sources?status=completed&run_type=structured_deal&run_kind=solver&search=base&limit=10&cursor=0"
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["total"] == 1
+    assert body["items"][0]["run_id"] == "run_1"
+
+
+def test_solver_progress_and_cancel_contract(monkeypatch):
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    monkeypatch.setattr(
+        deals_router,
+        "get_solver_progress",
+        lambda run_id: {
+            "run_id": run_id,
+            "deal_id": "deal_x",
+            "status": "running",
+            "stage": "optimizing",
+            "iteration": 3,
+            "cancel_requested": False,
+        },
+    )
+    monkeypatch.setattr(
+        deals_router,
+        "request_solver_cancel",
+        lambda run_id: {
+            "run_id": run_id,
+            "deal_id": "deal_x",
+            "status": "running",
+            "cancel_requested": True,
+        },
+    )
+    client = TestClient(app)
+    progress_res = client.get("/api/deals/deal_x/runs/run_solver/progress")
+    assert progress_res.status_code == 200
+    assert progress_res.json()["iteration"] == 3
+
+    cancel_res = client.post("/api/deals/deal_x/runs/run_solver/cancel")
+    assert cancel_res.status_code == 200
+    assert cancel_res.json()["cancel_requested"] is True

@@ -12,9 +12,10 @@ import TabBar from "../components/TabBar";
 interface Props {
   onViewRun: (runId: string, runType?: "portfolio" | "structured_deal") => void;
   onRerun: (runId: string) => void;
+  onOpenSolverStudio?: (runId: string) => void;
 }
 
-export default function RunHistoryPage({ onViewRun, onRerun }: Props) {
+export default function RunHistoryPage({ onViewRun, onRerun, onOpenSolverStudio }: Props) {
   const [runs, setRuns] = useState<RunListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [runTypeFilter, setRunTypeFilter] = useState<"all" | "portfolio" | "structured_deal">("all");
@@ -58,7 +59,7 @@ export default function RunHistoryPage({ onViewRun, onRerun }: Props) {
             header: "Deal / Run",
             accessorFn: (r: RunListItem) =>
               (r.run_type ?? "portfolio") === "structured_deal"
-                ? `${r.deal_name ?? "Structured Deal"} :: ${r.scenario_names.join(", ") || "Base Case"}`
+                ? `${r.deal_name ?? "Structured Deal"} :: ${r.scenario_names.join(", ") || "Base Case"} :: ${r.run_kind ?? "deal_run"}`
                 : "Portfolio Run",
             mono: false,
           },
@@ -73,8 +74,17 @@ export default function RunHistoryPage({ onViewRun, onRerun }: Props) {
           { id: "actions", header: "Actions", align: "center", enableResizing: false, mono: false, accessorFn: () => "", cell: (_v, r: RunListItem) => (
             <div className="flex items-center justify-center gap-1">
               {r.status === "completed" && (
-                <button onClick={() => onViewRun(r.run_id, (r.run_type ?? "portfolio") as "portfolio" | "structured_deal")} className="px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors flex items-center gap-1" title="View results">
-                  <Eye className="w-3 h-3" /> View
+                <button onClick={() => onViewRun(r.run_id, (r.run_type ?? "portfolio") as "portfolio" | "structured_deal")} className="px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors flex items-center gap-1" title="Open run analysis">
+                  <Eye className="w-3 h-3" /> {(r.run_type ?? "portfolio") === "structured_deal" ? "Open Analysis" : "View"}
+                </button>
+              )}
+              {r.status === "completed" && (r.run_type ?? "portfolio") === "structured_deal" && (
+                <button
+                  onClick={() => onOpenSolverStudio?.(r.run_id)}
+                  className="px-2 py-0.5 rounded border border-primary/20 bg-primary/5 text-primary hover:bg-primary/10 transition-colors flex items-center gap-1"
+                  title="Open in Solver Studio"
+                >
+                  <Play className="w-3 h-3" /> Open Solver Studio
                 </button>
               )}
               {r.status === "completed" && (r.run_type ?? "portfolio") === "portfolio" && (

@@ -29,6 +29,10 @@ from .schemas.solver import (
     SolverSpec,
 )
 
+class SolverCancelledError(RuntimeError):
+    """Raised when a solve run is cooperatively cancelled by caller."""
+
+
 
 # ---------------------------------------------------------------------------
 # Knob manipulation
@@ -141,6 +145,8 @@ def solve_deal(
     solver_spec: SolverSpec,
     *,
     scenario_name: str = "Solver",
+    progress_callback: Any | None = None,
+    should_cancel: Any | None = None,
 ) -> tuple[DealDefinition, SolverRunSummary]:
     """Run the staged solver loop and return the solved deal + summary.
 
@@ -164,6 +170,8 @@ def solve_deal(
             knob_values[knob.knob_path] = knob.initial if knob.initial is not None else current
 
         for iteration in range(layer.max_iterations):
+            if callable(should_cancel) and should_cancel():
+                raise SolverCancelledError("Solver cancelled by user request")
             total_iters += 1
 
             for path, val in knob_values.items():
@@ -206,6 +214,17 @@ def solve_deal(
                 mutated_knobs_json=dict(knob_values),
             )
             all_iterations.append(iter_row)
+            if callable(progress_callback):
+                progress_callback(
+                    {
+                        "stage": "optimizing",
+                        "layer": layer.layer_name,
+                        "iteration": iteration,
+                        "objective_value": obj_value,
+                        "constraint_violation_norm": violation_norm,
+                        "feasible": feasible,
+                    }
+                )
 
             if obj_value < layer.convergence_tolerance and feasible:
                 final_status = SolverStatus.CONVERGED
@@ -214,6 +233,8 @@ def solve_deal(
                 break
 
             for knob in layer.knobs:
+                if callable(should_cancel) and should_cancel():
+                    raise SolverCancelledError("Solver cancelled by user request")
                 path = knob.knob_path
                 current = knob_values[path]
 

@@ -41,7 +41,11 @@ function parseScenarioSet(text: string): string[] {
   return names.length ? names : ["Base Case"];
 }
 
-export default function DealEditor() {
+interface DealEditorProps {
+  initialSourceRunId?: string | null;
+}
+
+export default function DealEditor({ initialSourceRunId = null }: DealEditorProps) {
   const [studioTab, setStudioTab] = useState<StudioTab>("design");
   const [irJson, setIrJson] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
@@ -72,6 +76,7 @@ export default function DealEditor() {
   const rightColRef = useRef<HTMLDivElement>(null);
   const colDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const rowDragRef = useRef<{ startY: number; startPct: number; height: number } | null>(null);
+  const progressPollRef = useRef<number | null>(null);
   const scenarioNames = useMemo(
     () => parseScenarioSet(solverSpecDraft.scenarioSetText),
     [solverSpecDraft.scenarioSetText],
@@ -221,6 +226,10 @@ export default function DealEditor() {
       return;
     }
     setSolveBusy(true);
+    if (progressPollRef.current != null) {
+      window.clearInterval(progressPollRef.current);
+      progressPollRef.current = null;
+    }
     setTelemetryState({
       status: "running",
       stage: "Submitting solve request",
@@ -252,23 +261,62 @@ export default function DealEditor() {
         scenario_name: scenarioName,
         solver_spec: solverSpec,
       });
+      const runId = res.run_id ?? null;
       setTelemetryState((prev) => ({
         ...prev,
-        status: "completed",
-        stage: "Solve completed",
-        runId: res.run_id ?? null,
+        status: "running",
+        stage: "Solver running",
+        runId,
       }));
-      toast.success(`Solver run created: ${res.run_id ?? savedDealId}`);
-      refreshRuns();
+      if (runId) {
+        progressPollRef.current = window.setInterval(async () => {
+          try {
+            const progress = await api.getDealSolverProgress(savedDealId, runId);
+            setTelemetryState((prev) => ({
+              ...prev,
+              status: (progress.status as TelemetryState["status"]) ?? prev.status,
+              stage: progress.stage ?? prev.stage,
+              iteration: progress.iteration ?? prev.iteration,
+              runId,
+            }));
+            if (
+              progress.status === "completed"
+              || progress.status === "failed"
+              || progress.status === "cancelled"
+            ) {
+              if (progressPollRef.current != null) {
+                window.clearInterval(progressPollRef.current);
+                progressPollRef.current = null;
+              }
+              setSolveBusy(false);
+              refreshRuns();
+              toast.success(`Solver run ${progress.status}: ${runId}`);
+            }
+          } catch (error) {
+            if (progressPollRef.current != null) {
+              window.clearInterval(progressPollRef.current);
+              progressPollRef.current = null;
+            }
+            setSolveBusy(false);
+            setTelemetryState((prev) => ({
+              ...prev,
+              status: "failed",
+              stage: error instanceof Error ? error.message : String(error),
+            }));
+          }
+        }, 1000);
+      } else {
+        setSolveBusy(false);
+      }
+      toast.success(`Solver run started: ${runId ?? savedDealId}`);
     } catch (e: unknown) {
       setTelemetryState((prev) => ({
         ...prev,
         status: "failed",
         stage: "Solve failed",
       }));
-      toast.error(e instanceof Error ? e.message : String(e));
-    } finally {
       setSolveBusy(false);
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   }, [
     savedDealId,
@@ -281,6 +329,20 @@ export default function DealEditor() {
     refreshRuns,
   ]);
 
+  const handleCancelSolve = useCallback(async () => {
+    if (!savedDealId || !telemetryState.runId) return;
+    try {
+      await api.cancelDealSolverRun(savedDealId, telemetryState.runId);
+      setTelemetryState((prev) => ({
+        ...prev,
+        status: "cancelled",
+        stage: "Cancellation requested",
+      }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }, [savedDealId, telemetryState.runId]);
+
   useEffect(() => {
     setAdvancedJson((prev) => {
       if (prev.lastSyncedAt) return prev;
@@ -291,6 +353,15 @@ export default function DealEditor() {
   useEffect(() => {
     refreshRuns();
   }, [refreshRuns]);
+
+  useEffect(() => {
+    if (!initialSourceRunId) return;
+    setSolverSpecDraft((prev) => ({
+      ...prev,
+      sourceMode: "runsetup_ref",
+      sourceRunId: prev.sourceRunId ?? initialSourceRunId,
+    }));
+  }, [initialSourceRunId]);
 
   useEffect(() => {
     const onColMove = (e: MouseEvent) => {
@@ -327,6 +398,14 @@ export default function DealEditor() {
       window.removeEventListener("mouseup", onColUp);
       window.removeEventListener("mousemove", onRowMove);
       window.removeEventListener("mouseup", onRowUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (progressPollRef.current != null) {
+        window.clearInterval(progressPollRef.current);
+      }
     };
   }, []);
 
@@ -402,7 +481,7 @@ export default function DealEditor() {
           setSensitivitySweepConfig={setSensitivitySweepConfig}
           onRunDeal={handleRunDeal}
           onSolveDeal={handleSolveDeal}
-          onCancelSolve={() => toast.info("Cancellation endpoint lands in Phase D.")}
+          onCancelSolve={handleCancelSolve}
           irJson={irJson}
           irErrors={errors}
         />

@@ -240,3 +240,55 @@ def list_studio_deals() -> list[dict[str, Any]]:
         )
     out.sort(key=lambda r: r.get("updated_at", ""), reverse=True)
     return out
+
+
+def list_solver_presets(deal_id: str) -> list[dict[str, Any]]:
+    d = deal_dir(deal_id)
+    manifest_path = d / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"No deal {deal_id!r}")
+    manifest = json.loads(manifest_path.read_text())
+    presets = manifest.get("solver_presets_library", [])
+    if not isinstance(presets, list):
+        return []
+    return presets
+
+
+def save_solver_preset(
+    deal_id: str,
+    preset_name: str,
+    solver_spec: dict[str, Any],
+    notes: str | None = None,
+) -> dict[str, Any]:
+    d = deal_dir(deal_id)
+    manifest_path = d / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"No deal {deal_id!r}")
+    manifest = json.loads(manifest_path.read_text())
+    now = datetime.now(timezone.utc).isoformat()
+    presets = manifest.get("solver_presets_library", [])
+    if not isinstance(presets, list):
+        presets = []
+
+    existing_idx = None
+    for i, preset in enumerate(presets):
+        if isinstance(preset, dict) and preset.get("preset_name") == preset_name:
+            existing_idx = i
+            break
+    payload = {
+        "preset_name": preset_name,
+        "solver_spec": solver_spec,
+        "notes": notes or "",
+        "updated_at": now,
+    }
+    if existing_idx is None:
+        payload["created_at"] = now
+        presets.append(payload)
+    else:
+        payload["created_at"] = presets[existing_idx].get("created_at", now)
+        presets[existing_idx] = payload
+
+    manifest["solver_presets_library"] = presets
+    manifest["updated_at"] = now
+    manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
+    return payload

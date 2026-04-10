@@ -27,10 +27,12 @@ const TABS = [
 export default function StructuredDealAnalysisPage({ runId }: Props) {
   const [runs, setRuns] = useState<RunListItem[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>(runId ?? "");
+  const [compareRunId, setCompareRunId] = useState<string>("");
   const [tab, setTab] = useState<AnalysisTab>("bond_cashflows");
   const [artifacts, setArtifacts] = useState<string[]>([]);
   const [activeArtifact, setActiveArtifact] = useState<string>("");
   const [preview, setPreview] = useState<CashflowPreview | null>(null);
+  const [comparePreview, setComparePreview] = useState<CashflowPreview | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -59,8 +61,10 @@ export default function StructuredDealAnalysisPage({ runId }: Props) {
       bond_risk: artifacts.filter((a) => a.includes("tranche_risk_summary") || a.includes("credit_enhancement")),
       deal_risk: artifacts.filter((a) => a.includes("decrement_table") || a.includes("stress_matrix")),
       solver_runs: artifacts.filter((a) => a.includes("solver_iterations") || a.includes("solver_selected_solution")),
+      solver_runs_sensitivity: artifacts.filter((a) => a.includes("solver_sensitivity")),
     } as const;
-    return byTab[tab];
+    if (tab !== "solver_runs") return byTab[tab];
+    return [...byTab.solver_runs, ...byTab.solver_runs_sensitivity];
   }, [artifacts, tab]);
 
   useEffect(() => {
@@ -79,6 +83,16 @@ export default function StructuredDealAnalysisPage({ runId }: Props) {
       .then(setPreview)
       .finally(() => setLoading(false));
   }, [selectedRunId, activeArtifact]);
+
+  useEffect(() => {
+    if (!compareRunId || !activeArtifact || tab !== "solver_runs") {
+      setComparePreview(null);
+      return;
+    }
+    api.getPreview(compareRunId, activeArtifact)
+      .then(setComparePreview)
+      .catch(() => setComparePreview(null));
+  }, [compareRunId, activeArtifact, tab]);
 
   if (!runs.length) {
     return <EmptyState message="No structured deal runs yet. Execute a deal run from Structuring Studio first." />;
@@ -101,6 +115,25 @@ export default function StructuredDealAnalysisPage({ runId }: Props) {
             </option>
           ))}
         </select>
+        {tab === "solver_runs" && (
+          <>
+            <span className="text-xs text-muted-foreground ml-3">Compare:</span>
+            <select
+              value={compareRunId}
+              onChange={(e) => setCompareRunId(e.target.value)}
+              className="px-2 py-1 bg-input-background border border-border rounded text-xs text-foreground"
+            >
+              <option value="">None</option>
+              {runs
+                .filter((run) => run.run_id !== selectedRunId && run.run_kind === "solver")
+                .map((run) => (
+                  <option key={run.run_id} value={run.run_id}>
+                    {(run.deal_name ?? run.run_id)} :: {(run.scenario_names ?? []).join(", ") || "Base Case"}
+                  </option>
+                ))}
+            </select>
+          </>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -162,6 +195,24 @@ export default function StructuredDealAnalysisPage({ runId }: Props) {
           )}
         </div>
       </CollapsiblePanel>
+
+      {tab === "solver_runs" && comparePreview && preview && (
+        <CollapsiblePanel title="Compare Runs (Selected Solution Diff)" defaultOpen>
+          <div className="p-3">
+            <DataTable
+              tableId={`solver_compare_${selectedRunId}_${compareRunId}_${activeArtifact}`}
+              columns={[
+                { id: "metric", header: "Metric", accessorKey: "metric", mono: false },
+                { id: "base", header: "Selected", accessorKey: "base", align: "right" },
+                { id: "compare", header: "Compare", accessorKey: "compare", align: "right" },
+                { id: "delta", header: "Delta", accessorKey: "delta", align: "right" },
+              ]}
+              data={buildComparisonRows(preview, comparePreview)}
+              emptyMessage="No comparable numeric metrics."
+            />
+          </div>
+        </CollapsiblePanel>
+      )}
     </div>
   );
 }
@@ -173,4 +224,28 @@ function formatCell(value: unknown): string {
     return fmtNum(value, 4);
   }
   return String(value);
+}
+
+function buildComparisonRows(base: CashflowPreview, compare: CashflowPreview): Array<{
+  metric: string;
+  base: string;
+  compare: string;
+  delta: string;
+}> {
+  const b0 = (base.rows?.[0] ?? {}) as Record<string, unknown>;
+  const c0 = (compare.rows?.[0] ?? {}) as Record<string, unknown>;
+  const columns = new Set([...Object.keys(b0), ...Object.keys(c0)]);
+  const rows: Array<{ metric: string; base: string; compare: string; delta: string }> = [];
+  for (const col of columns) {
+    const bv = Number(b0[col]);
+    const cv = Number(c0[col]);
+    if (!Number.isFinite(bv) || !Number.isFinite(cv)) continue;
+    rows.push({
+      metric: col,
+      base: fmtNum(bv, 4),
+      compare: fmtNum(cv, 4),
+      delta: fmtNum(bv - cv, 4),
+    });
+  }
+  return rows;
 }

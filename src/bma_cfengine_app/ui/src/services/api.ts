@@ -758,6 +758,9 @@ export function saveStudioDeal(body: {
 export interface DealRunResult {
   status: string;
   run_id?: string;
+  progress_handle?: {
+    run_id: string;
+  };
   run_type?: string;
   run_kind?: string;
   deal_id: string;
@@ -791,6 +794,44 @@ export interface DealSolveRequest {
   solver_spec: Record<string, unknown>;
 }
 
+export interface SolverCatalogItem {
+  deal_id: string;
+  metric_paths: string[];
+  knobs: Array<{
+    knob_path: string;
+    label: string;
+    lower: number;
+    upper: number;
+    initial: number;
+    step_hint: number;
+  }>;
+  suggested_defaults: {
+    solver_name: string;
+    layer_name: string;
+    max_iterations: number;
+    global_max_iterations: number;
+    checkpoint_every_n: number;
+  };
+  source_run_id: string | null;
+}
+
+export interface SolverPreset {
+  preset_name: string;
+  solver_spec: Record<string, unknown>;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DealRunSourceList {
+  deal_id: string;
+  total: number;
+  limit: number;
+  cursor: number;
+  next_cursor: number | null;
+  items: RunListItem[];
+}
+
 export function runDeal(dealId: string, body: DealRunRequest): Promise<DealRunResult> {
   return request(`/deals/${dealId}/runs`, {
     method: "POST",
@@ -813,4 +854,82 @@ export function listDealRuns(dealId: string): Promise<RunListItem[]> {
 
 export function listDealSolverRuns(dealId: string): Promise<RunListItem[]> {
   return request(`/deals/${dealId}/solver-runs`);
+}
+
+export interface DealSolverProgress {
+  run_id: string;
+  deal_id: string;
+  status: string;
+  stage: string;
+  iteration: number;
+  objective_value?: number | null;
+  constraint_violation_norm?: number | null;
+  feasible?: boolean | null;
+  elapsed_seconds?: number;
+  cancel_requested: boolean;
+}
+
+export function getDealSolverProgress(
+  dealId: string,
+  runId: string,
+): Promise<DealSolverProgress> {
+  return request(`/deals/${dealId}/runs/${runId}/progress`);
+}
+
+export function cancelDealSolverRun(
+  dealId: string,
+  runId: string,
+): Promise<{
+  run_id: string;
+  deal_id: string;
+  status: string;
+  cancel_requested: boolean;
+  detail?: string;
+}> {
+  return request(`/deals/${dealId}/runs/${runId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function getSolverCatalog(dealId: string): Promise<SolverCatalogItem> {
+  return request(`/deals/${dealId}/solver-catalog`);
+}
+
+export function listSolverPresets(
+  dealId: string,
+): Promise<{ deal_id: string; presets: SolverPreset[] }> {
+  return request(`/deals/${dealId}/solver-presets`);
+}
+
+export function saveSolverPreset(
+  dealId: string,
+  body: { preset_name: string; solver_spec: Record<string, unknown>; notes?: string },
+): Promise<{ deal_id: string; preset: SolverPreset }> {
+  return request(`/deals/${dealId}/solver-presets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function listDealRunSources(
+  dealId: string,
+  params: {
+    status?: string;
+    run_type?: string;
+    run_kind?: string;
+    search?: string;
+    limit?: number;
+    cursor?: number;
+  } = {},
+): Promise<DealRunSourceList> {
+  const q = new URLSearchParams();
+  if (params.status) q.set("status", params.status);
+  if (params.run_type) q.set("run_type", params.run_type);
+  if (params.run_kind) q.set("run_kind", params.run_kind);
+  if (params.search) q.set("search", params.search);
+  if (params.limit != null) q.set("limit", String(params.limit));
+  if (params.cursor != null) q.set("cursor", String(params.cursor));
+  const qs = q.toString();
+  return request(`/deals/${dealId}/run-sources${qs ? `?${qs}` : ""}`);
 }

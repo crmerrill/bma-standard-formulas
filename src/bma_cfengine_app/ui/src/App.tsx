@@ -168,6 +168,11 @@ export default function App() {
     }
   }, []);
 
+  const handleOpenSolverStudio = useCallback((runId: string) => {
+    setStructuredRunId(runId);
+    setPage("structuring");
+  }, []);
+
   const asofAction = (
     <div className="flex items-center gap-2">
       <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
@@ -217,9 +222,13 @@ export default function App() {
         <ResultsPage run={run} onSwitchRun={handleViewRun} />
       )}
       {page === "history" && (
-        <RunHistoryPage onViewRun={handleViewHistoryRun} onRerun={handleRerun} />
+        <RunHistoryPage
+          onViewRun={handleViewHistoryRun}
+          onRerun={handleRerun}
+          onOpenSolverStudio={handleOpenSolverStudio}
+        />
       )}
-      {page === "structuring" && <DealEditor />}
+      {page === "structuring" && <DealEditor initialSourceRunId={structuredRunId} />}
       {page === "structured_analysis" && <StructuredDealAnalysisPage runId={structuredRunId} />}
     </Layout>
   );
