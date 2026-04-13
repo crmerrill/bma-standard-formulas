@@ -93,6 +93,13 @@ const INDEX_OPTIONS: [string, string][] = [
   ["Other", "OTHER"],
 ];
 
+const PREPAY_MODEL_OPTIONS: [string, string][] = [
+  ["PSA", "PSA"],
+  ["CPR", "CPR"],
+  ["ABS", "ABS"],
+  ["Custom Vector", "CUSTOM_VECTOR"],
+];
+
 export const DEAL_BLOCKS = [
 
   // =================================================================
@@ -139,13 +146,14 @@ export const DEAL_BLOCKS = [
 
   {
     type: "pay_pac_schedule",
-    message0: "PAC Schedule from %1 support %2 tol bps %3 max pay $%4 schedule %5 targets: %6",
+    message0: "PAC Schedule model %1 low %2 high %3 custom %4 from %5 support %6 targets: %7",
     args0: [
+      { type: "field_dropdown", name: "MODEL_TYPE", options: PREPAY_MODEL_OPTIONS },
+      { type: "field_number", name: "SPEED_LOW", value: 100, min: 0, precision: 0.01 },
+      { type: "field_number", name: "SPEED_HIGH", value: 275, min: 0, precision: 0.01 },
+      { type: "field_input", name: "CUSTOM_VECTOR", text: "ramp(100,275,24)" },
       { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
       { type: "field_input", name: "SUPPORTS", text: "B,C" },
-      { type: "field_number", name: "TOL_BPS", value: 25, min: 0, precision: 1 },
-      { type: "field_number", name: "MAX_PAY", value: 0, min: 0, precision: 1 },
-      { type: "field_input", name: "SCHEDULE", text: "1:100000,2:95000" },
       { type: "input_statement", name: "TARGETS", check: "target_item" },
     ],
     previousStatement: "waterfall_item",
@@ -157,13 +165,13 @@ export const DEAL_BLOCKS = [
 
   {
     type: "pay_tac_schedule",
-    message0: "TAC Schedule from %1 support %2 tol bps %3 max pay $%4 schedule %5 targets: %6",
+    message0: "TAC Schedule model %1 speed %2 custom %3 from %4 support %5 targets: %6",
     args0: [
+      { type: "field_dropdown", name: "MODEL_TYPE", options: PREPAY_MODEL_OPTIONS },
+      { type: "field_number", name: "SPEED_TARGET", value: 175, min: 0, precision: 0.01 },
+      { type: "field_input", name: "CUSTOM_VECTOR", text: "ramp(175,175,24)" },
       { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
       { type: "field_input", name: "SUPPORTS", text: "B,C" },
-      { type: "field_number", name: "TOL_BPS", value: 25, min: 0, precision: 1 },
-      { type: "field_number", name: "MAX_PAY", value: 0, min: 0, precision: 1 },
-      { type: "field_input", name: "SCHEDULE", text: "1:100000,2:95000" },
       { type: "input_statement", name: "TARGETS", check: "target_item" },
     ],
     previousStatement: "waterfall_item",

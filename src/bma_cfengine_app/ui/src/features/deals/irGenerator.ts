@@ -18,6 +18,11 @@ interface BondDefIR {
   margin: number | null;
   pay_mode: "CASH_PAY" | "PIK";
   tranche_behavior: "SEQUENTIAL" | "PAC" | "TAC" | "Z" | "ACCRETION_DIRECTED";
+  schedule_model_type: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR" | null;
+  schedule_speed_low: number | null;
+  schedule_speed_high: number | null;
+  schedule_speed_target: number | null;
+  schedule_custom_vector: string | null;
   schedule_contract: Array<{ period: number; target_principal: number }>;
   schedule_tolerance_bps: number | null;
   support_tranches: string[];
@@ -154,6 +159,11 @@ interface TargetInfo {
   accrual?: string;
   payMode?: "CASH_PAY" | "PIK";
   trancheBehavior?: "SEQUENTIAL" | "PAC" | "TAC" | "Z" | "ACCRETION_DIRECTED";
+  scheduleModelType?: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR";
+  scheduleSpeedLow?: number | null;
+  scheduleSpeedHigh?: number | null;
+  scheduleSpeedTarget?: number | null;
+  scheduleCustomVector?: string | null;
   scheduleContract?: Array<{ period: number; target_principal: number }>;
   scheduleToleranceBps?: number | null;
   supportTranches?: string[];
@@ -287,21 +297,66 @@ function parseScheduleContract(raw: string): Array<{ period: number; target_prin
   return scheduleContract;
 }
 
+function buildSyntheticScheduleFromModel(opts: {
+  behavior: "PAC" | "TAC";
+  modelType: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR";
+  speedLow: number | null;
+  speedHigh: number | null;
+  speedTarget: number | null;
+  customVector: string;
+}): Array<{ period: number; target_principal: number }> {
+  const { behavior, modelType, speedLow, speedHigh, speedTarget, customVector } = opts;
+  if (modelType === "CUSTOM_VECTOR") {
+    const parsed = parseScheduleContract(customVector);
+    if (parsed.length > 0) return parsed;
+    const trimmed = customVector.trim().toLowerCase();
+    if (trimmed.startsWith("ramp(")) {
+      return [{ period: 1, target_principal: 1.0 }];
+    }
+    return [];
+  }
+  if (behavior === "PAC") {
+    const lo = Number.isFinite(speedLow as number) ? Number(speedLow) : null;
+    const hi = Number.isFinite(speedHigh as number) ? Number(speedHigh) : null;
+    if (lo == null || hi == null) return [];
+    return [
+      { period: 1, target_principal: lo },
+      { period: 2, target_principal: hi },
+    ];
+  }
+  const tgt = Number.isFinite(speedTarget as number) ? Number(speedTarget) : null;
+  if (tgt == null) return [];
+  return [{ period: 1, target_principal: tgt }];
+}
+
 function applyPacTacSemantics(
   targets: TargetInfo[],
   {
     behavior,
-    scheduleRaw,
+    modelType,
+    speedLow,
+    speedHigh,
+    speedTarget,
+    customVector,
     supportsRaw,
-    toleranceBps,
   }: {
     behavior: "PAC" | "TAC";
-    scheduleRaw: string;
+    modelType: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR";
+    speedLow: number | null;
+    speedHigh: number | null;
+    speedTarget: number | null;
+    customVector: string;
     supportsRaw: string;
-    toleranceBps: number;
   },
 ): TargetInfo[] {
-  const scheduleContract = parseScheduleContract(scheduleRaw);
+  const scheduleContract = buildSyntheticScheduleFromModel({
+    behavior,
+    modelType,
+    speedLow,
+    speedHigh,
+    speedTarget,
+    customVector,
+  });
   const supportTranches = String(supportsRaw || "")
     .split(",")
     .map((s) => s.trim())
@@ -311,8 +366,13 @@ function applyPacTacSemantics(
     return {
       ...target,
       trancheBehavior: behavior,
+      scheduleModelType: modelType,
+      scheduleSpeedLow: speedLow,
+      scheduleSpeedHigh: speedHigh,
+      scheduleSpeedTarget: speedTarget,
+      scheduleCustomVector: customVector.trim() || null,
       scheduleContract,
-      scheduleToleranceBps: Number.isFinite(toleranceBps) ? toleranceBps : 25,
+      scheduleToleranceBps: null,
       supportTranches,
     };
   });
@@ -369,19 +429,27 @@ function emitProRata(block: any, ctx: Ctx): void {
 
 function emitPacTacSchedule(block: any, ctx: Ctx, behavior: "PAC" | "TAC"): void {
   const source = normalizeRuleSource(block.getFieldValue("SOURCE"));
-  const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
-  const schedule = String(block.getFieldValue("SCHEDULE") || "");
+  const modelType = (block.getFieldValue("MODEL_TYPE") || "PSA") as "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR";
+  const speedLowRaw = Number(block.getFieldValue("SPEED_LOW"));
+  const speedHighRaw = Number(block.getFieldValue("SPEED_HIGH"));
+  const speedTargetRaw = Number(block.getFieldValue("SPEED_TARGET"));
+  const speedLow = Number.isFinite(speedLowRaw) ? speedLowRaw : null;
+  const speedHigh = Number.isFinite(speedHighRaw) ? speedHighRaw : null;
+  const speedTarget = Number.isFinite(speedTargetRaw) ? speedTargetRaw : null;
+  const customVector = String(block.getFieldValue("CUSTOM_VECTOR") || "");
   const supports = String(block.getFieldValue("SUPPORTS") || "");
-  const tolBps = Number(block.getFieldValue("TOL_BPS")) || 25;
   const targets = applyPacTacSemantics(extractTargets(block), {
     behavior,
-    scheduleRaw: schedule,
+    modelType,
+    speedLow,
+    speedHigh,
+    speedTarget,
+    customVector,
     supportsRaw: supports,
-    toleranceBps: tolBps,
   });
   registerTargets(targets, ctx);
 
-  targets.forEach((target, idx) => {
+  targets.forEach((target) => {
     ctx.rules.push({
       rule_id: `${behavior.toLowerCase()}_rule_${ctx.order}`,
       rule_type: "PAY_PRINCIPAL",
@@ -389,7 +457,7 @@ function emitPacTacSchedule(block: any, ctx: Ctx, behavior: "PAC" | "TAC"): void
       from_sources: [source],
       to_targets: [target.name],
       payment_style: "SEQUENTIAL",
-      max_amount_fixed: maxPay > 0 && idx === 0 ? maxPay : null,
+      max_amount_fixed: null,
       condition_trigger: ctx.activeTrigger,
       condition_invert: ctx.conditionInvert,
     });
@@ -538,6 +606,11 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       margin: info.bondType === "FLOATING" ? Number(info.margin || 0) : null,
       pay_mode: info.payMode || "CASH_PAY",
       tranche_behavior: info.trancheBehavior || (info.payMode === "PIK" ? "Z" : "SEQUENTIAL"),
+      schedule_model_type: info.scheduleModelType ?? null,
+      schedule_speed_low: info.scheduleSpeedLow ?? null,
+      schedule_speed_high: info.scheduleSpeedHigh ?? null,
+      schedule_speed_target: info.scheduleSpeedTarget ?? null,
+      schedule_custom_vector: info.scheduleCustomVector ?? null,
       schedule_contract: info.scheduleContract || [],
       schedule_tolerance_bps:
         info.trancheBehavior === "PAC" || info.trancheBehavior === "TAC"
@@ -557,6 +630,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
       pay_mode: "CASH_PAY",
       tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
+      schedule_model_type: null, schedule_speed_low: null, schedule_speed_high: null, schedule_speed_target: null, schedule_custom_vector: null,
       support_tranches: [], supported_by_tranches: [], z_accrual_enabled: false, z_release_trigger: null,
     });
   }
@@ -585,6 +659,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
         is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
         pay_mode: "CASH_PAY",
         tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
+        schedule_model_type: null, schedule_speed_low: null, schedule_speed_high: null, schedule_speed_target: null, schedule_custom_vector: null,
         support_tranches: [], supported_by_tranches: [], z_accrual_enabled: false, z_release_trigger: null,
       });
       bondNames.add(fee.name);

@@ -157,6 +157,13 @@ class ScheduleType(str, Enum):
     SUPPORT = "SUPPORT"
 
 
+class PrepayModelType(str, Enum):
+    PSA = "PSA"
+    CPR = "CPR"
+    ABS = "ABS"
+    CUSTOM_VECTOR = "CUSTOM_VECTOR"
+
+
 class StructureRelation(str, Enum):
     FLOATER_INVERSE = "floater_inverse"
     IO_PO = "io_po"

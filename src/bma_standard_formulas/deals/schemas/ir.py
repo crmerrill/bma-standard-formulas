@@ -18,6 +18,7 @@ from .common import (
     Rate,
     RuleType,
     ScheduleType,
+    PrepayModelType,
     StructureRelation,
     TrancheType,
     TriggerMetricType,
@@ -60,6 +61,11 @@ class BondDef(BaseModel):
 
     # PAC/TAC schedule parameters
     schedule_type: ScheduleType | None = None
+    schedule_model_type: PrepayModelType | None = None
+    schedule_speed_low: float | None = None
+    schedule_speed_high: float | None = None
+    schedule_speed_target: float | None = None
+    schedule_custom_vector: str | None = None
     pac_lower_psa: float | None = None
     pac_upper_psa: float | None = None
     tac_pricing_psa: float | None = None
@@ -259,11 +265,30 @@ class DealDefinition(BaseModel):
                                 f"unknown bond {n!r}"
                             )
             if bond.tranche_behavior in {TrancheBehavior.PAC, TrancheBehavior.TAC}:
-                if not bond.schedule_contract:
+                has_legacy_schedule = bool(bond.schedule_contract)
+                has_model = bond.schedule_model_type is not None
+                if not has_legacy_schedule and not has_model:
                     errors.append(
                         f"Bond {bond.name!r}: tranche_behavior {bond.tranche_behavior.value} "
-                        f"requires schedule_contract points"
+                        "requires schedule model or schedule_contract points"
                     )
+                if has_model and bond.schedule_model_type == PrepayModelType.CUSTOM_VECTOR:
+                    if not (bond.schedule_custom_vector or "").strip():
+                        errors.append(
+                            f"Bond {bond.name!r}: CUSTOM_VECTOR schedule requires schedule_custom_vector."
+                        )
+                if has_model and bond.tranche_behavior == TrancheBehavior.PAC:
+                    if bond.schedule_model_type != PrepayModelType.CUSTOM_VECTOR:
+                        if bond.schedule_speed_low is None or bond.schedule_speed_high is None:
+                            errors.append(
+                                f"Bond {bond.name!r}: PAC schedule requires low/high speed values."
+                            )
+                if has_model and bond.tranche_behavior == TrancheBehavior.TAC:
+                    if bond.schedule_model_type != PrepayModelType.CUSTOM_VECTOR:
+                        if bond.schedule_speed_target is None:
+                            errors.append(
+                                f"Bond {bond.name!r}: TAC schedule requires target speed value."
+                            )
                 if not bond.support_tranches and not bond.supported_by_tranches:
                     errors.append(
                         f"Bond {bond.name!r}: tranche_behavior {bond.tranche_behavior.value} "

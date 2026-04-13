@@ -40,12 +40,12 @@ def verify_structure(
 
     for bond in behavior_bonds:
         if bond.tranche_behavior in {TrancheBehavior.PAC, TrancheBehavior.TAC}:
-            if not bond.schedule_contract:
+            if not bond.schedule_contract and bond.schedule_model_type is None:
                 errors.append(
-                    f"{bond.name}: {bond.tranche_behavior.value} requires schedule contract points."
+                    f"{bond.name}: {bond.tranche_behavior.value} requires a prepayment model or schedule points."
                 )
                 suggestions.append(
-                    f"Add schedule points on the {bond.tranche_behavior.value} payment block for {bond.name} (period:target principal)."
+                    f"Set schedule model/speeds on the {bond.tranche_behavior.value} block for {bond.name}."
                 )
             if not bond.support_tranches and not bond.supported_by_tranches:
                 errors.append(
@@ -54,9 +54,9 @@ def verify_structure(
                 suggestions.append(
                     f"Populate support tranche list on the {bond.tranche_behavior.value} payment block."
                 )
-            if bond.schedule_tolerance_bps is None:
-                warnings.append(
-                    f"{bond.name}: schedule_tolerance_bps not set; default tolerance behavior may be too loose."
+            if bond.schedule_model_type is not None and not bond.schedule_contract:
+                suggestions.append(
+                    f"{bond.name}: model-driven schedule selected; confirm PAC/TAC priority and excess-principal routing in waterfall order."
                 )
         if bond.tranche_behavior == TrancheBehavior.Z:
             if not bond.z_accrual_enabled:
