@@ -27,6 +27,7 @@ from .schemas.solver import (
     ObjectiveType,
     SolverLayerSpec,
     SolverSpec,
+    WaterfallTargetPrimitive,
 )
 
 class SolverCancelledError(RuntimeError):
@@ -107,6 +108,167 @@ def _extract_metric(
             if r.tranche_id == tranche_id:
                 return float(getattr(r, attr, 0.0))
 
+    if metric_path.startswith("pac_tac_diagnostics["):
+        tranche_id = metric_path.split("[")[1].split("]")[0]
+        attr = metric_path.split(".")[-1]
+        values: list[float] = []
+        for row in getattr(scenario_result, "pac_tac_diagnostics", []):
+            if getattr(row, "tranche_id", None) != tranche_id:
+                continue
+            values.append(float(getattr(row, attr, 0.0) or 0.0))
+        if values:
+            return max(values)
+
+    if metric_path.startswith("structure_composition["):
+        tranche_id = metric_path.split("[")[1].split("]")[0]
+        attr = metric_path.split(".")[-1]
+        values: list[float] = []
+        for row in getattr(scenario_result, "structure_composition", []):
+            parent = getattr(row, "parent_tranche_id", None)
+            child = getattr(row, "child_tranche_id", None)
+            if tranche_id not in {parent, child}:
+                continue
+            values.append(float(getattr(row, attr, 0.0) or 0.0))
+        if values:
+            return max(values)
+
+    return 0.0
+
+
+def _extract_primitive_metric(
+    scenario_result,
+    risk_results: list,
+    primitive: WaterfallTargetPrimitive,
+    params: dict[str, Any] | None = None,
+) -> float:
+    """Derive a domain-native metric from waterfall outputs."""
+    params = params or {}
+    tranche_id = str(params.get("tranche_id", "A"))
+
+    if primitive == WaterfallTargetPrimitive.CUM_LOSS_MULTIPLE_GAP:
+        target_multiple = float(params.get("target_multiple", 2.0))
+        collateral = getattr(scenario_result, "collateral_summary", None)
+        total_loss = float(getattr(collateral, "total_collateral_loss", 0.0) or 0.0) if collateral else 0.0
+        original_balance = float(getattr(collateral, "starting_balance", 0.0) or 0.0) if collateral else 0.0
+        loss_pct = (total_loss / original_balance) if original_balance > 0 else 0.0
+        achieved_multiple = (1.0 / loss_pct) if loss_pct > 0 else 999.0
+        return max(0.0, target_multiple - achieved_multiple)
+
+    if primitive in {
+        WaterfallTargetPrimitive.NO_SHORTFALL_INTEREST,
+        WaterfallTargetPrimitive.NO_SHORTFALL_PRINCIPAL,
+    }:
+        attr = "interest_shortfall_pct" if primitive == WaterfallTargetPrimitive.NO_SHORTFALL_INTEREST else "principal_shortfall_pct"
+        max_shortfall = 0.0
+        for row in getattr(scenario_result, "bond_cashflows", []):
+            if getattr(row, "tranche_id", None) != tranche_id:
+                continue
+            if primitive == WaterfallTargetPrimitive.NO_SHORTFALL_INTEREST:
+                denom = float(getattr(row, "interest_due", 0.0) or 0.0)
+                raw = float(getattr(row, "interest_shortfall", 0.0) or 0.0)
+            else:
+                denom = float(getattr(row, "total_principal", 0.0) or 0.0)
+                raw = float(getattr(row, "writedown", 0.0) or 0.0)
+            pct = raw / denom if denom > 0 else 0.0
+            max_shortfall = max(max_shortfall, pct)
+        for r in risk_results:
+            if getattr(r, "tranche_id", None) == tranche_id:
+                max_shortfall = max(max_shortfall, float(getattr(r, attr, 0.0) or 0.0))
+        return max_shortfall
+
+    if primitive == WaterfallTargetPrimitive.OC_IC_TRIGGER_RESILIENCE:
+        breaches = 0
+        for row in getattr(scenario_result, "trigger_state_history", []):
+            trigger_name = str(getattr(row, "trigger_id", "")).lower()
+            state = str(getattr(row, "state", "")).upper()
+            if ("oc" in trigger_name or "ic" in trigger_name) and state in {"BREACHED", "TRIGGERED"}:
+                breaches += 1
+        return float(breaches)
+
+    if primitive == WaterfallTargetPrimitive.STEPDOWN_ELIGIBILITY_SAFETY:
+        unsafe_events = 0
+        for row in getattr(scenario_result, "trigger_state_history", []):
+            trigger_name = str(getattr(row, "trigger_id", "")).lower()
+            state = str(getattr(row, "state", "")).upper()
+            if ("step" in trigger_name or "pro_rata" in trigger_name or "prorata" in trigger_name) and state in {"BREACHED", "TRIGGERED"}:
+                unsafe_events += 1
+        return float(unsafe_events)
+
+    if primitive == WaterfallTargetPrimitive.SUBORDINATION_FLOOR_GAP:
+        floor_pct = float(params.get("floor_pct", 0.0))
+        ce_pct = 0.0
+        for ce in getattr(scenario_result, "credit_enhancement", []):
+            if getattr(ce, "tranche_id", None) == tranche_id:
+                ce_pct = float(getattr(ce, "subordination_pct", 0.0) or 0.0)
+                break
+        return max(0.0, floor_pct - ce_pct)
+
+    if primitive == WaterfallTargetPrimitive.RESERVE_SUFFICIENCY_GAP:
+        floor_amount = float(params.get("reserve_floor", 0.0))
+        min_reserve = None
+        for row in getattr(scenario_result, "deal_accounts", []):
+            account_name = str(getattr(row, "account_id", "")).lower()
+            if "reserve" not in account_name and "liquidity" not in account_name:
+                continue
+            end_balance = float(getattr(row, "end_balance", 0.0) or 0.0)
+            min_reserve = end_balance if min_reserve is None else min(min_reserve, end_balance)
+        if min_reserve is None:
+            return float(floor_amount > 0.0)
+        return max(0.0, floor_amount - min_reserve)
+
+    if primitive == WaterfallTargetPrimitive.CE_TARGET_DELTA:
+        target_ce = float(params.get("target_ce_pct", 0.0))
+        ce_pct = 0.0
+        for ce in getattr(scenario_result, "credit_enhancement", []):
+            if getattr(ce, "tranche_id", None) == tranche_id:
+                ce_pct = float(getattr(ce, "total_ce_pct", 0.0) or 0.0)
+                break
+        return abs(target_ce - ce_pct)
+
+    if primitive in {
+        WaterfallTargetPrimitive.PAC_SCHEDULE_MISS,
+        WaterfallTargetPrimitive.TAC_SCHEDULE_MISS,
+    }:
+        max_miss = 0.0
+        expected = "PAC" if primitive == WaterfallTargetPrimitive.PAC_SCHEDULE_MISS else "TAC"
+        for row in getattr(scenario_result, "pac_tac_diagnostics", []):
+            if getattr(row, "tranche_id", None) != tranche_id:
+                continue
+            row_schedule = getattr(getattr(row, "schedule_type", None), "value", None)
+            if row_schedule != expected:
+                continue
+            max_miss = max(max_miss, abs(float(getattr(row, "schedule_variance", 0.0) or 0.0)))
+        return max_miss
+
+    if primitive == WaterfallTargetPrimitive.Z_ACCRUAL_RELEASE_GAP:
+        max_gap = 0.0
+        for row in getattr(scenario_result, "structure_composition", []):
+            if getattr(row, "child_tranche_id", None) != tranche_id:
+                continue
+            max_gap = max(max_gap, float(getattr(row, "principal_conservation_error", 0.0) or 0.0))
+            max_gap = max(max_gap, float(getattr(row, "coupon_identity_error", 0.0) or 0.0))
+        return max_gap
+
+    if primitive == WaterfallTargetPrimitive.SUPPORT_BURNDOWN_GAP:
+        max_gap = 0.0
+        floor = float(params.get("support_floor", 0.0))
+        for row in getattr(scenario_result, "structure_composition", []):
+            if getattr(row, "parent_tranche_id", None) != tranche_id:
+                continue
+            remaining_gap = float(getattr(row, "principal_conservation_error", 0.0) or 0.0)
+            max_gap = max(max_gap, max(0.0, remaining_gap - floor))
+        return max_gap
+
+    return 0.0
+
+
+def _objective_term(metric: float, obj: ObjectiveSpec) -> float:
+    if obj.objective_type == ObjectiveType.TARGET:
+        return obj.weight * abs(metric - (obj.target_value or 0.0))
+    if obj.objective_type == ObjectiveType.MINIMIZE:
+        return obj.weight * metric
+    if obj.objective_type == ObjectiveType.MAXIMIZE:
+        return -obj.weight * metric
     return 0.0
 
 
@@ -183,19 +345,34 @@ def solve_deal(
 
             obj_value = 0.0
             for obj in layer.objectives:
-                metric = _extract_metric(scenario_result, risk_results, obj.metric_path)
-                final_metrics[obj.metric_path] = metric
-                if obj.objective_type == ObjectiveType.TARGET:
-                    obj_value += obj.weight * abs(metric - (obj.target_value or 0.0))
-                elif obj.objective_type == ObjectiveType.MINIMIZE:
-                    obj_value += obj.weight * metric
-                elif obj.objective_type == ObjectiveType.MAXIMIZE:
-                    obj_value -= obj.weight * metric
+                if obj.target_primitive:
+                    metric = _extract_primitive_metric(
+                        scenario_result,
+                        risk_results,
+                        obj.target_primitive,
+                        obj.primitive_params,
+                    )
+                    metric_key = f"primitive:{obj.target_primitive.value}"
+                else:
+                    metric = _extract_metric(scenario_result, risk_results, obj.metric_path)
+                    metric_key = obj.metric_path
+                final_metrics[metric_key] = metric
+                obj_value += _objective_term(metric, obj)
 
             violation_norm = 0.0
             for constraint in layer.constraints:
-                metric = _extract_metric(scenario_result, risk_results, constraint.metric_path)
-                final_metrics[constraint.metric_path] = metric
+                if constraint.target_primitive:
+                    metric = _extract_primitive_metric(
+                        scenario_result,
+                        risk_results,
+                        constraint.target_primitive,
+                        constraint.primitive_params,
+                    )
+                    metric_key = f"primitive:{constraint.target_primitive.value}"
+                else:
+                    metric = _extract_metric(scenario_result, risk_results, constraint.metric_path)
+                    metric_key = constraint.metric_path
+                final_metrics[metric_key] = metric
                 violation_norm += _evaluate_constraint(constraint, metric) ** 2
             violation_norm = violation_norm ** 0.5
 
@@ -246,23 +423,37 @@ def solve_deal(
                 _apply_knobs_to_bond_sizes(deal)
                 result_up = run_deal(deal, run_input, scenario_name=scenario_name, collect_trace=False)
                 risk_up = compute_tranche_risk(result_up)
-                obj_up = sum(
-                    o.weight * abs(
-                        _extract_metric(result_up, risk_up, o.metric_path) - (o.target_value or 0.0)
+                obj_up = 0.0
+                for obj in layer.objectives:
+                    metric_up = (
+                        _extract_primitive_metric(
+                            result_up,
+                            risk_up,
+                            obj.target_primitive,
+                            obj.primitive_params,
+                        )
+                        if obj.target_primitive
+                        else _extract_metric(result_up, risk_up, obj.metric_path)
                     )
-                    for o in layer.objectives
-                )
+                    obj_up += _objective_term(metric_up, obj)
 
                 _set_knob_value(deal, path, trial_down)
                 _apply_knobs_to_bond_sizes(deal)
                 result_down = run_deal(deal, run_input, scenario_name=scenario_name, collect_trace=False)
                 risk_down = compute_tranche_risk(result_down)
-                obj_down = sum(
-                    o.weight * abs(
-                        _extract_metric(result_down, risk_down, o.metric_path) - (o.target_value or 0.0)
+                obj_down = 0.0
+                for obj in layer.objectives:
+                    metric_down = (
+                        _extract_primitive_metric(
+                            result_down,
+                            risk_down,
+                            obj.target_primitive,
+                            obj.primitive_params,
+                        )
+                        if obj.target_primitive
+                        else _extract_metric(result_down, risk_down, obj.metric_path)
                     )
-                    for o in layer.objectives
-                )
+                    obj_down += _objective_term(metric_down, obj)
 
                 if obj_up < obj_down:
                     knob_values[path] = trial_up

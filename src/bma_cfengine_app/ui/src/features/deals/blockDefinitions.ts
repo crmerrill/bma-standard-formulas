@@ -79,6 +79,11 @@ const BOND_TYPE_OPTIONS: [string, string][] = [
   ["Floating", "FLOATING"],
 ];
 
+const PAY_MODE_OPTIONS: [string, string][] = [
+  ["Cash Pay", "CASH_PAY"],
+  ["PIK", "PIK"],
+];
+
 const INDEX_OPTIONS: [string, string][] = [
   ["SOFR", "SOFR"],
   ["Term SOFR 1M", "TERM_SOFR_1M"],
@@ -133,6 +138,58 @@ export const DEAL_BLOCKS = [
   },
 
   {
+    type: "pay_pac_schedule",
+    message0: "PAC Schedule from %1 support %2 tol bps %3 max pay $%4 schedule %5 targets: %6",
+    args0: [
+      { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
+      { type: "field_input", name: "SUPPORTS", text: "B,C" },
+      { type: "field_number", name: "TOL_BPS", value: 25, min: 0, precision: 1 },
+      { type: "field_number", name: "MAX_PAY", value: 0, min: 0, precision: 1 },
+      { type: "field_input", name: "SCHEDULE", text: "1:100000,2:95000" },
+      { type: "input_statement", name: "TARGETS", check: "target_item" },
+    ],
+    previousStatement: "waterfall_item",
+    nextStatement: "waterfall_item",
+    colour: "#0f766e",
+    tooltip:
+      "PAC principal schedule rule. Uses sequential principal payment while tagging targets as PAC with explicit schedule and support tranches.",
+  },
+
+  {
+    type: "pay_tac_schedule",
+    message0: "TAC Schedule from %1 support %2 tol bps %3 max pay $%4 schedule %5 targets: %6",
+    args0: [
+      { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
+      { type: "field_input", name: "SUPPORTS", text: "B,C" },
+      { type: "field_number", name: "TOL_BPS", value: 25, min: 0, precision: 1 },
+      { type: "field_number", name: "MAX_PAY", value: 0, min: 0, precision: 1 },
+      { type: "field_input", name: "SCHEDULE", text: "1:100000,2:95000" },
+      { type: "input_statement", name: "TARGETS", check: "target_item" },
+    ],
+    previousStatement: "waterfall_item",
+    nextStatement: "waterfall_item",
+    colour: "#155e75",
+    tooltip:
+      "TAC principal schedule rule. Uses sequential principal payment while tagging targets as TAC with explicit schedule and support tranches.",
+  },
+
+  {
+    type: "pay_accretion_redirect",
+    message0: "Accretion Redirect while %1 accrues from %2 max pay $%3 targets: %4",
+    args0: [
+      { type: "field_input", name: "Z_TRANCHE", text: "Z" },
+      { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
+      { type: "field_number", name: "MAX_PAY", value: 0, min: 0, precision: 1 },
+      { type: "input_statement", name: "TARGETS", check: "target_item" },
+    ],
+    previousStatement: "waterfall_item",
+    nextStatement: "waterfall_item",
+    colour: "#7c2d12",
+    tooltip:
+      "Redirection helper for Z/PIK periods. Place inside sequential flow or a trigger wrapper.",
+  },
+
+  {
     type: "pay_fee",
     message0: "Pay Fee %1 from %2 %3 %4 freq %5",
     args0: [
@@ -170,10 +227,11 @@ export const DEAL_BLOCKS = [
   // Bond target — full properties inline, synced by name via property panel
   {
     type: "bond_target",
-    message0: "→ %1 %2 face $%3 %pool %4 cpn %5%% %6 %7 %8 %9 %10",
+    message0: "→ %1 %2 %3 face $%4 %pool %5 cpn %6%% %7 %8 %9 %10 %11",
     args0: [
       { type: "field_input", name: "NAME", text: "A" },
       { type: "field_dropdown", name: "BOND_TYPE", options: BOND_TYPE_OPTIONS },
+      { type: "field_dropdown", name: "PAY_MODE", options: PAY_MODE_OPTIONS },
       { type: "field_number", name: "FACE_AMT", value: 70000000, min: 0, precision: 1 },
       { type: "field_number", name: "SIZE_PCT_POOL", value: 0, min: 0, precision: 0.01 },
       { type: "field_number", name: "COUPON", value: 5.0, min: 0, precision: 0.01 },

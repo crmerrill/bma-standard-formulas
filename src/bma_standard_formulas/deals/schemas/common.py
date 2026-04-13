@@ -76,6 +76,18 @@ class TrancheType(str, Enum):
     RESIDUAL = "RESIDUAL"
 
 
+class TrancheBehavior(str, Enum):
+    SEQUENTIAL = "SEQUENTIAL"
+    PAC = "PAC"
+    TAC = "TAC"
+    Z = "Z"
+
+
+class PayMode(str, Enum):
+    CASH_PAY = "CASH_PAY"
+    PIK = "PIK"
+
+
 class AccountType(str, Enum):
     RESERVE = "RESERVE"
     PREFUNDING = "PREFUNDING"

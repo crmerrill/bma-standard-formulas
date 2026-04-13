@@ -3,6 +3,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from bma_standard_formulas.deals.schemas.solver import (
+    ConstraintComparison,
+    ObjectiveType,
+    WaterfallTargetPrimitive,
+)
+
 from ...storage import run_store
 from ..run_service import list_all_runs
 
@@ -33,6 +39,8 @@ def _default_metrics() -> list[str]:
         "tranche_risk_summary[A].yield_pct",
         "tranche_risk_summary[A].wal_years",
         "credit_enhancement[A].total_ce_pct",
+        "pac_tac_diagnostics[A].schedule_variance",
+        "structure_composition[A].principal_conservation_error",
     ]
 
 
@@ -59,6 +67,8 @@ def _derive_metric_paths_from_run(run_id: str) -> list[str]:
         if not (
             artifact.endswith("_tranche_risk_summary")
             or artifact.endswith("_credit_enhancement")
+            or artifact.endswith("_pac_tac_diagnostics")
+            or artifact.endswith("_structure_composition")
             or artifact.endswith("_solver_selected_solution")
         ):
             continue
@@ -71,7 +81,16 @@ def _derive_metric_paths_from_run(run_id: str) -> list[str]:
         tranche_id = None
         if "tranche_id" in df.columns and len(df["tranche_id"]):
             tranche_id = str(df["tranche_id"].iloc[0])
-        root = "tranche_risk_summary" if "tranche_risk_summary" in artifact else "credit_enhancement"
+        if "tranche_risk_summary" in artifact:
+            root = "tranche_risk_summary"
+        elif "credit_enhancement" in artifact:
+            root = "credit_enhancement"
+        elif "pac_tac_diagnostics" in artifact:
+            root = "pac_tac_diagnostics"
+        elif "structure_composition" in artifact:
+            root = "structure_composition"
+        else:
+            root = "artifact"
         for col in df.columns:
             if col in {"scenario_name", "tranche_id"}:
                 continue
@@ -116,6 +135,44 @@ def build_solver_catalog(deal_id: str, canonical_deal: Any) -> dict[str, Any]:
         "deal_id": deal_id,
         "metric_paths": metric_paths,
         "knobs": knobs,
+        "typed_enums": {
+            "objective_types": [item.value for item in ObjectiveType],
+            "constraint_comparisons": [item.value for item in ConstraintComparison],
+            "waterfall_target_primitives": [item.value for item in WaterfallTargetPrimitive],
+        },
+        "template_families": [
+            {
+                "family": "PRIME_JUMBO",
+                "targets": [
+                    "CUM_LOSS_MULTIPLE_GAP",
+                    "NO_SHORTFALL_INTEREST",
+                    "NO_SHORTFALL_PRINCIPAL",
+                    "OC_IC_TRIGGER_RESILIENCE",
+                    "CE_TARGET_DELTA",
+                ],
+            },
+            {
+                "family": "NON_QM_QRM",
+                "targets": [
+                    "CUM_LOSS_MULTIPLE_GAP",
+                    "NO_SHORTFALL_INTEREST",
+                    "NO_SHORTFALL_PRINCIPAL",
+                    "STEPDOWN_ELIGIBILITY_SAFETY",
+                    "SUBORDINATION_FLOOR_GAP",
+                    "RESERVE_SUFFICIENCY_GAP",
+                    "CE_TARGET_DELTA",
+                ],
+            },
+            {
+                "family": "AGENCY",
+                "targets": [
+                    "PAC_SCHEDULE_MISS",
+                    "TAC_SCHEDULE_MISS",
+                    "Z_ACCRUAL_RELEASE_GAP",
+                    "SUPPORT_BURNDOWN_GAP",
+                ],
+            },
+        ],
         "suggested_defaults": {
             "solver_name": "studio_solver",
             "layer_name": "base",

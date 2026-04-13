@@ -91,6 +91,31 @@ export default function SolverStudioPanel({
 
   const builderValidationErrors = useMemo(() => {
     const errors: string[] = [];
+    const familyPrimitiveGuardrails: Record<string, Set<string>> = {
+      AGENCY: new Set([
+        "PAC_SCHEDULE_MISS",
+        "TAC_SCHEDULE_MISS",
+        "Z_ACCRUAL_RELEASE_GAP",
+        "SUPPORT_BURNDOWN_GAP",
+      ]),
+      PRIME_JUMBO: new Set([
+        "CUM_LOSS_MULTIPLE_GAP",
+        "NO_SHORTFALL_INTEREST",
+        "NO_SHORTFALL_PRINCIPAL",
+        "OC_IC_TRIGGER_RESILIENCE",
+        "CE_TARGET_DELTA",
+      ]),
+      NON_QM_QRM: new Set([
+        "CUM_LOSS_MULTIPLE_GAP",
+        "NO_SHORTFALL_INTEREST",
+        "NO_SHORTFALL_PRINCIPAL",
+        "STEPDOWN_ELIGIBILITY_SAFETY",
+        "SUBORDINATION_FLOOR_GAP",
+        "RESERVE_SUFFICIENCY_GAP",
+        "CE_TARGET_DELTA",
+      ]),
+    };
+    const allowedPrimitives = familyPrimitiveGuardrails[productFamily] ?? null;
     if (!solverSpecDraft.objectives.length) errors.push("Add at least one objective.");
     if (!solverSpecDraft.knobs.length) errors.push("Add at least one knob.");
     solverSpecDraft.objectives.forEach((objective, idx) => {
@@ -98,6 +123,15 @@ export default function SolverStudioPanel({
       if (!objective.metricPath.trim()) errors.push(`Objective ${idx + 1} requires a metric path.`);
       if (objective.objectiveType === "TARGET" && objective.targetValue == null) {
         errors.push(`Objective ${idx + 1} target value is required for TARGET.`);
+      }
+      if (
+        allowedPrimitives
+        && objective.targetPrimitive
+        && !allowedPrimitives.has(objective.targetPrimitive)
+      ) {
+        errors.push(
+          `Objective ${idx + 1} primitive ${objective.targetPrimitive} is outside ${productFamily} guardrails.`,
+        );
       }
     });
     solverSpecDraft.constraints.forEach((constraint, idx) => {
@@ -112,9 +146,26 @@ export default function SolverStudioPanel({
       } else if (constraint.maxValue == null) {
         errors.push(`Constraint ${idx + 1} requires value for ${constraint.operator}.`);
       }
+      if (
+        allowedPrimitives
+        && constraint.targetPrimitive
+        && !allowedPrimitives.has(constraint.targetPrimitive)
+      ) {
+        errors.push(
+          `Constraint ${idx + 1} primitive ${constraint.targetPrimitive} is outside ${productFamily} guardrails.`,
+        );
+      }
     });
+    if (
+      allowedPrimitives
+      && !solverSpecDraft.objectives.some((row) => !!row.targetPrimitive)
+      && !solverSpecDraft.constraints.some((row) => !!row.targetPrimitive)
+      && productFamily !== "CUSTOM"
+    ) {
+      errors.push(`Use at least one waterfall primitive for ${productFamily} template workflows.`);
+    }
     return errors;
-  }, [solverSpecDraft]);
+  }, [solverSpecDraft, productFamily]);
 
   function syncBuilderToJson() {
     const solverSpec = builderToSolverSpec(solverSpecDraft);

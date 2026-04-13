@@ -74,6 +74,8 @@ export default function ConstraintBuilder({ rows, onChange }: Props) {
               operator: "LE",
               minValue: null,
               maxValue: null,
+              targetPrimitive: null,
+              primitiveParams: {},
             },
           ])
         }

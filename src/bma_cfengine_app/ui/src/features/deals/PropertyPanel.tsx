@@ -5,6 +5,7 @@
  * canonical values in one place. Edits propagate to all matching blocks.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Info } from "lucide-react";
 import { toast } from "sonner";
 import { MONO } from "../../lib/format";
 import * as api from "../../services/api";
@@ -16,6 +17,7 @@ import type { CollateralRiskSettings } from "./shared/riskSettings";
 interface BondProps {
   name: string;
   bondType: string;
+  payMode: "CASH_PAY" | "PIK";
   sizeDollars: number;
   sizePctPool: number;
   indexName: string;
@@ -103,6 +105,7 @@ function scanWorkspace(workspace: any): {
         bondMap.set(name, {
           name,
           bondType: block.getFieldValue("BOND_TYPE") || "FIXED",
+          payMode: (block.getFieldValue("PAY_MODE") || "CASH_PAY") as "CASH_PAY" | "PIK",
           sizeDollars: Number(block.getFieldValue("FACE_AMT") || 0),
           sizePctPool: Number(block.getFieldValue("SIZE_PCT_POOL") || 0),
           indexName:
@@ -640,7 +643,10 @@ export default function PropertyPanel({
       </SectionCard>
 
       {fees.length > 0 && (
-        <SectionCard title="Fees">
+        <SectionCard
+          title="Fees"
+          tooltipText="Fee input basis: Input is an annual manual value; Frequency controls pay cadence. Pool BPS uses annual bps on collateral balance; Fixed $ and Per Loan $ are annual amounts reconciled to the selected frequency."
+        >
           <div className="overflow-x-auto">
             <div className="min-w-[520px]">
               <div className="grid grid-cols-[108px_108px_124px_108px_92px_32px] gap-2 px-2 py-1 text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
@@ -718,13 +724,6 @@ export default function PropertyPanel({
                   <span className="text-muted-foreground text-right">{f.blockIds.length}</span>
                 </div>
               ))}
-            </div>
-            <div className="mt-2 px-2 text-xs text-muted-foreground">
-              Fee input basis: <span style={MONO}>Input</span> is an annual manual value;{" "}
-              <span style={MONO}>Frequency</span> controls pay cadence.{" "}
-              <span style={MONO}>Pool BPS</span> uses annual bps on collateral balance;{" "}
-              <span style={MONO}>Fixed $</span> and{" "}
-              <span style={MONO}>Per Loan $</span> are annual amounts reconciled to the selected frequency.
             </div>
           </div>
         </SectionCard>
@@ -814,80 +813,94 @@ export default function PropertyPanel({
                 <span className="text-right">x</span>
               </div>
               {bonds.map((b) => (
-                <div
-                  key={b.name}
-                  className="grid grid-cols-[64px_72px_96px_72px_82px_82px_72px_24px] gap-2 items-center px-2 py-1.5 border-b border-border/70"
-                >
-                  <span className="font-medium text-foreground" style={MONO}>{b.name}</span>
-                  <span className="text-muted-foreground">{b.bondType}</span>
-                  <input
-                    type="number"
-                    value={b.sizeDollars}
-                    onChange={(e) => {
-                      if (solveDriver !== "size_dollars") return;
-                      const next = parseFloat(e.target.value) || 0;
-                      solveStackForBondSize(b.name, next);
-                    }}
-                    className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
-                    style={MONO}
-                    disabled={solveDriver !== "size_dollars"}
-                  />
-                  <input
-                    type="number"
-                    value={b.sizePctPool}
-                    onChange={(e) => {
-                      if (solveDriver !== "size_pct_pool") return;
-                      const pct = Math.max(0, parseFloat(e.target.value) || 0);
-                      solveStackForBondSize(b.name, (pct * poolNotional) / 100);
-                    }}
-                    className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
-                    style={MONO}
-                    disabled={solveDriver !== "size_pct_pool"}
-                  />
-                  <input
-                    type="number"
-                    value={ceInputByBond[b.name] ?? (derivedCeByBond[b.name] ?? 0).toFixed(2)}
-                    onChange={(e) => {
-                      if (solveDriver !== "ce") return;
-                      setCeInputByBond((prev) => ({ ...prev, [b.name]: e.target.value }));
-                      const targetPct = Number(e.target.value);
-                      if (!Number.isFinite(targetPct) || targetPct < 0 || targetPct >= 100) {
-                        setBondValidationError("CE input must be between 0 and 100.");
-                        return;
-                      }
-                      solveCeStack({ bondName: b.name, targetPct });
-                    }}
-                    className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
-                    style={MONO}
-                    placeholder="%"
-                    disabled={solveDriver !== "ce"}
-                  />
-                  {b.bondType === "FLOATING" ? (
+                <div key={b.name} className="border-b border-border/70">
+                  <div className="grid grid-cols-[64px_72px_96px_72px_82px_82px_72px_24px] gap-2 items-center px-2 py-1.5">
+                    <span className="font-medium text-foreground" style={MONO}>{b.name}</span>
+                    <span className="text-muted-foreground">{b.bondType}</span>
                     <input
-                      value={b.indexName}
+                      type="number"
+                      value={b.sizeDollars}
                       onChange={(e) => {
-                        syncBondField(workspace, b.name, "INDEX_NAME", e.target.value);
+                        if (solveDriver !== "size_dollars") return;
+                        const next = parseFloat(e.target.value) || 0;
+                        solveStackForBondSize(b.name, next);
+                      }}
+                      className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
+                      style={MONO}
+                      disabled={solveDriver !== "size_dollars"}
+                    />
+                    <input
+                      type="number"
+                      value={b.sizePctPool}
+                      onChange={(e) => {
+                        if (solveDriver !== "size_pct_pool") return;
+                        const pct = Math.max(0, parseFloat(e.target.value) || 0);
+                        solveStackForBondSize(b.name, (pct * poolNotional) / 100);
+                      }}
+                      className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
+                      style={MONO}
+                      disabled={solveDriver !== "size_pct_pool"}
+                    />
+                    <input
+                      type="number"
+                      value={ceInputByBond[b.name] ?? (derivedCeByBond[b.name] ?? 0).toFixed(2)}
+                      onChange={(e) => {
+                        if (solveDriver !== "ce") return;
+                        setCeInputByBond((prev) => ({ ...prev, [b.name]: e.target.value }));
+                        const targetPct = Number(e.target.value);
+                        if (!Number.isFinite(targetPct) || targetPct < 0 || targetPct >= 100) {
+                          setBondValidationError("CE input must be between 0 and 100.");
+                          return;
+                        }
+                        solveCeStack({ bondName: b.name, targetPct });
+                      }}
+                      className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
+                      style={MONO}
+                      placeholder="%"
+                      disabled={solveDriver !== "ce"}
+                    />
+                    {b.bondType === "FLOATING" ? (
+                      <input
+                        value={b.indexName}
+                        onChange={(e) => {
+                          syncBondField(workspace, b.name, "INDEX_NAME", e.target.value);
+                          refresh();
+                        }}
+                        className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
+                        style={MONO}
+                      />
+                    ) : (
+                      <span className="text-muted-foreground text-center">—</span>
+                    )}
+                    <input
+                      type="number"
+                      value={b.coupon}
+                      step={0.01}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value) || 0;
+                        syncBondField(workspace, b.name, "COUPON", v);
                         refresh();
                       }}
                       className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
                       style={MONO}
                     />
-                  ) : (
-                    <span className="text-muted-foreground text-center">—</span>
-                  )}
-                  <input
-                    type="number"
-                    value={b.coupon}
-                    step={0.01}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value) || 0;
-                      syncBondField(workspace, b.name, "COUPON", v);
-                      refresh();
-                    }}
-                    className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
-                    style={MONO}
-                  />
-                  <span className="text-muted-foreground text-right">{b.blockIds.length}</span>
+                    <span className="text-muted-foreground text-right">{b.blockIds.length}</span>
+                  </div>
+                  <div className="grid grid-cols-[160px_1fr] gap-2 px-2 pb-2">
+                    <FormSelect
+                      value={b.payMode}
+                      onChange={(e) => {
+                        syncBondField(workspace, b.name, "PAY_MODE", e.target.value);
+                        refresh();
+                      }}
+                    >
+                      <option value="CASH_PAY">Cash Pay</option>
+                      <option value="PIK">PIK</option>
+                    </FormSelect>
+                    <span className="text-muted-foreground px-1 py-1">
+                      PAC/TAC are authored via schedule pay rules; PIK mode enables Z-style accrual semantics.
+                    </span>
+                  </div>
                 </div>
               ))}
               <div className="px-2 py-1 text-xs text-muted-foreground border-b border-border/70">
@@ -1118,15 +1131,35 @@ function EntityCounterSection({
 
 function SectionCard({
   title,
+  tooltipText,
   children,
 }: {
   title: string;
+  tooltipText?: string;
   children: React.ReactNode;
 }) {
   return (
     <section className="rounded-md border border-border bg-background/30">
       <div className="px-3 py-2 border-b border-border">
-        <h3 className="text-xs font-medium tracking-wide uppercase text-muted-foreground">{title}</h3>
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-xs font-medium tracking-wide uppercase text-muted-foreground">{title}</h3>
+          {tooltipText && (
+            <span className="relative inline-flex items-center group">
+              <span
+                className="inline-flex items-center text-muted-foreground/80 hover:text-foreground"
+                aria-label={`${title} info`}
+              >
+                <Info className="h-3.5 w-3.5" />
+              </span>
+              <span
+                role="tooltip"
+                className="pointer-events-none absolute left-full top-1/2 z-20 ml-2 w-[460px] max-w-[70vw] -translate-y-1/2 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-[12px] leading-5 font-sans normal-case tracking-normal text-slate-50 opacity-0 shadow-xl transition-opacity duration-150 group-hover:opacity-100"
+              >
+                {tooltipText}
+              </span>
+            </span>
+          )}
+        </div>
       </div>
       <div className="p-2">{children}</div>
     </section>

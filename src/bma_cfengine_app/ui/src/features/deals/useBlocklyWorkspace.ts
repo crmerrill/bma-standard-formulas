@@ -175,6 +175,7 @@ function synchronizeBondTargets(workspace: any, changedBlockId: string | null | 
 
   const canonical = {
     BOND_TYPE: changed.getFieldValue("BOND_TYPE"),
+    PAY_MODE: changed.getFieldValue("PAY_MODE"),
     FACE_AMT: changed.getFieldValue("FACE_AMT"),
     SIZE_PCT_POOL: changed.getFieldValue("SIZE_PCT_POOL"),
     COUPON: changed.getFieldValue("COUPON"),

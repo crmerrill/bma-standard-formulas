@@ -140,9 +140,6 @@ export default function CollateralRiskSettingsEditor({
     <div className={className ?? "space-y-2"}>
       <div className="text-xs uppercase tracking-wider text-muted-foreground">{title}</div>
       <div className="rounded border border-border p-2 space-y-2">
-        <div className="rounded border border-border/60 bg-background/40 p-2 text-xs text-muted-foreground">
-          Flow: 1) Select tape  2) Auto-bind mapping  3) Open tape to review/map if needed.
-        </div>
         <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
           <label className="block space-y-1">
             <span className="text-muted-foreground">Product Family</span>

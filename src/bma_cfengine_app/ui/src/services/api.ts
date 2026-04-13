@@ -892,6 +892,28 @@ export interface SolverCatalogItem {
     initial: number;
     step_hint: number;
   }>;
+  typed_enums: {
+    objective_types: Array<"TARGET" | "MINIMIZE" | "MAXIMIZE">;
+    constraint_comparisons: Array<"GE" | "LE" | "EQ" | "BETWEEN">;
+    waterfall_target_primitives: Array<
+      | "CUM_LOSS_MULTIPLE_GAP"
+      | "NO_SHORTFALL_INTEREST"
+      | "NO_SHORTFALL_PRINCIPAL"
+      | "OC_IC_TRIGGER_RESILIENCE"
+      | "STEPDOWN_ELIGIBILITY_SAFETY"
+      | "SUBORDINATION_FLOOR_GAP"
+      | "RESERVE_SUFFICIENCY_GAP"
+      | "CE_TARGET_DELTA"
+      | "PAC_SCHEDULE_MISS"
+      | "TAC_SCHEDULE_MISS"
+      | "Z_ACCRUAL_RELEASE_GAP"
+      | "SUPPORT_BURNDOWN_GAP"
+    >;
+  };
+  template_families: Array<{
+    family: "PRIME_JUMBO" | "NON_QM_QRM" | "AGENCY";
+    targets: SolverCatalogItem["typed_enums"]["waterfall_target_primitives"];
+  }>;
   suggested_defaults: {
     solver_name: string;
     layer_name: string;
@@ -935,6 +957,23 @@ export function solveDeal(dealId: string, body: DealSolveRequest): Promise<DealR
   });
 }
 
+export interface StructuringVerificationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  suggestions: string[];
+}
+
+export function verifyDealStructure(
+  dealId: string,
+  version?: number | null,
+): Promise<StructuringVerificationResult> {
+  const q = version != null ? `?version=${version}` : "";
+  return request(`/deals/${dealId}/verify-structure${q}`, {
+    method: "POST",
+  });
+}
+
 export function listDealRuns(dealId: string): Promise<RunListItem[]> {
   return request(`/deals/${dealId}/runs`);
 }
@@ -954,6 +993,7 @@ export interface DealSolverProgress {
   feasible?: boolean | null;
   elapsed_seconds?: number;
   cancel_requested: boolean;
+  diagnostic_artifacts?: string[];
 }
 
 export function getDealSolverProgress(

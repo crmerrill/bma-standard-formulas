@@ -14,6 +14,10 @@ from bma_standard_formulas.deals.schemas.output_bond import (
     TrancheRiskSummaryRow,
 )
 from bma_standard_formulas.deals.schemas.output_bundle import ScenarioOutputBundle
+from bma_standard_formulas.deals.schemas.output_structuring import (
+    PacTacDiagnosticsRow,
+    StructureCompositionRow,
+)
 from bma_standard_formulas.deals.schemas.output_waterfall import TriggerStateRow, WaterfallTraceRow
 
 
@@ -149,9 +153,30 @@ def test_persist_scenario_artifacts_writes_extended_outputs(monkeypatch, tmp_pat
         credit_enhancement=[
             CreditEnhancementRow(scenario_name="Base Case", tranche_id="A", total_ce_pct=10.0)
         ],
+        pac_tac_diagnostics=[
+            PacTacDiagnosticsRow(
+                scenario_name="Base Case",
+                tranche_id="A",
+                schedule_type="PAC",
+                period=1,
+                scheduled_principal=10.0,
+                actual_principal=9.0,
+                schedule_variance=-1.0,
+            )
+        ],
+        structure_composition=[
+            StructureCompositionRow(
+                scenario_name="Base Case",
+                parent_tranche_id="B",
+                child_tranche_id="Z",
+                relation_type="z_accrual",
+            )
+        ],
     )
     keys = _persist_scenario_artifacts(run_id, "Base Case", scenario)
     assert "Base_Case_tranche_risk_summary" in keys
     assert "Base_Case_credit_enhancement" in keys
+    assert "Base_Case_pac_tac_diagnostics" in keys
+    assert "Base_Case_structure_composition" in keys
     assert "Base_Case_decrement_table" in keys
     assert "Base_Case_stress_matrix" in keys

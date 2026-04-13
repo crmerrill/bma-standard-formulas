@@ -7,6 +7,9 @@ interface PresetDef {
   apply: (draft: SolverSpecDraft) => SolverSpecDraft;
 }
 
+type PrimitiveParams = Record<string, number | string | boolean | null>;
+const pp = (params: PrimitiveParams): PrimitiveParams => params;
+
 const PRESETS: PresetDef[] = [
   {
     id: "balanced",
@@ -22,6 +25,8 @@ const PRESETS: PresetDef[] = [
           objectiveType: "TARGET",
           targetValue: 6,
           weight: 1,
+          targetPrimitive: null,
+          primitiveParams: pp({}),
         },
         {
           id: "obj_2",
@@ -30,6 +35,8 @@ const PRESETS: PresetDef[] = [
           objectiveType: "MINIMIZE",
           targetValue: null,
           weight: 0.5,
+          targetPrimitive: null,
+          primitiveParams: pp({}),
         },
       ],
     }),
@@ -49,37 +56,63 @@ const PRESETS: PresetDef[] = [
 
 const PRIME_JUMBO_PRESETS: PresetDef[] = [
   {
-    id: "prime_ce_pool",
-    label: "Prime Jumbo: CE + Pool Size",
+    id: "prime_cumloss_no_shortfall",
+    label: "Prime Jumbo: CumLoss + No Shortfall",
     apply: (draft) => ({
       ...draft,
-      description: "Prime Jumbo CE and pool-size profile",
+      description: "Prime Jumbo constrained pack (cum-loss multiple + no shortfall + trigger resilience)",
       objectives: [
         {
           id: "obj_prime_1",
-          name: "target_ce_A",
-          metricPath: "tranche_credit_summary[A].ce_pct",
-          objectiveType: "TARGET",
-          targetValue: 10,
+          name: "cum_loss_multiple_gap_A",
+          metricPath: "primitive:CUM_LOSS_MULTIPLE_GAP",
+          objectiveType: "MINIMIZE",
+          targetValue: null,
           weight: 1,
+          targetPrimitive: "CUM_LOSS_MULTIPLE_GAP",
+          primitiveParams: pp({ tranche_id: "A", target_multiple: 2.0 }),
         },
         {
           id: "obj_prime_2",
-          name: "target_pool_factor",
-          metricPath: "deal_summary.pool_factor",
-          objectiveType: "TARGET",
-          targetValue: 1,
-          weight: 0.35,
+          name: "ce_target_delta_A",
+          metricPath: "primitive:CE_TARGET_DELTA",
+          objectiveType: "MINIMIZE",
+          targetValue: null,
+          weight: 0.75,
+          targetPrimitive: "CE_TARGET_DELTA",
+          primitiveParams: pp({ tranche_id: "A", target_ce_pct: 10.0 }),
         },
       ],
       constraints: [
         {
           id: "con_prime_1",
-          name: "A_no_principal_shortfall",
-          metricPath: "tranche_shortfall[A].principal_pct",
+          name: "A_no_interest_shortfall",
+          metricPath: "primitive:NO_SHORTFALL_INTEREST",
           operator: "LE",
           minValue: null,
           maxValue: 0,
+          targetPrimitive: "NO_SHORTFALL_INTEREST",
+          primitiveParams: pp({ tranche_id: "A" }),
+        },
+        {
+          id: "con_prime_2",
+          name: "A_no_principal_shortfall",
+          metricPath: "primitive:NO_SHORTFALL_PRINCIPAL",
+          operator: "LE",
+          minValue: null,
+          maxValue: 0,
+          targetPrimitive: "NO_SHORTFALL_PRINCIPAL",
+          primitiveParams: pp({ tranche_id: "A" }),
+        },
+        {
+          id: "con_prime_3",
+          name: "oc_ic_trigger_resilience",
+          metricPath: "primitive:OC_IC_TRIGGER_RESILIENCE",
+          operator: "LE",
+          minValue: null,
+          maxValue: 0,
+          targetPrimitive: "OC_IC_TRIGGER_RESILIENCE",
+          primitiveParams: pp({}),
         },
       ],
       knobs: [
@@ -106,45 +139,83 @@ const PRIME_JUMBO_PRESETS: PresetDef[] = [
 
 const NON_QM_PRESETS: PresetDef[] = [
   {
-    id: "nonqm_ce_cumloss",
-    label: "Non-QM/QRM: CE + Cum Loss",
+    id: "nonqm_waterfall_safety",
+    label: "Non-QM/QRM: Waterfall Safety Pack",
     apply: (draft) => ({
       ...draft,
-      description: "Non-QM/QRM CE and cumulative-loss profile",
+      description: "Non-QM/QRM constrained pack (cum-loss, no shortfall, step-down and reserve safety)",
       objectives: [
         {
           id: "obj_nonqm_1",
-          name: "target_ce_A",
-          metricPath: "tranche_credit_summary[A].ce_pct",
-          objectiveType: "TARGET",
-          targetValue: 20,
+          name: "cum_loss_multiple_gap_A",
+          metricPath: "primitive:CUM_LOSS_MULTIPLE_GAP",
+          objectiveType: "MINIMIZE",
+          targetValue: null,
           weight: 1,
+          targetPrimitive: "CUM_LOSS_MULTIPLE_GAP",
+          primitiveParams: pp({ tranche_id: "A", target_multiple: 2.5 }),
         },
         {
           id: "obj_nonqm_2",
-          name: "minimize_cum_loss_shortfall",
-          metricPath: "deal_credit_summary.cum_loss_multiple_gap",
+          name: "ce_target_delta_A",
+          metricPath: "primitive:CE_TARGET_DELTA",
           objectiveType: "MINIMIZE",
           targetValue: null,
           weight: 0.7,
+          targetPrimitive: "CE_TARGET_DELTA",
+          primitiveParams: pp({ tranche_id: "A", target_ce_pct: 20.0 }),
         },
       ],
       constraints: [
         {
           id: "con_nonqm_1",
           name: "A_no_interest_shortfall",
-          metricPath: "tranche_shortfall[A].interest_pct",
+          metricPath: "primitive:NO_SHORTFALL_INTEREST",
           operator: "LE",
           minValue: null,
           maxValue: 0,
+          targetPrimitive: "NO_SHORTFALL_INTEREST",
+          primitiveParams: pp({ tranche_id: "A" }),
         },
         {
           id: "con_nonqm_2",
           name: "A_no_principal_shortfall",
-          metricPath: "tranche_shortfall[A].principal_pct",
+          metricPath: "primitive:NO_SHORTFALL_PRINCIPAL",
           operator: "LE",
           minValue: null,
           maxValue: 0,
+          targetPrimitive: "NO_SHORTFALL_PRINCIPAL",
+          primitiveParams: pp({ tranche_id: "A" }),
+        },
+        {
+          id: "con_nonqm_3",
+          name: "stepdown_eligibility_safety",
+          metricPath: "primitive:STEPDOWN_ELIGIBILITY_SAFETY",
+          operator: "LE",
+          minValue: null,
+          maxValue: 0,
+          targetPrimitive: "STEPDOWN_ELIGIBILITY_SAFETY",
+          primitiveParams: pp({}),
+        },
+        {
+          id: "con_nonqm_4",
+          name: "subordination_floor",
+          metricPath: "primitive:SUBORDINATION_FLOOR_GAP",
+          operator: "LE",
+          minValue: null,
+          maxValue: 0,
+          targetPrimitive: "SUBORDINATION_FLOOR_GAP",
+          primitiveParams: pp({ tranche_id: "A", floor_pct: 18.0 }),
+        },
+        {
+          id: "con_nonqm_5",
+          name: "reserve_carry_sufficiency",
+          metricPath: "primitive:RESERVE_SUFFICIENCY_GAP",
+          operator: "LE",
+          minValue: null,
+          maxValue: 0,
+          targetPrimitive: "RESERVE_SUFFICIENCY_GAP",
+          primitiveParams: pp({ reserve_floor: 0.0 }),
         },
       ],
       knobs: [
@@ -167,6 +238,61 @@ const NON_QM_PRESETS: PresetDef[] = [
       ],
       maxIterations: 18,
       globalMaxIterations: 80,
+    }),
+  },
+];
+
+const CMO_PAC_TAC_Z_PRESETS: PresetDef[] = [
+  {
+    id: "cmo_pac_tac_guardrail",
+    label: "CMO: PAC/TAC Guardrail",
+    apply: (draft) => ({
+      ...draft,
+      description: "CMO PAC/TAC schedule adherence with support burn-down control",
+      objectives: [
+        {
+          id: "obj_cmo_1",
+          name: "pac_schedule_miss_A",
+          metricPath: "primitive:PAC_SCHEDULE_MISS",
+          objectiveType: "MINIMIZE",
+          targetValue: null,
+          weight: 1,
+          targetPrimitive: "PAC_SCHEDULE_MISS",
+          primitiveParams: pp({ tranche_id: "A" }),
+        },
+        {
+          id: "obj_cmo_2",
+          name: "tac_schedule_miss_B",
+          metricPath: "primitive:TAC_SCHEDULE_MISS",
+          objectiveType: "MINIMIZE",
+          targetValue: null,
+          weight: 0.7,
+          targetPrimitive: "TAC_SCHEDULE_MISS",
+          primitiveParams: pp({ tranche_id: "B" }),
+        },
+      ],
+      constraints: [
+        {
+          id: "con_cmo_1",
+          name: "z_release_gap",
+          metricPath: "primitive:Z_ACCRUAL_RELEASE_GAP",
+          operator: "LE",
+          minValue: null,
+          maxValue: 0,
+          targetPrimitive: "Z_ACCRUAL_RELEASE_GAP",
+          primitiveParams: pp({ tranche_id: "Z" }),
+        },
+        {
+          id: "con_cmo_2",
+          name: "support_burndown_gap",
+          metricPath: "primitive:SUPPORT_BURNDOWN_GAP",
+          operator: "LE",
+          minValue: null,
+          maxValue: 0,
+          targetPrimitive: "SUPPORT_BURNDOWN_GAP",
+          primitiveParams: pp({ tranche_id: "B", support_floor: 0 }),
+        },
+      ],
     }),
   },
 ];
@@ -219,11 +345,33 @@ export default function PresetLibrary({ draft, productFamily, onApplyPreset }: P
   return (
     <div className="space-y-3">
       <PresetGroup title="Shared Shell" presets={PRESETS} draft={draft} onApplyPreset={onApplyPreset} />
-      <PresetGroup title="Prime Jumbo Presets" presets={PRIME_JUMBO_PRESETS} draft={draft} onApplyPreset={onApplyPreset} />
-      <PresetGroup title="Non-QM / QRM Presets" presets={NON_QM_PRESETS} draft={draft} onApplyPreset={onApplyPreset} />
+      {(productFamily === "PRIME_JUMBO" || productFamily === "CUSTOM") && (
+        <PresetGroup
+          title="Prime Jumbo Presets"
+          presets={PRIME_JUMBO_PRESETS}
+          draft={draft}
+          onApplyPreset={onApplyPreset}
+        />
+      )}
+      {(productFamily === "NON_QM_QRM" || productFamily === "CUSTOM") && (
+        <PresetGroup
+          title="Non-QM / QRM Presets"
+          presets={NON_QM_PRESETS}
+          draft={draft}
+          onApplyPreset={onApplyPreset}
+        />
+      )}
+      {(productFamily === "AGENCY" || productFamily === "CUSTOM") && (
+        <PresetGroup
+          title="CMO PAC/TAC/Z Presets"
+          presets={CMO_PAC_TAC_Z_PRESETS}
+          draft={draft}
+          onApplyPreset={onApplyPreset}
+        />
+      )}
       {productFamily && (
         <div className="text-xs text-muted-foreground">
-          Active product family: {familyLabel}.
+          Active product family: {familyLabel}. Template packs are guardrailed to this family.
         </div>
       )}
     </div>

@@ -33,7 +33,13 @@ from bma_standard_formulas.deals.schemas.ir import (
     RuleNode,
     TriggerNode,
 )
-from bma_standard_formulas.deals.schemas.common import RuleType, TrancheType, TriggerMetricType
+from bma_standard_formulas.deals.schemas.common import (
+    PayMode,
+    RuleType,
+    TrancheBehavior,
+    TrancheType,
+    TriggerMetricType,
+)
 
 TOLERANCE = 1e-2
 
@@ -415,8 +421,197 @@ class TestSchemaValidation:
                 ],
             )
 
+    def test_pac_requires_schedule_contract(self):
+        with pytest.raises(Exception):
+            DealDefinition(
+                deal_name="PACNeedsSchedule",
+                bonds=[BondDef(name="A", tranche_behavior=TrancheBehavior.PAC)],
+                waterfall_rules=[
+                    RuleNode(
+                        rule_id="r1",
+                        rule_type=RuleType.PAY_PRINCIPAL,
+                        order=0,
+                        from_sources=["CASH"],
+                        to_targets=["A"],
+                    )
+                ],
+            )
+
+    def test_support_graph_cycle_fails(self):
+        with pytest.raises(Exception):
+            DealDefinition(
+                deal_name="SupportCycle",
+                bonds=[
+                    BondDef(name="A", support_tranches=["B"]),
+                    BondDef(name="B", support_tranches=["A"]),
+                ],
+                waterfall_rules=[
+                    RuleNode(
+                        rule_id="r1",
+                        rule_type=RuleType.PAY_PRINCIPAL,
+                        order=0,
+                        from_sources=["CASH"],
+                        to_targets=["A"],
+                    )
+                ],
+            )
+
 
 class TestGeneralizedRuntime:
+    def test_pac_tac_diagnostics_rows_are_emitted(self):
+        deal = DealDefinition(
+            deal_name="PacTacDiag",
+            bonds=[
+                BondDef(
+                    name="A",
+                    tranche_type=TrancheType.SEQUENTIAL,
+                    tranche_behavior=TrancheBehavior.PAC,
+                    size_dollars=80_000_000.0,
+                    schedule_contract=[{"period": 1, "target_principal": 500_000.0}],
+                    schedule_tolerance_bps=5.0,
+                    support_tranches=["B"],
+                ),
+                BondDef(
+                    name="B",
+                    tranche_type=TrancheType.SEQUENTIAL,
+                    size_dollars=10_000_000.0,
+                ),
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="a_prin",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["A"],
+                ),
+                RuleNode(
+                    rule_id="resid",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=2,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(initial_balance=100_000_000, n_periods=4)
+        result = run_deal(deal, run_input)
+        assert result.pac_tac_diagnostics
+        assert any(row.tranche_id == "A" for row in result.pac_tac_diagnostics)
+
+    def test_z_structure_composition_rows_are_emitted(self):
+        deal = DealDefinition(
+            deal_name="ZSupportDiag",
+            bonds=[
+                BondDef(name="B", tranche_type=TrancheType.SEQUENTIAL, size_dollars=30_000_000.0),
+                BondDef(
+                    name="Z",
+                    tranche_type=TrancheType.Z_BOND,
+                    tranche_behavior=TrancheBehavior.Z,
+                    pay_mode=PayMode.PIK,
+                    z_accrual_enabled=True,
+                    supported_by_tranches=["B"],
+                    size_dollars=10_000_000.0,
+                ),
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="b_prin",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["B"],
+                ),
+                RuleNode(
+                    rule_id="z_prin",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=1,
+                    from_sources=["CASH"],
+                    to_targets=["Z"],
+                ),
+                RuleNode(
+                    rule_id="resid",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=2,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(initial_balance=100_000_000, n_periods=4)
+        result = run_deal(deal, run_input)
+        assert result.structure_composition
+        assert any(row.child_tranche_id == "Z" for row in result.structure_composition)
+
+    def test_pik_mode_capitalizes_unpaid_coupon_into_balance(self):
+        deal = DealDefinition(
+            deal_name="PIKAccrual",
+            bonds=[
+                BondDef(
+                    name="Z",
+                    tranche_type=TrancheType.Z_BOND,
+                    tranche_behavior=TrancheBehavior.Z,
+                    pay_mode=PayMode.PIK,
+                    z_accrual_enabled=True,
+                    size_dollars=10_000_000.0,
+                    coupon=12.0,
+                ),
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="resid",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(initial_balance=100_000_000, n_periods=3)
+        result = run_deal(deal, run_input)
+        z_rows = [row for row in result.bond_cashflows if row.tranche_id == "Z"]
+        assert len(z_rows) >= 2
+        assert z_rows[1].end_balance > z_rows[1].begin_balance
+
+    def test_dollar_face_takes_precedence_over_size_pct(self):
+        deal = DealDefinition(
+            deal_name="DollarFacePriority",
+            bonds=[
+                BondDef(
+                    name="A",
+                    tranche_type=TrancheType.SEQUENTIAL,
+                    size_dollars=21_000_000.0,
+                    size_pct=40.0,
+                    coupon=0.0,
+                ),
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="a_prin",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["A"],
+                ),
+                RuleNode(
+                    rule_id="resid",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=1,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(initial_balance=100_000_000, n_periods=4)
+        result = run_deal(deal, run_input)
+        a0 = next(row for row in result.bond_cashflows if row.tranche_id == "A" and row.period == 0)
+        assert a0.begin_balance == pytest.approx(21_000_000.0, rel=1e-9)
+        assert a0.end_balance == pytest.approx(21_000_000.0, rel=1e-9)
+
     def test_rule_max_amount_expression_is_applied(self):
         deal = DealDefinition(
             deal_name="MaxAmountExpr",

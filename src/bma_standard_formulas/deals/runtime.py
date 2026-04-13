@@ -33,6 +33,7 @@ from .schemas.ir import DealDefinition
 from .schemas.output_bond import BondCashflowRow
 from .schemas.output_bundle import ScenarioOutputBundle
 from .schemas.output_waterfall import DealAccountRow, TriggerStateRow, WaterfallTraceRow
+from .tranche_behaviors import build_tranche_behavior_diagnostics
 
 
 _RT = RuleType
@@ -45,6 +46,7 @@ class BondWorkspace:
     name: str
     is_bond: bool
     is_pseudo: bool
+    pay_mode: str
     balance: np.ndarray
     principal: np.ndarray
     interest: np.ndarray
@@ -118,10 +120,11 @@ def _allocate_bond_workspace(
     cf_len: int,
     collateral_balance_0: float,
 ) -> BondWorkspace:
-    if bond_def.size_pct is not None and bond_def.size_pct > 0:
-        initial_balance = collateral_balance_0 * bond_def.size_pct / 100.0
-    elif bond_def.size_dollars is not None:
+    # Authoritative sizing is dollar face. Percent-of-collateral is derived UX context.
+    if bond_def.size_dollars is not None and bond_def.size_dollars > 0:
         initial_balance = bond_def.size_dollars
+    elif bond_def.size_pct is not None and bond_def.size_pct > 0:
+        initial_balance = collateral_balance_0 * bond_def.size_pct / 100.0
     else:
         initial_balance = 0.0
 
@@ -148,6 +151,7 @@ def _allocate_bond_workspace(
         name=bond_def.name,
         is_bond=bond_def.is_bond and not bond_def.is_pseudo,
         is_pseudo=bond_def.is_pseudo,
+        pay_mode=getattr(getattr(bond_def, "pay_mode", None), "value", "CASH_PAY"),
         balance=balance,
         principal=np.zeros(cf_len),
         interest=np.zeros(cf_len),
@@ -613,6 +617,7 @@ def run_deal(
             name="R",
             is_bond=False,
             is_pseudo=True,
+            pay_mode="CASH_PAY",
             balance=np.zeros(cf_len),
             principal=np.zeros(cf_len),
             interest=np.zeros(cf_len),
@@ -905,6 +910,16 @@ def run_deal(
                         )
                     )
 
+        # PIK bonds capitalize unpaid coupon accrual into balance during accrual windows.
+        for ws in bonds.values():
+            if ws.pay_mode != "PIK":
+                continue
+            pik_accrual = max(0.0, float(ws.opt_interest[i]))
+            if pik_accrual <= 0.0:
+                continue
+            ws.balance[i] += pik_accrual
+            ws.opt_interest[i] = 0.0
+            ws.int_shortfall[i] = 0.0
         _apply_balance_trackers(deal, ctx, run_input, i, orig_collat_bal)
         update_bonds_post_ws(bonds, i)
 
@@ -971,10 +986,18 @@ def run_deal(
                 )
             )
 
+    pac_tac_rows, structure_rows = build_tranche_behavior_diagnostics(
+        deal,
+        scenario_name=scenario_name,
+        bond_cashflows=bond_cf_rows,
+    )
+
     return ScenarioOutputBundle(
         scenario_name=scenario_name,
         bond_cashflows=bond_cf_rows,
         deal_accounts=account_rows,
         waterfall_trace=trace_rows,
         trigger_state_history=ctx.trigger_rows,
+        pac_tac_diagnostics=pac_tac_rows,
+        structure_composition=structure_rows,
     )

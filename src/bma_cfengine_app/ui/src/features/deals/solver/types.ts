@@ -5,6 +5,21 @@ export interface ObjectiveDraftRow {
   objectiveType: "TARGET" | "MINIMIZE" | "MAXIMIZE";
   targetValue: number | null;
   weight: number;
+  targetPrimitive:
+    | "CUM_LOSS_MULTIPLE_GAP"
+    | "NO_SHORTFALL_INTEREST"
+    | "NO_SHORTFALL_PRINCIPAL"
+    | "OC_IC_TRIGGER_RESILIENCE"
+    | "STEPDOWN_ELIGIBILITY_SAFETY"
+    | "SUBORDINATION_FLOOR_GAP"
+    | "RESERVE_SUFFICIENCY_GAP"
+    | "CE_TARGET_DELTA"
+    | "PAC_SCHEDULE_MISS"
+    | "TAC_SCHEDULE_MISS"
+    | "Z_ACCRUAL_RELEASE_GAP"
+    | "SUPPORT_BURNDOWN_GAP"
+    | null;
+  primitiveParams: Record<string, number | string | boolean | null>;
 }
 
 export interface ConstraintDraftRow {
@@ -14,6 +29,21 @@ export interface ConstraintDraftRow {
   operator: "GE" | "LE" | "EQ" | "BETWEEN";
   minValue: number | null;
   maxValue: number | null;
+  targetPrimitive:
+    | "CUM_LOSS_MULTIPLE_GAP"
+    | "NO_SHORTFALL_INTEREST"
+    | "NO_SHORTFALL_PRINCIPAL"
+    | "OC_IC_TRIGGER_RESILIENCE"
+    | "STEPDOWN_ELIGIBILITY_SAFETY"
+    | "SUBORDINATION_FLOOR_GAP"
+    | "RESERVE_SUFFICIENCY_GAP"
+    | "CE_TARGET_DELTA"
+    | "PAC_SCHEDULE_MISS"
+    | "TAC_SCHEDULE_MISS"
+    | "Z_ACCRUAL_RELEASE_GAP"
+    | "SUPPORT_BURNDOWN_GAP"
+    | null;
+  primitiveParams: Record<string, number | string | boolean | null>;
 }
 
 export interface KnobDraftRow {

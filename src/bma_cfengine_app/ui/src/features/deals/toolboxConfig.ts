@@ -17,6 +17,9 @@ export const TOOLBOX_CONFIG = {
       contents: [
         { kind: "block", type: "pay_sequential" },
         { kind: "block", type: "pay_pro_rata" },
+        { kind: "block", type: "pay_pac_schedule" },
+        { kind: "block", type: "pay_tac_schedule" },
+        { kind: "block", type: "pay_accretion_redirect" },
       { kind: "block", type: "pay_fee" },
       { kind: "block", type: "split_account" },
       ],

@@ -44,6 +44,7 @@ def test_post_deal_run_contract(monkeypatch):
     from bma_cfengine_app.api.routers import deals as deals_router
 
     monkeypatch.setattr(deals_router, "_ensure_canonical_deal", lambda *args, **kwargs: None)
+    monkeypatch.setattr(deals_router, "_verify_or_raise", lambda *args, **kwargs: {"valid": True})
     monkeypatch.setattr(
         deals_router,
         "_build_inputs",
@@ -75,6 +76,7 @@ def test_post_deal_solve_contract(monkeypatch):
     from bma_cfengine_app.api.routers import deals as deals_router
 
     monkeypatch.setattr(deals_router, "_ensure_canonical_deal", lambda *args, **kwargs: None)
+    monkeypatch.setattr(deals_router, "_verify_or_raise", lambda *args, **kwargs: {"valid": True})
     monkeypatch.setattr(
         deals_router,
         "_build_inputs",
@@ -153,6 +155,22 @@ def test_solver_catalog_contract(monkeypatch):
             "deal_id": deal_id,
             "metric_paths": ["tranche_risk_summary[A].yield_pct"],
             "knobs": [{"knob_path": "deal_knobs.class_a_coupon"}],
+            "typed_enums": {
+                "objective_types": ["TARGET", "MINIMIZE", "MAXIMIZE"],
+                "constraint_comparisons": ["GE", "LE", "EQ", "BETWEEN"],
+                "waterfall_target_primitives": [
+                    "CUM_LOSS_MULTIPLE_GAP",
+                    "NO_SHORTFALL_INTEREST",
+                    "PAC_SCHEDULE_MISS",
+                ],
+            },
+            "template_families": [
+                {
+                    "family": "PRIME_JUMBO",
+                    "targets": ["CUM_LOSS_MULTIPLE_GAP"],
+                },
+                {"family": "AGENCY", "targets": ["PAC_SCHEDULE_MISS"]},
+            ],
             "suggested_defaults": {"solver_name": "studio_solver"},
             "source_run_id": "run_abc",
         },
@@ -163,6 +181,79 @@ def test_solver_catalog_contract(monkeypatch):
     body = res.json()
     assert body["deal_id"] == "deal_x"
     assert body["source_run_id"] == "run_abc"
+    assert "typed_enums" in body
+
+
+def test_verify_structure_contract(monkeypatch):
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    monkeypatch.setattr(deals_router, "_ensure_canonical_deal", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        deals_router,
+        "verify_structure",
+        lambda deal, scenario_context=None: {
+            "valid": False,
+            "errors": ["A: PAC requires schedule contract points."],
+            "warnings": ["A: schedule_tolerance_bps not set."],
+            "suggestions": ["Add schedule points for A."],
+        },
+    )
+    client = TestClient(app)
+    res = client.post("/api/deals/deal_x/verify-structure?version=2")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["valid"] is False
+    assert body["errors"]
+
+
+def test_run_and_solve_blocked_when_verification_fails(monkeypatch):
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    monkeypatch.setattr(deals_router, "_ensure_canonical_deal", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        deals_router,
+        "_verify_or_raise",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            deals_router.HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Structuring verification failed.",
+                    "verification": {"valid": False, "errors": ["bad"], "warnings": [], "suggestions": []},
+                },
+            )
+        ),
+    )
+    client = TestClient(app)
+    run_res = client.post(
+        "/api/deals/deal_x/runs",
+        json={"source": {"source_mode": "runsetup_ref", "run_id": "run_seed"}},
+    )
+    assert run_res.status_code == 422
+    solve_res = client.post(
+        "/api/deals/deal_x/solve",
+        json={
+            "source": {"source_mode": "runsetup_ref", "run_id": "run_seed"},
+            "solver_spec": {
+                "solver_name": "s1",
+                "layers": [
+                    {
+                        "layer_name": "l1",
+                        "objectives": [
+                            {
+                                "name": "o1",
+                                "metric_path": "tranche_risk_summary[A].yield_pct",
+                                "objective_type": "TARGET",
+                                "target_value": 6.0,
+                                "weight": 1.0,
+                            }
+                        ],
+                        "knobs": [{"knob_path": "deal_knobs.class_a_coupon", "lower": 3.0, "upper": 9.0}],
+                    }
+                ],
+            },
+        },
+    )
+    assert solve_res.status_code == 422
 
 
 def test_solver_presets_contract(monkeypatch):
@@ -249,6 +340,7 @@ def test_solver_progress_and_cancel_contract(monkeypatch):
             "stage": "optimizing",
             "iteration": 3,
             "cancel_requested": False,
+            "diagnostic_artifacts": ["Base_Case_solver_ce_ladder"],
         },
     )
     monkeypatch.setattr(
@@ -265,6 +357,7 @@ def test_solver_progress_and_cancel_contract(monkeypatch):
     progress_res = client.get("/api/deals/deal_x/runs/run_solver/progress")
     assert progress_res.status_code == 200
     assert progress_res.json()["iteration"] == 3
+    assert progress_res.json()["diagnostic_artifacts"] == ["Base_Case_solver_ce_ladder"]
 
     cancel_res = client.post("/api/deals/deal_x/runs/run_solver/cancel")
     assert cancel_res.status_code == 200

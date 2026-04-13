@@ -124,9 +124,11 @@ export default function DealEditor({
   const [poolSnapshots, setPoolSnapshots] = useState<api.PoolSnapshotSummary[]>([]);
   const [selectedStudioDealId, setSelectedStudioDealId] = useState<string>("");
   const [selectedStudioVersion, setSelectedStudioVersion] = useState<string>("");
+  const [activeDealVersion, setActiveDealVersion] = useState<number | null>(null);
   const [pendingWorkspaceState, setPendingWorkspaceState] = useState<unknown | null>(null);
   const [lastSavedFingerprint, setLastSavedFingerprint] = useState<string>("");
   const [pendingCleanMark, setPendingCleanMark] = useState(false);
+  const [verificationState, setVerificationState] = useState<api.StructuringVerificationResult | null>(null);
 
   const [solverSpecDraft, setSolverSpecDraft] = useState<SolverSpecDraft>(() => getDefaultSolverSpecDraft());
   const [advancedJson, setAdvancedJson] = useState<AdvancedJsonState>(() =>
@@ -324,6 +326,7 @@ export default function DealEditor({
       setSavedDealId(res.deal_id);
       setSelectedStudioDealId(res.deal_id);
       setSelectedStudioVersion(String(res.version));
+      setActiveDealVersion(res.version);
       setPendingCleanMark(true);
       refreshStudioDeals();
       toast.success(`Saved ${res.deal_name} as ${res.deal_id} (v${res.version})`);
@@ -359,6 +362,7 @@ export default function DealEditor({
         selectedStudioVersion ? Number(selectedStudioVersion) : undefined,
       );
       setSavedDealId(snapshot.deal_id);
+      setActiveDealVersion(selectedStudioVersion ? Number(selectedStudioVersion) : null);
       setDealName(snapshot.deal_name || "Deal");
       setIrJson(JSON.stringify(snapshot.ir ?? {}, null, 2));
       setErrors([]);
@@ -410,13 +414,102 @@ export default function DealEditor({
     onCollateralRiskSettingsChange,
   ]);
 
-  const handleRunDeal = useCallback(async () => {
-    if (!savedDealId) {
-      toast.error("Save the deal first before running.");
-      return;
+  const persistDealForExecution = useCallback(async (): Promise<{
+    dealId: string;
+    dealVersion: number | undefined;
+  }> => {
+    if (savedDealId && !isDirty) {
+      return {
+        dealId: savedDealId,
+        dealVersion: activeDealVersion ?? undefined,
+      };
     }
+    if (errors.length > 0 || !irJson.trim()) {
+      throw new Error("Fix workspace errors or add pay rules before running.");
+    }
+
+    let ir: Record<string, unknown>;
+    let solverSpec: Record<string, unknown>;
+    try {
+      ir = JSON.parse(irJson) as Record<string, unknown>;
+      solverSpec = JSON.parse(advancedJson.jsonText || "{}");
+      setAdvancedJson((prev) => ({
+        ...prev,
+        parseError: null,
+        lastSyncedAt: new Date().toISOString(),
+      }));
+    } catch (error) {
+      const parseError = error instanceof Error ? error.message : String(error);
+      setAdvancedJson((prev) => ({ ...prev, parseError }));
+      throw new Error("Solver spec JSON is invalid.");
+    }
+
+    ir.deal_name = dealName.trim() || "Deal";
+    const workspaceState = await serializeWorkspaceState();
+    ir.solver_presets = {
+      source_mode: solverSpecDraft.sourceMode,
+      runsetup_ref_run_id: solverSpecDraft.sourceRunId,
+      scenario_set: scenarioNames,
+      source_scenario_name: solverSpecDraft.sourceScenarioName,
+      collateral_risk_settings: collateralRiskSettings,
+      sensitivity_sweep: sensitivitySweepConfig,
+      solver_spec: solverSpec,
+    };
+    ir.studio_workspace_state = workspaceState;
+
+    const saved = await api.saveStudioDeal({
+      deal_id: savedDealId,
+      deal_name: dealName.trim() || "Deal",
+      ir,
+    });
+    setSavedDealId(saved.deal_id);
+    setSelectedStudioDealId(saved.deal_id);
+    setSelectedStudioVersion(String(saved.version));
+    setActiveDealVersion(saved.version);
+    setPendingCleanMark(true);
+    refreshStudioDeals();
+    toast.success(`Auto-saved structure before run (${saved.deal_id} v${saved.version})`);
+    return {
+      dealId: saved.deal_id,
+      dealVersion: saved.version,
+    };
+  }, [
+    savedDealId,
+    isDirty,
+    activeDealVersion,
+    errors.length,
+    irJson,
+    advancedJson.jsonText,
+    dealName,
+    serializeWorkspaceState,
+    solverSpecDraft.sourceMode,
+    solverSpecDraft.sourceRunId,
+    solverSpecDraft.sourceScenarioName,
+    scenarioNames,
+    collateralRiskSettings,
+    sensitivitySweepConfig,
+    refreshStudioDeals,
+  ]);
+
+  const verifyStructure = useCallback(
+    async (dealId: string, dealVersion?: number) => {
+      const verification = await api.verifyDealStructure(dealId, dealVersion ?? null);
+      setVerificationState(verification);
+      return verification;
+    },
+    [],
+  );
+
+  const handleRunDeal = useCallback(async () => {
     setRunBusy(true);
     try {
+      const { dealId, dealVersion } = await persistDealForExecution();
+      const verification = await verifyStructure(dealId, dealVersion);
+      if (!verification.valid) {
+        throw new Error(
+          `Structuring verification failed: ${verification.errors[0] ?? "Resolve compatibility errors."}`,
+        );
+      }
       const source =
         solverSpecDraft.sourceMode === "runsetup_ref"
           ? {
@@ -432,11 +525,12 @@ export default function DealEditor({
       if (solverSpecDraft.sourceMode === "runsetup_ref" && !solverSpecDraft.sourceRunId) {
         throw new Error("Run Setup ref mode requires selecting a base CF run.");
       }
-      const res = await api.runDeal(savedDealId, {
+      const res = await api.runDeal(dealId, {
+        deal_version: dealVersion,
         source,
         scenario_names: scenarioNames,
       });
-      toast.success(`Deal run created: ${res.run_id ?? savedDealId}`);
+      toast.success(`Deal run created: ${res.run_id ?? dealId}`);
       refreshRuns();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -444,7 +538,8 @@ export default function DealEditor({
       setRunBusy(false);
     }
   }, [
-    savedDealId,
+    persistDealForExecution,
+    verifyStructure,
     solverSpecDraft.sourceMode,
     solverSpecDraft.sourceRunId,
     solverSpecDraft.sourceScenarioName,
@@ -455,10 +550,6 @@ export default function DealEditor({
 
 
   const handleSolveDeal = useCallback(async () => {
-    if (!savedDealId) {
-      toast.error("Save the deal first before solving.");
-      return;
-    }
     setSolveBusy(true);
     if (progressPollRef.current != null) {
       window.clearInterval(progressPollRef.current);
@@ -473,6 +564,13 @@ export default function DealEditor({
       runId: null,
     });
     try {
+      const { dealId, dealVersion } = await persistDealForExecution();
+      const verification = await verifyStructure(dealId, dealVersion);
+      if (!verification.valid) {
+        throw new Error(
+          `Structuring verification failed: ${verification.errors[0] ?? "Resolve compatibility errors."}`,
+        );
+      }
       const source =
         solverSpecDraft.sourceMode === "runsetup_ref"
           ? {
@@ -490,7 +588,8 @@ export default function DealEditor({
       }
       const solverSpec = JSON.parse(advancedJson.jsonText || "{}");
       const scenarioName = solverSpecDraft.sourceScenarioName ?? scenarioNames[0] ?? "Base Case";
-      const res = await api.solveDeal(savedDealId, {
+      const res = await api.solveDeal(dealId, {
+        deal_version: dealVersion,
         source,
         scenario_name: scenarioName,
         solver_spec: solverSpec,
@@ -505,7 +604,7 @@ export default function DealEditor({
       if (runId) {
         progressPollRef.current = window.setInterval(async () => {
           try {
-            const progress = await api.getDealSolverProgress(savedDealId, runId);
+            const progress = await api.getDealSolverProgress(dealId, runId);
             setTelemetryState((prev) => ({
               ...prev,
               status: (progress.status as TelemetryState["status"]) ?? prev.status,
@@ -542,7 +641,7 @@ export default function DealEditor({
       } else {
         setSolveBusy(false);
       }
-      toast.success(`Solver run started: ${runId ?? savedDealId}`);
+      toast.success(`Solver run started: ${runId ?? dealId}`);
     } catch (e: unknown) {
       setTelemetryState((prev) => ({
         ...prev,
@@ -553,7 +652,8 @@ export default function DealEditor({
       toast.error(e instanceof Error ? e.message : String(e));
     }
   }, [
-    savedDealId,
+    persistDealForExecution,
+    verifyStructure,
     solverSpecDraft.sourceMode,
     solverSpecDraft.sourceRunId,
     solverSpecDraft.sourceScenarioName,
@@ -768,6 +868,7 @@ export default function DealEditor({
     setErrors([]);
     setDealName("Deal");
     setSavedDealId(null);
+    setActiveDealVersion(null);
     setSelectedStudioDealId("");
     setSelectedStudioVersion("");
     setSolverSpecDraft(getDefaultSolverSpecDraft());
@@ -776,6 +877,7 @@ export default function DealEditor({
     setSensitivitySweepConfig(getDefaultSensitivitySweepConfig());
     onCollateralRiskSettingsChange(getDefaultCollateralRiskSettings());
     setLastSavedFingerprint("");
+    setVerificationState(null);
     setPendingCleanMark(true);
     sessionStorage.removeItem(STUDIO_DRAFT_STORAGE_KEY);
   }, [isDirty, onCollateralRiskSettingsChange]);
@@ -875,6 +977,26 @@ export default function DealEditor({
         )}
         <button
           type="button"
+          onClick={async () => {
+            try {
+              const { dealId, dealVersion } = await persistDealForExecution();
+              const verification = await verifyStructure(dealId, dealVersion);
+              if (verification.valid) {
+                toast.success("Structure verification passed.");
+              } else {
+                toast.error(`Verification failed with ${verification.errors.length} blocking issue(s).`);
+              }
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : String(error));
+            }
+          }}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border text-xs text-muted-foreground hover:text-foreground"
+        >
+          <Settings2 className="w-3.5 h-3.5" />
+          Verify Structure
+        </button>
+        <button
+          type="button"
           onClick={handleCloseDealSession}
           className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border text-xs text-muted-foreground hover:text-foreground"
         >
@@ -892,6 +1014,57 @@ export default function DealEditor({
         active={studioTab}
         onSelect={(id) => setStudioTab(id as StudioTab)}
       />
+
+      {verificationState && (
+        <div
+          className={`mx-1 rounded border px-2 py-2 text-xs ${
+            verificationState.errors.length > 0
+              ? "border-destructive/40 bg-destructive/10"
+              : verificationState.warnings.length > 0
+                ? "border-amber-500/40 bg-amber-500/10"
+                : "border-emerald-500/40 bg-emerald-500/10"
+          }`}
+        >
+          <div
+            className={
+              verificationState.errors.length > 0
+                ? "text-destructive"
+                : verificationState.warnings.length > 0
+                  ? "text-amber-200"
+                  : "text-emerald-200"
+            }
+          >
+            {verificationState.valid
+              ? `Structure verification: valid${
+                  verificationState.warnings.length
+                    ? ` with ${verificationState.warnings.length} warning(s)`
+                    : ""
+                }`
+              : `Structure verification: ${verificationState.errors.length} blocking error(s), ${verificationState.warnings.length} warning(s)`}
+          </div>
+          {(verificationState.errors.length > 0
+            || verificationState.warnings.length > 0
+            || verificationState.suggestions.length > 0) && (
+            <div className="mt-1.5 max-h-44 overflow-auto space-y-1.5 pr-1">
+              {verificationState.errors.map((message, idx) => (
+                <div key={`verification-error-${idx}`} className="text-destructive">
+                  - Error: {message}
+                </div>
+              ))}
+              {verificationState.warnings.map((message, idx) => (
+                <div key={`verification-warning-${idx}`} className="text-amber-100">
+                  - Warning: {message}
+                </div>
+              ))}
+              {verificationState.suggestions.map((message, idx) => (
+                <div key={`verification-suggestion-${idx}`} className="text-cyan-100">
+                  - Suggestion: {message}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {studioTab === "solver" && (
         <SolverStudioPanel

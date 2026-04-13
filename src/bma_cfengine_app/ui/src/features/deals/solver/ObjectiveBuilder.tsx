@@ -71,6 +71,8 @@ export default function ObjectiveBuilder({ rows, onChange }: Props) {
               objectiveType: "TARGET",
               targetValue: 0,
               weight: 1,
+              targetPrimitive: null,
+              primitiveParams: {},
             },
           ])
         }

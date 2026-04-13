@@ -38,6 +38,14 @@ export function solverSpecToBuilder(spec: Record<string, unknown>): SolverSpecDr
       objectiveType,
       targetValue: asNullableNumber(o.target_value),
       weight: asNumber(o.weight, 1),
+      targetPrimitive:
+        typeof o.target_primitive === "string"
+          ? (o.target_primitive as ObjectiveDraftRow["targetPrimitive"])
+          : null,
+      primitiveParams:
+        o.primitive_params && typeof o.primitive_params === "object"
+          ? (o.primitive_params as Record<string, number | string | boolean | null>)
+          : {},
     };
   });
 
@@ -55,6 +63,14 @@ export function solverSpecToBuilder(spec: Record<string, unknown>): SolverSpecDr
       operator,
       minValue: operator === "GE" ? value : asNullableNumber(c.lower),
       maxValue: operator === "BETWEEN" ? asNullableNumber(c.upper) : value,
+      targetPrimitive:
+        typeof c.target_primitive === "string"
+          ? (c.target_primitive as ConstraintDraftRow["targetPrimitive"])
+          : null,
+      primitiveParams:
+        c.primitive_params && typeof c.primitive_params === "object"
+          ? (c.primitive_params as Record<string, number | string | boolean | null>)
+          : {},
     };
   });
 

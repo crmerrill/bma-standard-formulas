@@ -17,6 +17,8 @@ export function builderToSolverSpec(draft: SolverSpecDraft): Record<string, unkn
           objective_type: objective.objectiveType,
           target_value: objective.objectiveType === "TARGET" ? objective.targetValue ?? 0 : null,
           weight: objective.weight,
+          target_primitive: objective.targetPrimitive ?? null,
+          primitive_params: objective.primitiveParams ?? {},
         })),
         constraints: draft.constraints.map((constraint, idx) => {
           const base = {
@@ -25,6 +27,8 @@ export function builderToSolverSpec(draft: SolverSpecDraft): Record<string, unkn
             comparison: constraint.operator,
             tolerance: 1e-6,
             hard: true,
+            target_primitive: constraint.targetPrimitive ?? null,
+            primitive_params: constraint.primitiveParams ?? {},
           } as Record<string, unknown>;
           if (constraint.operator === "BETWEEN") {
             base.lower = constraint.minValue ?? 0;

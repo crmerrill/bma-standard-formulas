@@ -101,7 +101,8 @@ Current structured-deal UI capabilities include:
 - Open/save/load/close deal lifecycle with unsaved-change guardrails.
 - Named, versioned pool snapshot save/load for tape/pool reuse.
 - Mirrored collateral/risk settings across Structuring and Structured Deal Analysis.
-- Structured Deal Analysis artifact views with solver run comparison.
+- Template-first Solver Studio packs for `Prime Jumbo` and `Non-QM/QRM` with guardrailed waterfall primitives.
+- Structured Deal Analysis artifact views with solver run comparison and diagnostics (`CE ladder`, `loss-multiple coverage`, `OC/IC breach timeline`, `step-down gate status`).
 
 Storage note:
 

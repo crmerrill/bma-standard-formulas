@@ -39,19 +39,29 @@ def validate_deal(deal: DealDefinition) -> list[str]:
 
 
 def _check_name_uniqueness(deal: DealDefinition, errors: list[str]) -> None:
-    all_names: list[str] = []
-    for b in deal.bonds:
-        all_names.append(b.name)
-    for a in deal.accounts:
-        all_names.append(a.name)
-    for f in deal.fees:
-        all_names.append(f.name)
+    bond_names = [b.name for b in deal.bonds]
+    account_names = [a.name for a in deal.accounts]
+    fee_names = [f.name for f in deal.fees]
+    pseudo_bond_names = {b.name for b in deal.bonds if b.is_pseudo}
 
-    seen: set[str] = set()
+    # Strict within-category uniqueness.
+    for group in (bond_names, account_names, fee_names):
+        seen: set[str] = set()
+        for name in group:
+            if name in seen:
+                errors.append(f"Duplicate component name: {name!r}")
+            seen.add(name)
+
+    # Cross-category uniqueness with one exception:
+    # fee names may intentionally alias pseudo fee-tracking bond names.
+    seen_cross: set[str] = set()
+    all_names: list[str] = [*bond_names, *account_names, *fee_names]
     for name in all_names:
-        if name in seen:
+        if name in seen_cross:
+            if name in pseudo_bond_names and name in fee_names:
+                continue
             errors.append(f"Duplicate component name: {name!r}")
-        seen.add(name)
+        seen_cross.add(name)
 
 
 def _check_rule_ordering(

@@ -10,7 +10,12 @@ from pydantic import BaseModel, Field, model_validator
 from bma_standard_formulas.deals.schemas.input import DealRunInput
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
 from bma_standard_formulas.deals.schemas.migrations import migrate_deal_payload
-from bma_standard_formulas.deals.schemas.solver import SolverSpec
+from bma_standard_formulas.deals.schemas.solver import (
+    ConstraintComparison,
+    ObjectiveType,
+    SolverSpec,
+    WaterfallTargetPrimitive,
+)
 
 from ...orchestrator.deals.collateral_bridge import (
     build_from_deal_native,
@@ -35,6 +40,7 @@ from ...orchestrator.deals.deal_store import (
     save_studio_ir,
 )
 from ...orchestrator.deals.solver_catalog import build_solver_catalog
+from ...orchestrator.deals.structuring_verification import verify_structure
 from ...orchestrator.run_service import get_cashflow_preview, list_all_runs
 from ...storage import run_store
 
@@ -128,6 +134,34 @@ class PoolSnapshotSaveBody(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class SolverTypedEnumsResponse(BaseModel):
+    objective_types: list[ObjectiveType]
+    constraint_comparisons: list[ConstraintComparison]
+    waterfall_target_primitives: list[WaterfallTargetPrimitive]
+
+
+class SolverTemplateFamilyResponse(BaseModel):
+    family: Literal["PRIME_JUMBO", "NON_QM_QRM", "AGENCY"]
+    targets: list[WaterfallTargetPrimitive]
+
+
+class SolverCatalogResponse(BaseModel):
+    deal_id: str
+    metric_paths: list[str]
+    knobs: list[dict[str, Any]]
+    typed_enums: SolverTypedEnumsResponse
+    template_families: list[SolverTemplateFamilyResponse]
+    suggested_defaults: dict[str, Any]
+    source_run_id: str | None = None
+
+
+class StructuringVerificationResponse(BaseModel):
+    valid: bool
+    errors: list[str]
+    warnings: list[str]
+    suggestions: list[str]
+
+
 @router.get("/deals/pools")
 async def list_pools(search: str | None = Query(None)):
     return {"items": list_pool_snapshots(search=search)}
@@ -170,11 +204,20 @@ async def get_deal(deal_id: str, version: int | None = Query(None)):
 @router.post("/deals")
 async def save_deal(body: StudioDealSaveBody):
     try:
-        _, meta = save_studio_ir(
+        deal_id, meta = save_studio_ir(
             body.deal_id,
             body.deal_name.strip() or "Deal",
             body.ir,
         )
+        # Keep canonical deal snapshots synchronized with studio saves so subsequent
+        # runs/solves always pick up latest sizing/coupon edits.
+        try:
+            normalized_ir = _normalize_legacy_studio_ir(body.ir)
+            canonical = DealDefinition.model_validate(migrate_deal_payload(normalized_ir))
+            save_canonical_deal(deal_id, canonical, version=int(meta.get("version", 0) or 0))
+        except Exception:
+            # Studio saves remain source-of-truth even if canonical conversion fails.
+            pass
     except OSError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     return meta
@@ -269,6 +312,19 @@ def _build_inputs(
     return build_from_deal_native(source.model_dump())
 
 
+def _verify_or_raise(deal: DealDefinition, *, mode: str) -> dict[str, Any]:
+    verification = verify_structure(deal, scenario_context={"mode": mode})
+    if verification.get("valid"):
+        return verification
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "message": "Structuring verification failed. Resolve blocking compatibility errors.",
+            "verification": verification,
+        },
+    )
+
+
 def _extract_collateral_risk_settings(deal_id: str, version: int | None) -> dict[str, Any]:
     try:
         snapshot = load_studio_snapshot(deal_id, version=version)
@@ -286,7 +342,8 @@ def _extract_collateral_risk_settings(deal_id: str, version: int | None) -> dict
 
 @router.post("/deals/{deal_id}/runs")
 async def run_deal_endpoint(deal_id: str, body: DealRunRequest):
-    _ensure_canonical_deal(deal_id, version=body.deal_version)
+    canonical = _ensure_canonical_deal(deal_id, version=body.deal_version)
+    _verify_or_raise(canonical, mode="run")
     try:
         scenario_inputs = _build_inputs(body.source, body.scenario_names)
         collateral_risk_settings = _extract_collateral_risk_settings(deal_id, body.deal_version)
@@ -310,7 +367,8 @@ async def run_deal_endpoint(deal_id: str, body: DealRunRequest):
 
 @router.post("/deals/{deal_id}/solve")
 async def solve_deal_endpoint(deal_id: str, body: DealSolveRequest):
-    _ensure_canonical_deal(deal_id, version=body.deal_version)
+    canonical = _ensure_canonical_deal(deal_id, version=body.deal_version)
+    _verify_or_raise(canonical, mode="solve")
     try:
         scenario_inputs = _build_inputs(body.source, [body.scenario_name])
         collateral_risk_settings = _extract_collateral_risk_settings(deal_id, body.deal_version)
@@ -367,6 +425,9 @@ async def get_deal_solver_progress(deal_id: str, run_id: str):
             "stage": "completed",
             "iteration": manifest.get("solver_summary", {}).get("total_iterations", 0),
             "cancel_requested": False,
+            "diagnostic_artifacts": (
+                (manifest.get("solver_diagnostics", {}) or {}).get("diagnostic_artifacts", [])
+            ),
         }
     if progress.get("deal_id") != deal_id:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found for deal {deal_id}")
@@ -415,10 +476,16 @@ async def list_solver_runs(deal_id: str):
     return await list_deal_runs(deal_id, run_kind="solver")
 
 
-@router.get("/deals/{deal_id}/solver-catalog")
+@router.get("/deals/{deal_id}/solver-catalog", response_model=SolverCatalogResponse)
 async def get_solver_catalog(deal_id: str):
     canonical = _ensure_canonical_deal(deal_id, version=None)
     return build_solver_catalog(deal_id, canonical)
+
+
+@router.post("/deals/{deal_id}/verify-structure", response_model=StructuringVerificationResponse)
+async def verify_deal_structure(deal_id: str, version: int | None = Query(None)):
+    canonical = _ensure_canonical_deal(deal_id, version=version)
+    return verify_structure(canonical, scenario_context={"mode": "verify"})
 
 
 @router.get("/deals/{deal_id}/solver-presets")

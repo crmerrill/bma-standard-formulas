@@ -21,6 +21,8 @@ from .common import (
     StructureRelation,
     TrancheType,
     TriggerMetricType,
+    TrancheBehavior,
+    PayMode,
 )
 
 
@@ -53,15 +55,24 @@ class BondDef(BaseModel):
 
     seniority: int | None = None
 
+    pay_mode: PayMode = PayMode.CASH_PAY
+    tranche_behavior: TrancheBehavior = TrancheBehavior.SEQUENTIAL
+
     # PAC/TAC schedule parameters
     schedule_type: ScheduleType | None = None
     pac_lower_psa: float | None = None
     pac_upper_psa: float | None = None
     tac_pricing_psa: float | None = None
+    schedule_contract: list[dict[str, float | int]] = Field(default_factory=list)
+    schedule_tolerance_bps: float | None = None
+    support_tranches: list[str] = Field(default_factory=list)
+    supported_by_tranches: list[str] = Field(default_factory=list)
 
     # Z-bond / accrual parameters
     accrual_start_period: int | None = None
     accrual_end_period: int | None = None
+    z_accrual_enabled: bool = False
+    z_release_trigger: str | None = None
 
     # Parent-child relationships (floater/inverse, IO/PO)
     parent_tranche: str | None = None
@@ -247,6 +258,74 @@ class DealDefinition(BaseModel):
                                 f"Bond {bond.name!r}: tracks_bonds references "
                                 f"unknown bond {n!r}"
                             )
+            if bond.tranche_behavior in {TrancheBehavior.PAC, TrancheBehavior.TAC}:
+                if not bond.schedule_contract:
+                    errors.append(
+                        f"Bond {bond.name!r}: tranche_behavior {bond.tranche_behavior.value} "
+                        f"requires schedule_contract points"
+                    )
+                if not bond.support_tranches and not bond.supported_by_tranches:
+                    errors.append(
+                        f"Bond {bond.name!r}: tranche_behavior {bond.tranche_behavior.value} "
+                        "requires explicit support tranche linkage"
+                    )
+            if bond.tranche_behavior == TrancheBehavior.Z:
+                if not bond.z_accrual_enabled:
+                    errors.append(
+                        f"Bond {bond.name!r}: tranche_behavior Z requires z_accrual_enabled=true"
+                    )
+                if bond.pay_mode != PayMode.PIK:
+                    errors.append(
+                        f"Bond {bond.name!r}: tranche_behavior Z requires pay_mode=PIK"
+                    )
+                if (
+                    bond.accrual_start_period is not None
+                    and bond.accrual_end_period is not None
+                    and bond.accrual_end_period < bond.accrual_start_period
+                ):
+                    errors.append(
+                        f"Bond {bond.name!r}: accrual_end_period must be >= accrual_start_period"
+                    )
+                if bond.z_release_trigger and bond.z_release_trigger not in trigger_names:
+                    errors.append(
+                        f"Bond {bond.name!r}: z_release_trigger {bond.z_release_trigger!r} "
+                        f"not found in triggers"
+                    )
+            for support in bond.support_tranches:
+                if support not in bond_names:
+                    errors.append(
+                        f"Bond {bond.name!r}: support_tranches references unknown bond {support!r}"
+                    )
+            for supporter in bond.supported_by_tranches:
+                if supporter not in bond_names:
+                    errors.append(
+                        f"Bond {bond.name!r}: supported_by_tranches references unknown bond {supporter!r}"
+                    )
+
+        support_graph: dict[str, set[str]] = {
+            bond.name: set(bond.support_tranches) for bond in self.bonds
+        }
+
+        visited: set[str] = set()
+        stack: set[str] = set()
+
+        def _dfs(node: str) -> bool:
+            if node in stack:
+                return True
+            if node in visited:
+                return False
+            visited.add(node)
+            stack.add(node)
+            for nxt in support_graph.get(node, set()):
+                if _dfs(nxt):
+                    return True
+            stack.remove(node)
+            return False
+
+        for name in support_graph:
+            if _dfs(name):
+                errors.append("Support-tranche graph contains a cycle")
+                break
 
         if errors:
             raise ValueError(

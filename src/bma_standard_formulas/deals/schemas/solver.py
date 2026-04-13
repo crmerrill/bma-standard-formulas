@@ -18,6 +18,23 @@ class ConstraintComparison(str, Enum):
     BETWEEN = "BETWEEN"
 
 
+class WaterfallTargetPrimitive(str, Enum):
+    """Domain-native waterfall target families for credit/CRT optimization."""
+
+    CUM_LOSS_MULTIPLE_GAP = "CUM_LOSS_MULTIPLE_GAP"
+    NO_SHORTFALL_INTEREST = "NO_SHORTFALL_INTEREST"
+    NO_SHORTFALL_PRINCIPAL = "NO_SHORTFALL_PRINCIPAL"
+    OC_IC_TRIGGER_RESILIENCE = "OC_IC_TRIGGER_RESILIENCE"
+    STEPDOWN_ELIGIBILITY_SAFETY = "STEPDOWN_ELIGIBILITY_SAFETY"
+    SUBORDINATION_FLOOR_GAP = "SUBORDINATION_FLOOR_GAP"
+    RESERVE_SUFFICIENCY_GAP = "RESERVE_SUFFICIENCY_GAP"
+    CE_TARGET_DELTA = "CE_TARGET_DELTA"
+    PAC_SCHEDULE_MISS = "PAC_SCHEDULE_MISS"
+    TAC_SCHEDULE_MISS = "TAC_SCHEDULE_MISS"
+    Z_ACCRUAL_RELEASE_GAP = "Z_ACCRUAL_RELEASE_GAP"
+    SUPPORT_BURNDOWN_GAP = "SUPPORT_BURNDOWN_GAP"
+
+
 class KnobBound(BaseModel):
     """Bounds for a single solver knob (parameter to optimize)."""
     knob_path: str = Field(
@@ -42,6 +59,8 @@ class ObjectiveSpec(BaseModel):
     objective_type: ObjectiveType = ObjectiveType.TARGET
     target_value: float | None = None
     weight: float = 1.0
+    target_primitive: WaterfallTargetPrimitive | None = None
+    primitive_params: dict[str, Any] = Field(default_factory=dict)
 
 
 class ConstraintSpec(BaseModel):
@@ -54,6 +73,8 @@ class ConstraintSpec(BaseModel):
     upper: float | None = None
     tolerance: float = 1e-6
     hard: bool = True
+    target_primitive: WaterfallTargetPrimitive | None = None
+    primitive_params: dict[str, Any] = Field(default_factory=dict)
 
 
 class SolverLayerSpec(BaseModel):

@@ -155,8 +155,24 @@ export default function StructuredDealAnalysisPage({
       bond_cashflows: artifacts.filter((a) => a.endsWith("_bond_cashflows")),
       waterfall: artifacts.filter((a) => a.includes("waterfall_trace") || a.includes("trigger_state_history")),
       bond_risk: artifacts.filter((a) => a.includes("tranche_risk_summary") || a.includes("credit_enhancement")),
-      deal_risk: artifacts.filter((a) => a.includes("decrement_table") || a.includes("stress_matrix")),
-      solver_runs: artifacts.filter((a) => a.includes("solver_iterations") || a.includes("solver_selected_solution")),
+      deal_risk: artifacts.filter(
+        (a) =>
+          a.includes("decrement_table")
+          || a.includes("stress_matrix")
+          || a.includes("pac_tac_diagnostics")
+          || a.includes("structure_composition"),
+      ),
+      solver_runs: artifacts.filter(
+        (a) =>
+          a.includes("solver_iterations")
+          || a.includes("solver_selected_solution")
+          || a.includes("solver_ce_ladder")
+          || a.includes("solver_loss_multiple_coverage")
+          || a.includes("solver_trigger_breach_timeline")
+          || a.includes("solver_stepdown_gate_status")
+          || a.includes("solver_pac_tac_behavior")
+          || a.includes("solver_z_support_profile"),
+      ),
       solver_runs_sensitivity: artifacts.filter((a) => a.includes("solver_sensitivity")),
     } as const;
     if (tab !== "solver_runs") return byTab[tab];
@@ -481,8 +497,9 @@ export default function StructuredDealAnalysisPage({
             {tab === "bond_cashflows" && "Scenario-level tranche cashflow paths."}
             {tab === "waterfall" && "Waterfall trace and trigger timelines."}
             {tab === "bond_risk" && "Per-tranche WAL, CE and risk metrics."}
-            {tab === "deal_risk" && "Stress/decrement diagnostics and aggregate risk views."}
-            {tab === "solver_runs" && "Solver iteration trajectory and selected-solution diagnostics."}
+            {tab === "deal_risk" && "Stress/decrement diagnostics plus PAC/TAC schedule and Z/support composition views."}
+            {tab === "solver_runs"
+              && "Solver iteration trajectory plus CE ladders, loss-multiple coverage, trigger breach timelines, step-down diagnostics, and PAC/TAC/Z behavior diagnostics."}
           </p>
           {!filteredArtifacts.length ? (
             <EmptyState message="No artifacts available for this view in the selected run." />
@@ -509,79 +526,6 @@ export default function StructuredDealAnalysisPage({
         <div className="p-3">
           {loading && <LoadingState message="Loading artifact preview..." />}
           {!loading && !preview && <EmptyState message="Select an artifact to inspect." />}
-          {!loading && displayedPreview && (
-            <SurfaceCard className="mb-3" padded={false}>
-              <div className="p-3">
-                <SectionHeader
-                  title={bondCashflowView === "portfolio" ? "Portfolio Cashflow Visuals" : `${bondCashflowView} Cashflow Visuals`}
-                  subtitle="Balance path and payment streams by period."
-                />
-              </div>
-              {selectedRiskSnapshot && (
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 px-3 pb-3">
-                  <MetricCard icon={Layers} label="Scope" value={selectedRiskSnapshot.scope} />
-                  <MetricCard icon={BarChart3} label="Tot Principal" value={fmtNum(selectedRiskSnapshot.total_principal, 2)} />
-                  <MetricCard icon={BarChart3} label="Tot Interest" value={fmtNum(selectedRiskSnapshot.total_interest, 2)} />
-                  <MetricCard icon={ShieldAlert} label="Prin Loss" value={fmtNum(selectedRiskSnapshot.principal_loss, 2)} />
-                  <MetricCard icon={Activity} label="Peak Shortfall" value={fmtNum(selectedRiskSnapshot.shortfall_peak, 2)} />
-                  <MetricCard icon={Layers} label="End Balance" value={fmtNum(selectedRiskSnapshot.ending_balance, 2)} />
-                  <MetricCard icon={Sigma} label="WAL (yrs)" value={fmtNum(selectedRiskSnapshot.wal_years, 3)} />
-                </div>
-              )}
-              {selectedRiskSnapshot && (
-                <div className="px-3 pb-3">
-                  <SectionHeader
-                    title="Base-Case Default Diagnostics"
-                    subtitle="Flags highlight trigger breaches, interest shortfalls, and principal impairment/maturity shortfalls."
-                  />
-                  <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <DefaultFlagCard
-                      label="Trigger Default"
-                      active={Boolean(triggerDefaultActive)}
-                      detail={triggerDefaultActive === null ? "Unknown" : triggerDefaultActive ? "Breached" : "No breach"}
-                    />
-                    <DefaultFlagCard
-                      label="Interest Default"
-                      active={Boolean(selectedRiskSnapshot.interest_default)}
-                      detail={
-                        selectedRiskSnapshot.scope === "Portfolio"
-                          ? `${selectedRiskSnapshot.interest_default_count} bond(s) with shortfall`
-                          : selectedRiskSnapshot.interest_default
-                            ? "Interest shortfall present"
-                            : "No shortfall"
-                      }
-                    />
-                    <DefaultFlagCard
-                      label="Principal Default"
-                      active={Boolean(selectedRiskSnapshot.principal_default)}
-                      detail={
-                        selectedRiskSnapshot.scope === "Portfolio"
-                          ? `${selectedRiskSnapshot.principal_default_count} bond(s) with loss/ending balance`
-                          : selectedRiskSnapshot.principal_default
-                            ? "Principal loss or ending balance > 0"
-                            : "Fully repaid without loss"
-                      }
-                    />
-                  </div>
-                </div>
-              )}
-              <div className="px-3 pb-3">
-                <PillToggle
-                  label="Chart Preset"
-                  selected={activeChartPreset}
-                  onSelect={setActiveChartPreset}
-                  options={[
-                    { id: "balance_payments", label: "Balance + Payments" },
-                    { id: "principal_interest", label: "Principal vs Interest" },
-                    { id: "loss_shortfall", label: "Loss + Shortfall" },
-                  ]}
-                />
-              </div>
-              <div className="h-64 px-3 pb-3">
-                <CashflowVisualChart preview={displayedPreview} preset={activeChartPreset} />
-              </div>
-            </SurfaceCard>
-          )}
           {!loading && preview && tab === "bond_cashflows" && (
             <>
               <div className="sticky top-0 z-20 bg-[#0d1220]/95 backdrop-blur-sm border-b border-border mb-3 pb-2 pt-1">
@@ -678,6 +622,79 @@ export default function StructuredDealAnalysisPage({
               }))}
               data={displayedPreview.rows}
             />
+          )}
+          {!loading && displayedPreview && tab === "bond_cashflows" && (
+            <SurfaceCard className="mt-3" padded={false}>
+              <div className="p-3">
+                <SectionHeader
+                  title={bondCashflowView === "portfolio" ? "Portfolio Cashflow Visuals" : `${bondCashflowView} Cashflow Visuals`}
+                  subtitle="Balance path and payment streams by period."
+                />
+              </div>
+              {selectedRiskSnapshot && (
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 px-3 pb-3">
+                  <MetricCard icon={Layers} label="Scope" value={selectedRiskSnapshot.scope} />
+                  <MetricCard icon={BarChart3} label="Tot Principal" value={fmtNum(selectedRiskSnapshot.total_principal, 2)} />
+                  <MetricCard icon={BarChart3} label="Tot Interest" value={fmtNum(selectedRiskSnapshot.total_interest, 2)} />
+                  <MetricCard icon={ShieldAlert} label="Prin Loss" value={fmtNum(selectedRiskSnapshot.principal_loss, 2)} />
+                  <MetricCard icon={Activity} label="Peak Shortfall" value={fmtNum(selectedRiskSnapshot.shortfall_peak, 2)} />
+                  <MetricCard icon={Layers} label="End Balance" value={fmtNum(selectedRiskSnapshot.ending_balance, 2)} />
+                  <MetricCard icon={Sigma} label="WAL (yrs)" value={fmtNum(selectedRiskSnapshot.wal_years, 3)} />
+                </div>
+              )}
+              {selectedRiskSnapshot && (
+                <div className="px-3 pb-3">
+                  <SectionHeader
+                    title="Base-Case Default Diagnostics"
+                    subtitle="Flags highlight trigger breaches, interest shortfalls, and principal impairment/maturity shortfalls."
+                  />
+                  <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <DefaultFlagCard
+                      label="Trigger Default"
+                      active={Boolean(triggerDefaultActive)}
+                      detail={triggerDefaultActive === null ? "Unknown" : triggerDefaultActive ? "Breached" : "No breach"}
+                    />
+                    <DefaultFlagCard
+                      label="Interest Default"
+                      active={Boolean(selectedRiskSnapshot.interest_default)}
+                      detail={
+                        selectedRiskSnapshot.scope === "Portfolio"
+                          ? `${selectedRiskSnapshot.interest_default_count} bond(s) with shortfall`
+                          : selectedRiskSnapshot.interest_default
+                            ? "Interest shortfall present"
+                            : "No shortfall"
+                      }
+                    />
+                    <DefaultFlagCard
+                      label="Principal Default"
+                      active={Boolean(selectedRiskSnapshot.principal_default)}
+                      detail={
+                        selectedRiskSnapshot.scope === "Portfolio"
+                          ? `${selectedRiskSnapshot.principal_default_count} bond(s) with loss/ending balance`
+                          : selectedRiskSnapshot.principal_default
+                            ? "Principal loss or ending balance > 0"
+                            : "Fully repaid without loss"
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="px-3 pb-3">
+                <PillToggle
+                  label="Chart Preset"
+                  selected={activeChartPreset}
+                  onSelect={setActiveChartPreset}
+                  options={[
+                    { id: "balance_payments", label: "Balance + Payments" },
+                    { id: "principal_interest", label: "Principal vs Interest" },
+                    { id: "loss_shortfall", label: "Loss + Shortfall" },
+                  ]}
+                />
+              </div>
+              <div className="h-64 px-3 pb-3">
+                <CashflowVisualChart preview={displayedPreview} preset={activeChartPreset} />
+              </div>
+            </SurfaceCard>
           )}
         </div>
       </CollapsiblePanel>

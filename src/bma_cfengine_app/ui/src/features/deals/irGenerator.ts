@@ -16,6 +16,14 @@ interface BondDefIR {
   coupon_type: string;
   index_name: string | null;
   margin: number | null;
+  pay_mode: "CASH_PAY" | "PIK";
+  tranche_behavior: "SEQUENTIAL" | "PAC" | "TAC" | "Z" | "ACCRETION_DIRECTED";
+  schedule_contract: Array<{ period: number; target_principal: number }>;
+  schedule_tolerance_bps: number | null;
+  support_tranches: string[];
+  supported_by_tranches: string[];
+  z_accrual_enabled: boolean;
+  z_release_trigger: string | null;
 }
 
 interface AccountDefIR {
@@ -144,6 +152,12 @@ interface TargetInfo {
   indexName?: string;
   margin?: number | null;
   accrual?: string;
+  payMode?: "CASH_PAY" | "PIK";
+  trancheBehavior?: "SEQUENTIAL" | "PAC" | "TAC" | "Z" | "ACCRETION_DIRECTED";
+  scheduleContract?: Array<{ period: number; target_principal: number }>;
+  scheduleToleranceBps?: number | null;
+  supportTranches?: string[];
+  zReleaseTrigger?: string | null;
   accountType?: string;
   /** PCT_STACK = % of total bond face; FIXED_DOLLAR = $ */
   initialMode?: string;
@@ -155,16 +169,22 @@ function extractTargets(ruleBlock: any): TargetInfo[] {
   for (const t of getStatementChain(ruleBlock, "TARGETS")) {
     if (t.type === "bond_target") {
       const bondType = t.getFieldValue("BOND_TYPE") || "FIXED";
+      const payMode = (t.getFieldValue("PAY_MODE") || "CASH_PAY") as "CASH_PAY" | "PIK";
       targets.push({
         name: t.getFieldValue("NAME") || "X",
         isBond: true,
         bondType,
+        payMode,
         faceAmt: t.getFieldValue("FACE_AMT") || 0,
         sizePctPool: Number(t.getFieldValue("SIZE_PCT_POOL") || 0),
         coupon: t.getFieldValue("COUPON") || 0,
         indexName: bondType === "FLOATING" ? (t.getFieldValue("INDEX_NAME") || null) : null,
         margin: bondType === "FLOATING" ? Number(t.getFieldValue("MARGIN") || 0) : null,
         accrual: t.getFieldValue("ACCRUAL") || "30_360",
+        scheduleContract: [],
+        scheduleToleranceBps: null,
+        supportTranches: [],
+        zReleaseTrigger: null,
       });
     } else if (t.type === "residual_target") {
       targets.push({
@@ -210,6 +230,9 @@ function walkWaterfall(blocks: any[], ctx: Ctx): void {
     switch (b.type) {
       case "pay_sequential": emitSequential(b, ctx); break;
       case "pay_pro_rata": emitProRata(b, ctx); break;
+      case "pay_pac_schedule": emitPacTacSchedule(b, ctx, "PAC"); break;
+      case "pay_tac_schedule": emitPacTacSchedule(b, ctx, "TAC"); break;
+      case "pay_accretion_redirect": emitAccretionRedirect(b, ctx); break;
       case "pay_fee": emitFee(b, ctx); break;
       case "trigger_wrapper": emitTrigger(b, ctx); break;
       case "split_account": break; // account-level, no rule emitted
@@ -220,7 +243,25 @@ function walkWaterfall(blocks: any[], ctx: Ctx): void {
 function registerTargets(targets: TargetInfo[], ctx: Ctx): void {
   for (const t of targets) {
     if (t.isBond) {
-      if (!ctx.bonds.has(t.name)) ctx.bonds.set(t.name, t);
+      const existing = ctx.bonds.get(t.name);
+      if (!existing) {
+        ctx.bonds.set(t.name, t);
+        continue;
+      }
+      ctx.bonds.set(t.name, {
+        ...existing,
+        ...t,
+        scheduleContract:
+          (t.scheduleContract && t.scheduleContract.length > 0)
+            ? t.scheduleContract
+            : existing.scheduleContract,
+        scheduleToleranceBps:
+          t.scheduleToleranceBps != null ? t.scheduleToleranceBps : existing.scheduleToleranceBps,
+        supportTranches:
+          (t.supportTranches && t.supportTranches.length > 0)
+            ? t.supportTranches
+            : existing.supportTranches,
+      });
     } else if (t.accountType) {
       if (!ctx.accounts.has(t.name)) ctx.accounts.set(t.name, t);
     } else {
@@ -228,6 +269,53 @@ function registerTargets(targets: TargetInfo[], ctx: Ctx): void {
       if (!ctx.bonds.has(t.name)) ctx.bonds.set(t.name, t);
     }
   }
+}
+
+function parseScheduleContract(raw: string): Array<{ period: number; target_principal: number }> {
+  const scheduleContract: Array<{ period: number; target_principal: number }> = [];
+  const normalized = String(raw || "").trim();
+  if (!normalized) return scheduleContract;
+  const points = normalized.split(",").map((s) => s.trim()).filter(Boolean);
+  points.forEach((point) => {
+    const [periodText, principalText] = point.split(":");
+    const period = Number(periodText);
+    const principal = Number(principalText);
+    if (Number.isFinite(period) && Number.isFinite(principal)) {
+      scheduleContract.push({ period, target_principal: principal });
+    }
+  });
+  return scheduleContract;
+}
+
+function applyPacTacSemantics(
+  targets: TargetInfo[],
+  {
+    behavior,
+    scheduleRaw,
+    supportsRaw,
+    toleranceBps,
+  }: {
+    behavior: "PAC" | "TAC";
+    scheduleRaw: string;
+    supportsRaw: string;
+    toleranceBps: number;
+  },
+): TargetInfo[] {
+  const scheduleContract = parseScheduleContract(scheduleRaw);
+  const supportTranches = String(supportsRaw || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return targets.map((target) => {
+    if (!target.isBond) return target;
+    return {
+      ...target,
+      trancheBehavior: behavior,
+      scheduleContract,
+      scheduleToleranceBps: Number.isFinite(toleranceBps) ? toleranceBps : 25,
+      supportTranches,
+    };
+  });
 }
 
 function emitSequential(block: any, ctx: Ctx): void {
@@ -277,6 +365,57 @@ function emitProRata(block: any, ctx: Ctx): void {
     condition_invert: ctx.conditionInvert,
   });
   ctx.order++;
+}
+
+function emitPacTacSchedule(block: any, ctx: Ctx, behavior: "PAC" | "TAC"): void {
+  const source = normalizeRuleSource(block.getFieldValue("SOURCE"));
+  const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
+  const schedule = String(block.getFieldValue("SCHEDULE") || "");
+  const supports = String(block.getFieldValue("SUPPORTS") || "");
+  const tolBps = Number(block.getFieldValue("TOL_BPS")) || 25;
+  const targets = applyPacTacSemantics(extractTargets(block), {
+    behavior,
+    scheduleRaw: schedule,
+    supportsRaw: supports,
+    toleranceBps: tolBps,
+  });
+  registerTargets(targets, ctx);
+
+  targets.forEach((target, idx) => {
+    ctx.rules.push({
+      rule_id: `${behavior.toLowerCase()}_rule_${ctx.order}`,
+      rule_type: "PAY_PRINCIPAL",
+      order: ctx.order,
+      from_sources: [source],
+      to_targets: [target.name],
+      payment_style: "SEQUENTIAL",
+      max_amount_fixed: maxPay > 0 && idx === 0 ? maxPay : null,
+      condition_trigger: ctx.activeTrigger,
+      condition_invert: ctx.conditionInvert,
+    });
+    ctx.order++;
+  });
+}
+
+function emitAccretionRedirect(block: any, ctx: Ctx): void {
+  const source = normalizeRuleSource(block.getFieldValue("SOURCE"));
+  const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
+  const targets = extractTargets(block);
+  registerTargets(targets, ctx);
+  targets.forEach((target, idx) => {
+    ctx.rules.push({
+      rule_id: `accretion_redirect_${ctx.order}`,
+      rule_type: "PAY_PRINCIPAL",
+      order: ctx.order,
+      from_sources: [source],
+      to_targets: [target.name],
+      payment_style: "SEQUENTIAL",
+      max_amount_fixed: maxPay > 0 && idx === 0 ? maxPay : null,
+      condition_trigger: ctx.activeTrigger,
+      condition_invert: ctx.conditionInvert,
+    });
+    ctx.order++;
+  });
 }
 
 function emitFee(block: any, ctx: Ctx): void {
@@ -341,7 +480,16 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
   // Collect all top-level waterfall blocks (no deal_root needed)
   const allBlocks = workspace.getTopBlocks(true);
   const waterfallBlocks = allBlocks.filter((b: any) =>
-    ["pay_sequential", "pay_pro_rata", "pay_fee", "split_account", "trigger_wrapper"].includes(b.type)
+    [
+      "pay_sequential",
+      "pay_pro_rata",
+      "pay_pac_schedule",
+      "pay_tac_schedule",
+      "pay_accretion_redirect",
+      "pay_fee",
+      "split_account",
+      "trigger_wrapper",
+    ].includes(b.type)
   );
 
   // Flatten chains (top blocks + their next connections)
@@ -374,7 +522,12 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
   for (const [name, info] of ctx.bonds) {
     bonds.push({
       name,
-      tranche_type: "SEQUENTIAL",
+      tranche_type:
+        info.trancheBehavior === "Z" || info.payMode === "PIK"
+          ? "Z_BOND"
+          : info.trancheBehavior === "ACCRETION_DIRECTED"
+            ? "ACCRETION_DIRECTED"
+            : "SEQUENTIAL",
       coupon: info.coupon || 0,
       size_pct: Number(info.sizePctPool || 0),
       size_dollars: info.faceAmt || 0,
@@ -383,6 +536,17 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       coupon_type: info.bondType || "FIXED",
       index_name: info.bondType === "FLOATING" ? (info.indexName ?? null) : null,
       margin: info.bondType === "FLOATING" ? Number(info.margin || 0) : null,
+      pay_mode: info.payMode || "CASH_PAY",
+      tranche_behavior: info.trancheBehavior || (info.payMode === "PIK" ? "Z" : "SEQUENTIAL"),
+      schedule_contract: info.scheduleContract || [],
+      schedule_tolerance_bps:
+        info.trancheBehavior === "PAC" || info.trancheBehavior === "TAC"
+          ? (info.scheduleToleranceBps ?? 25)
+          : null,
+      support_tranches: info.supportTranches || [],
+      supported_by_tranches: info.supportTranches || [],
+      z_accrual_enabled: (info.trancheBehavior || (info.payMode === "PIK" ? "Z" : "SEQUENTIAL")) === "Z",
+      z_release_trigger: info.zReleaseTrigger ?? null,
     });
   }
 
@@ -391,6 +555,9 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
     bonds.push({
       name: "R", tranche_type: "RESIDUAL", coupon: 0, size_pct: 0, size_dollars: 0,
       is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
+      pay_mode: "CASH_PAY",
+      tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
+      support_tranches: [], supported_by_tranches: [], z_accrual_enabled: false, z_release_trigger: null,
     });
   }
 
@@ -409,24 +576,18 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
     });
   }
 
-  // Add pseudo bonds for fees and accounts the runtime needs
+  // Add pseudo bonds for fees the runtime needs
   const bondNames = new Set(bonds.map((b) => b.name));
   for (const fee of ctx.fees) {
     if (!bondNames.has(fee.name)) {
       bonds.push({
         name: fee.name, tranche_type: "PSEUDO", coupon: 0, size_pct: 0, size_dollars: 0,
         is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
+        pay_mode: "CASH_PAY",
+        tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
+        support_tranches: [], supported_by_tranches: [], z_accrual_enabled: false, z_release_trigger: null,
       });
       bondNames.add(fee.name);
-    }
-  }
-  for (const acct of accounts) {
-    if (!bondNames.has(acct.name)) {
-      bonds.push({
-        name: acct.name, tranche_type: "PSEUDO", coupon: 0, size_pct: 0, size_dollars: 0,
-        is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
-      });
-      bondNames.add(acct.name);
     }
   }
 

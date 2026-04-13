@@ -28,4 +28,14 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(trigger, dict):
             trigger.setdefault("calculation_ref", None)
             trigger.setdefault("comparison_ref", None)
+    for bond in migrated.get("bonds", []) or []:
+        if isinstance(bond, dict):
+            bond.setdefault("pay_mode", "CASH_PAY")
+            bond.setdefault("tranche_behavior", "SEQUENTIAL")
+            bond.setdefault("schedule_contract", [])
+            bond.setdefault("schedule_tolerance_bps", None)
+            bond.setdefault("support_tranches", [])
+            bond.setdefault("supported_by_tranches", [])
+            bond.setdefault("z_accrual_enabled", False)
+            bond.setdefault("z_release_trigger", None)
     return migrated

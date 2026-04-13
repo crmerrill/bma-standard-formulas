@@ -21,6 +21,8 @@ export function getDefaultSolverSpecDraft(): SolverSpecDraft {
         objectiveType: "TARGET",
         targetValue: 6.0,
         weight: 1.0,
+        targetPrimitive: null,
+        primitiveParams: {},
       },
     ],
     constraints: [],
