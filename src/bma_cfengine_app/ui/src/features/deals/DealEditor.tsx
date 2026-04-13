@@ -2,14 +2,23 @@
  * DealEditor — composition root for Structuring + Solver Studio.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Code2, GripVertical, LayoutDashboard, Save, Settings2, Sigma } from "lucide-react";
+import {
+  Code2,
+  GripVertical,
+  LayoutDashboard,
+  Save,
+  Settings2,
+  Sigma,
+  XCircle,
+} from "lucide-react";
 import { toast } from "sonner";
 import BlocklyCanvas from "./BlocklyCanvas";
 import PropertyPanel from "./PropertyPanel";
 import { generateDealIR } from "./irGenerator";
 import { applyDynamicColors } from "./blockColors";
-import { MONO } from "../../lib/format";
+import { fmtNamedId, MONO } from "../../lib/format";
 import * as api from "../../services/api";
+import FormSelect from "../../components/FormSelect";
 import TabBar from "../../components/TabBar";
 import SolverStudioPanel from "./solver/SolverStudioPanel";
 import {
@@ -25,13 +34,26 @@ import type {
   SolverSpecDraft,
   TelemetryState,
 } from "./solver/types";
+import type { CollateralRiskSettings } from "./shared/riskSettings";
+import { getDefaultCollateralRiskSettings, validateCollateralRiskSettings } from "./shared/riskSettings";
 
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 640;
-const PROPERTIES_PCT_MIN = 22;
-const PROPERTIES_PCT_MAX = 82;
 
 type StudioTab = "design" | "solver" | "ir";
+const STUDIO_DRAFT_STORAGE_KEY = "bma_structuring_studio_draft_v1";
+
+interface StudioDraftState {
+  studioTab: StudioTab;
+  dealName: string;
+  savedDealId: string | null;
+  irJson: string;
+  solverSpecDraft: SolverSpecDraft;
+  advancedJson: AdvancedJsonState;
+  sensitivitySweepConfig: SensitivitySweepConfig;
+  collateralRiskSettings: CollateralRiskSettings;
+  workspaceState: unknown | null;
+}
 
 function parseScenarioSet(text: string): string[] {
   const names = text
@@ -41,26 +63,70 @@ function parseScenarioSet(text: string): string[] {
   return names.length ? names : ["Base Case"];
 }
 
-interface DealEditorProps {
-  initialSourceRunId?: string | null;
+function toCollateralRiskSettings(value: unknown): CollateralRiskSettings {
+  const fallback = getDefaultCollateralRiskSettings();
+  if (!value || typeof value !== "object") return fallback;
+  const source = value as Record<string, unknown>;
+  const merged: CollateralRiskSettings = {
+    ...fallback,
+    ...source,
+    newRiskParams: {
+      ...fallback.newRiskParams,
+      ...((source.newRiskParams as Record<string, unknown> | undefined) ?? {}),
+    },
+    rateScenario: {
+      ...fallback.rateScenario,
+      ...((source.rateScenario as Record<string, unknown> | undefined) ?? {}),
+    },
+    execution: {
+      ...fallback.execution,
+      ...((source.execution as Record<string, unknown> | undefined) ?? {}),
+    },
+    validation: {
+      ...fallback.validation,
+      ...((source.validation as Record<string, unknown> | undefined) ?? {}),
+    },
+  };
+  merged.validation = validateCollateralRiskSettings(merged);
+  return merged;
 }
 
-export default function DealEditor({ initialSourceRunId = null }: DealEditorProps) {
+interface DealEditorProps {
+  initialSourceRunId?: string | null;
+  collateralRiskSettings: CollateralRiskSettings;
+  onCollateralRiskSettingsChange: (next: CollateralRiskSettings) => void;
+  onOpenTape?: (uploadId: string, mappingId: string) => Promise<void> | void;
+  onDirtyStateChange?: (dirty: boolean) => void;
+}
+
+export default function DealEditor({
+  initialSourceRunId = null,
+  collateralRiskSettings,
+  onCollateralRiskSettingsChange,
+  onOpenTape,
+  onDirtyStateChange,
+}: DealEditorProps) {
   const [studioTab, setStudioTab] = useState<StudioTab>("design");
   const [irJson, setIrJson] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [workspace, setWorkspace] = useState<any>(null);
-  const [showDesignIr, setShowDesignIr] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(288);
-  const [propertiesPct, setPropertiesPct] = useState(58);
   const [dealName, setDealName] = useState("Deal");
   const [savedDealId, setSavedDealId] = useState<string | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
   const [solveBusy, setSolveBusy] = useState(false);
   const [availableRuns, setAvailableRuns] = useState<api.RunListItem[]>([]);
+  const [uploadLibrary, setUploadLibrary] = useState<api.UploadLibraryItem[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState<string | null>(null);
+  const [studioDeals, setStudioDeals] = useState<api.StudioDealSummary[]>([]);
+  const [poolSnapshots, setPoolSnapshots] = useState<api.PoolSnapshotSummary[]>([]);
+  const [selectedStudioDealId, setSelectedStudioDealId] = useState<string>("");
+  const [selectedStudioVersion, setSelectedStudioVersion] = useState<string>("");
+  const [pendingWorkspaceState, setPendingWorkspaceState] = useState<unknown | null>(null);
+  const [lastSavedFingerprint, setLastSavedFingerprint] = useState<string>("");
+  const [pendingCleanMark, setPendingCleanMark] = useState(false);
 
   const [solverSpecDraft, setSolverSpecDraft] = useState<SolverSpecDraft>(() => getDefaultSolverSpecDraft());
   const [advancedJson, setAdvancedJson] = useState<AdvancedJsonState>(() =>
@@ -74,19 +140,86 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
   );
 
   const rightColRef = useRef<HTMLDivElement>(null);
+  const designSplitRef = useRef<HTMLDivElement>(null);
   const colDragRef = useRef<{ startX: number; startW: number } | null>(null);
-  const rowDragRef = useRef<{ startY: number; startPct: number; height: number } | null>(null);
   const progressPollRef = useRef<number | null>(null);
+  const userResizedSidebarRef = useRef(false);
   const scenarioNames = useMemo(
     () => parseScenarioSet(solverSpecDraft.scenarioSetText),
     [solverSpecDraft.scenarioSetText],
+  );
+  const selectedStudioDealSummary = useMemo(
+    () => studioDeals.find((deal) => deal.deal_id === selectedStudioDealId) ?? null,
+    [studioDeals, selectedStudioDealId],
+  );
+  const newerPoolVersion = useMemo(() => {
+    if (!collateralRiskSettings.poolId || collateralRiskSettings.poolVersion == null) return null;
+    const summary = poolSnapshots.find((pool) => pool.pool_id === collateralRiskSettings.poolId);
+    if (!summary || summary.current_version <= collateralRiskSettings.poolVersion) return null;
+    return summary.current_version;
+  }, [collateralRiskSettings.poolId, collateralRiskSettings.poolVersion, poolSnapshots]);
+  const currentDraftFingerprint = useMemo(
+    () =>
+      JSON.stringify({
+        studioTab,
+        dealName,
+        irJson,
+        solverSpecDraft,
+        advancedJson: advancedJson.jsonText,
+        sensitivitySweepConfig,
+        collateralRiskSettings,
+      }),
+    [
+      studioTab,
+      dealName,
+      irJson,
+      solverSpecDraft,
+      advancedJson.jsonText,
+      sensitivitySweepConfig,
+      collateralRiskSettings,
+    ],
+  );
+  const isDirty = useMemo(
+    () => Boolean(lastSavedFingerprint) && currentDraftFingerprint !== lastSavedFingerprint,
+    [currentDraftFingerprint, lastSavedFingerprint],
+  );
+
+  const serializeWorkspaceState = useCallback(async (): Promise<unknown | null> => {
+    if (!workspace) return null;
+    try {
+      const Blockly = await import("blockly");
+      return Blockly.serialization.workspaces.save(workspace);
+    } catch {
+      return null;
+    }
+  }, [workspace]);
+
+  const restoreWorkspaceState = useCallback(
+    async (workspaceState: unknown | null) => {
+      if (!workspace || !workspaceState) return;
+      try {
+        const Blockly = await import("blockly");
+        workspace.clear();
+        Blockly.serialization.workspaces.load(workspaceState as any, workspace);
+        // Keep reload behavior predictable: always center the viewport after restore.
+        workspace.scrollCenter();
+      } catch (error) {
+        toast.error(
+          error instanceof Error
+            ? `Unable to restore workspace: ${error.message}`
+            : "Unable to restore workspace from saved snapshot.",
+        );
+      }
+    },
+    [workspace],
   );
 
   const refreshRuns = useCallback(async () => {
     setRunsLoading(true);
     setRunsError(null);
     try {
-      const runs = await api.listRuns();
+      // Deal sourcing should only reference collateral engine (portfolio) runs.
+      const runs = await api.listRuns("portfolio");
       const sorted = [...runs].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
       setAvailableRuns(sorted);
       setSolverSpecDraft((prev) => {
@@ -102,6 +235,34 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
       setRunsError(error instanceof Error ? error.message : String(error));
     } finally {
       setRunsLoading(false);
+    }
+  }, []);
+
+  const refreshStudioDeals = useCallback(async () => {
+    try {
+      const deals = await api.listStudioDeals();
+      setStudioDeals(deals);
+      setSelectedStudioDealId((prev) => prev || deals[0]?.deal_id || "");
+    } catch {
+      setStudioDeals([]);
+    }
+  }, []);
+
+  const refreshUploadLibrary = useCallback(async () => {
+    try {
+      const res = await api.listUploads();
+      setUploadLibrary(res.items);
+    } catch {
+      setUploadLibrary([]);
+    }
+  }, []);
+
+  const refreshPoolSnapshots = useCallback(async () => {
+    try {
+      const result = await api.listPoolSnapshots();
+      setPoolSnapshots(result.items);
+    } catch {
+      setPoolSnapshots([]);
     }
   }, []);
 
@@ -142,14 +303,17 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
       return;
     }
     ir.deal_name = dealName.trim() || "Deal";
+    const workspaceState = await serializeWorkspaceState();
     ir.solver_presets = {
       source_mode: solverSpecDraft.sourceMode,
       runsetup_ref_run_id: solverSpecDraft.sourceRunId,
       scenario_set: scenarioNames,
       source_scenario_name: solverSpecDraft.sourceScenarioName,
+      collateral_risk_settings: collateralRiskSettings,
       sensitivity_sweep: sensitivitySweepConfig,
       solver_spec: solverSpec,
     };
+    ir.studio_workspace_state = workspaceState;
     setSaveBusy(true);
     try {
       const res = await api.saveStudioDeal({
@@ -158,6 +322,10 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
         ir,
       });
       setSavedDealId(res.deal_id);
+      setSelectedStudioDealId(res.deal_id);
+      setSelectedStudioVersion(String(res.version));
+      setPendingCleanMark(true);
+      refreshStudioDeals();
       toast.success(`Saved ${res.deal_name} as ${res.deal_id} (v${res.version})`);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -175,6 +343,71 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
     solverSpecDraft.sourceScenarioName,
     scenarioNames,
     sensitivitySweepConfig,
+    collateralRiskSettings,
+    serializeWorkspaceState,
+    refreshStudioDeals,
+  ]);
+
+  const handleLoadStudioDeal = useCallback(async () => {
+    if (!selectedStudioDealId) return;
+    if (isDirty && !window.confirm("You have unsaved changes. Open another deal anyway?")) {
+      return;
+    }
+    try {
+      const snapshot = await api.getStudioDeal(
+        selectedStudioDealId,
+        selectedStudioVersion ? Number(selectedStudioVersion) : undefined,
+      );
+      setSavedDealId(snapshot.deal_id);
+      setDealName(snapshot.deal_name || "Deal");
+      setIrJson(JSON.stringify(snapshot.ir ?? {}, null, 2));
+      setErrors([]);
+      const presets = (snapshot.ir?.solver_presets ?? {}) as Record<string, unknown>;
+      setSolverSpecDraft((prev) => ({
+        ...prev,
+        sourceMode:
+          presets.source_mode === "deal_native" || presets.source_mode === "runsetup_ref"
+            ? (presets.source_mode as "deal_native" | "runsetup_ref")
+            : prev.sourceMode,
+        sourceRunId: typeof presets.runsetup_ref_run_id === "string" ? presets.runsetup_ref_run_id : null,
+        sourceScenarioName:
+          typeof presets.source_scenario_name === "string" ? presets.source_scenario_name : null,
+        scenarioSetText: Array.isArray(presets.scenario_set)
+          ? (presets.scenario_set as string[]).join(", ")
+          : prev.scenarioSetText,
+      }));
+      if (presets.solver_spec) {
+        setAdvancedJson({
+          jsonText: JSON.stringify(presets.solver_spec, null, 2),
+          parseError: null,
+          lastSyncedAt: new Date().toISOString(),
+        });
+      }
+      const maybeSweep = presets.sensitivity_sweep as SensitivitySweepConfig | undefined;
+      if (maybeSweep?.primary) {
+        setSensitivitySweepConfig(maybeSweep);
+      }
+      const maybeRisk = (presets.collateral_risk_settings ??
+        presets.pool_assignment) as unknown;
+      if (maybeRisk) {
+        onCollateralRiskSettingsChange(toCollateralRiskSettings(maybeRisk));
+      }
+      const workspaceState = (snapshot.ir?.studio_workspace_state as unknown) ?? null;
+      setPendingWorkspaceState(workspaceState);
+      if (!workspaceState) {
+        toast.info("Loaded deal snapshot. No workspace layout saved for this version.");
+      } else {
+        toast.success(`Loaded ${snapshot.deal_name} (${snapshot.deal_id})`);
+      }
+      setPendingCleanMark(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }, [
+    isDirty,
+    selectedStudioDealId,
+    selectedStudioVersion,
+    onCollateralRiskSettingsChange,
   ]);
 
   const handleRunDeal = useCallback(async () => {
@@ -219,6 +452,7 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
     scenarioNames,
     refreshRuns,
   ]);
+
 
   const handleSolveDeal = useCallback(async () => {
     if (!savedDealId) {
@@ -355,6 +589,22 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
   }, [refreshRuns]);
 
   useEffect(() => {
+    refreshStudioDeals();
+  }, [refreshStudioDeals]);
+
+  useEffect(() => {
+    refreshUploadLibrary();
+  }, [refreshUploadLibrary]);
+
+  useEffect(() => {
+    refreshPoolSnapshots();
+  }, [refreshPoolSnapshots]);
+
+  useEffect(() => {
+    setSelectedStudioVersion("");
+  }, [selectedStudioDealId]);
+
+  useEffect(() => {
     if (!initialSourceRunId) return;
     setSolverSpecDraft((prev) => ({
       ...prev,
@@ -364,40 +614,31 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
   }, [initialSourceRunId]);
 
   useEffect(() => {
+    if (!pendingWorkspaceState || !workspace) return;
+    restoreWorkspaceState(pendingWorkspaceState).finally(() => {
+      setPendingWorkspaceState(null);
+    });
+  }, [pendingWorkspaceState, restoreWorkspaceState, workspace]);
+
+  useEffect(() => {
     const onColMove = (e: MouseEvent) => {
       const d = colDragRef.current;
       if (!d) return;
       const dx = e.clientX - d.startX;
       setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, d.startW - dx)));
+      userResizedSidebarRef.current = true;
     };
     const onColUp = () => {
       colDragRef.current = null;
       document.body.style.removeProperty("cursor");
       document.body.style.removeProperty("user-select");
     };
-    const onRowMove = (e: MouseEvent) => {
-      const d = rowDragRef.current;
-      if (!d || d.height <= 0) return;
-      const dy = e.clientY - d.startY;
-      const deltaPct = (dy / d.height) * 100;
-      const next = d.startPct + deltaPct;
-      setPropertiesPct(Math.min(PROPERTIES_PCT_MAX, Math.max(PROPERTIES_PCT_MIN, next)));
-    };
-    const onRowUp = () => {
-      rowDragRef.current = null;
-      document.body.style.removeProperty("cursor");
-      document.body.style.removeProperty("user-select");
-    };
 
     window.addEventListener("mousemove", onColMove);
     window.addEventListener("mouseup", onColUp);
-    window.addEventListener("mousemove", onRowMove);
-    window.addEventListener("mouseup", onRowUp);
     return () => {
       window.removeEventListener("mousemove", onColMove);
       window.removeEventListener("mouseup", onColUp);
-      window.removeEventListener("mousemove", onRowMove);
-      window.removeEventListener("mouseup", onRowUp);
     };
   }, []);
 
@@ -409,24 +650,181 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const workspaceState = await serializeWorkspaceState();
+      if (cancelled) return;
+      const payload: StudioDraftState = {
+        studioTab,
+        dealName,
+        savedDealId,
+        irJson,
+        solverSpecDraft,
+        advancedJson,
+        sensitivitySweepConfig,
+        collateralRiskSettings,
+        workspaceState,
+      };
+      sessionStorage.setItem(STUDIO_DRAFT_STORAGE_KEY, JSON.stringify(payload));
+    }, 800);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    studioTab,
+    dealName,
+    savedDealId,
+    irJson,
+    solverSpecDraft,
+    advancedJson,
+    sensitivitySweepConfig,
+    collateralRiskSettings,
+    serializeWorkspaceState,
+  ]);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(STUDIO_DRAFT_STORAGE_KEY);
+      if (!raw) return;
+      const draft = JSON.parse(raw) as Partial<StudioDraftState>;
+      if (draft.studioTab) setStudioTab(draft.studioTab);
+      if (draft.dealName) setDealName(draft.dealName);
+      if (draft.savedDealId) setSavedDealId(draft.savedDealId);
+      if (typeof draft.irJson === "string") setIrJson(draft.irJson);
+      if (draft.solverSpecDraft) {
+        setSolverSpecDraft((prev) => ({ ...prev, ...draft.solverSpecDraft }));
+      }
+      if (draft.advancedJson) {
+        setAdvancedJson((prev) => ({ ...prev, ...draft.advancedJson }));
+      }
+      if (draft.sensitivitySweepConfig) {
+        setSensitivitySweepConfig(draft.sensitivitySweepConfig);
+      }
+      if (draft.collateralRiskSettings) {
+        onCollateralRiskSettingsChange(toCollateralRiskSettings(draft.collateralRiskSettings));
+      } else if ((draft as any).poolAssignment) {
+        onCollateralRiskSettingsChange(toCollateralRiskSettings((draft as any).poolAssignment));
+      }
+      if (draft.workspaceState) setPendingWorkspaceState(draft.workspaceState);
+      setPendingCleanMark(true);
+    } catch {
+      // ignore invalid draft state
+    }
+  }, [onCollateralRiskSettingsChange]);
+
+  useEffect(() => {
+    if (!pendingCleanMark) return;
+    setLastSavedFingerprint(currentDraftFingerprint);
+    setPendingCleanMark(false);
+  }, [pendingCleanMark, currentDraftFingerprint]);
+
+  useEffect(() => {
+    setLastSavedFingerprint((prev) => prev || currentDraftFingerprint);
+    // initialize baseline once for new sessions
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isDirty]);
+
+  useEffect(() => {
+    onDirtyStateChange?.(isDirty);
+  }, [isDirty, onDirtyStateChange]);
+
   const onColumnResizeStart = (e: React.MouseEvent) => {
     e.preventDefault();
     colDragRef.current = { startX: e.clientX, startW: sidebarWidth };
+    userResizedSidebarRef.current = true;
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   };
 
-  const onRowResizeStart = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const h = rightColRef.current?.getBoundingClientRect().height ?? 0;
-    rowDragRef.current = { startY: e.clientY, startPct: propertiesPct, height: h };
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-  };
+  useEffect(() => {
+    if (studioTab !== "design") return;
+    if (userResizedSidebarRef.current) return;
+    const totalWidth = designSplitRef.current?.getBoundingClientRect().width ?? 0;
+    if (totalWidth <= 0) return;
+    // Keep default shell balanced: Blockly and Properties at roughly 50/50.
+    const equalSplit = (totalWidth - 2) / 2;
+    setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, equalSplit)));
+  }, [studioTab]);
+
+  const handleCloseDealSession = useCallback(() => {
+    if (isDirty && !window.confirm("Close deal session and discard unsaved changes?")) {
+      return;
+    }
+    setStudioTab("design");
+    setIrJson("");
+    setErrors([]);
+    setDealName("Deal");
+    setSavedDealId(null);
+    setSelectedStudioDealId("");
+    setSelectedStudioVersion("");
+    setSolverSpecDraft(getDefaultSolverSpecDraft());
+    setAdvancedJson(getDefaultAdvancedJsonState());
+    setTelemetryState(getDefaultTelemetryState());
+    setSensitivitySweepConfig(getDefaultSensitivitySweepConfig());
+    onCollateralRiskSettingsChange(getDefaultCollateralRiskSettings());
+    setLastSavedFingerprint("");
+    setPendingCleanMark(true);
+    sessionStorage.removeItem(STUDIO_DRAFT_STORAGE_KEY);
+  }, [isDirty, onCollateralRiskSettingsChange]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-1">
+        <div className="flex items-center gap-1">
+          <FormSelect
+            value={selectedStudioDealId}
+            onChange={(e) => setSelectedStudioDealId(e.target.value)}
+            className="w-auto"
+            aria-label="Open saved deal"
+          >
+            <option value="">Open saved deal...</option>
+            {studioDeals.map((deal) => (
+              <option key={deal.deal_id} value={deal.deal_id}>
+                {fmtNamedId(deal.deal_name, deal.deal_id)}
+              </option>
+            ))}
+          </FormSelect>
+          <FormSelect
+            value={selectedStudioVersion}
+            onChange={(e) => setSelectedStudioVersion(e.target.value)}
+            className="w-20"
+            aria-label="Saved deal version"
+          >
+            <option value="">latest</option>
+            {selectedStudioDealSummary &&
+              Array.from(
+                { length: Math.max(0, selectedStudioDealSummary.current_version) },
+                (_, i) => i + 1,
+              )
+                .reverse()
+                .map((version) => (
+                  <option key={version} value={String(version)}>
+                    v{version}
+                  </option>
+                ))}
+          </FormSelect>
+          <button
+            type="button"
+            onClick={handleLoadStudioDeal}
+            disabled={!selectedStudioDealId}
+            className="px-2.5 py-1 rounded border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
+          >
+            Open
+          </button>
+        </div>
         <input
           type="text"
           value={dealName}
@@ -446,10 +844,43 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
           {saveBusy ? "Saving..." : "Save deal"}
         </button>
         {savedDealId && (
-          <span className="text-[10px] text-muted-foreground" style={MONO}>
+          <span className="text-xs text-muted-foreground" style={MONO}>
             {savedDealId}
           </span>
         )}
+        <span
+          className={
+            isDirty
+              ? "text-xs px-2 py-0.5 rounded border border-amber-500/40 bg-amber-500/15 text-amber-200"
+              : "text-xs px-2 py-0.5 rounded border border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+          }
+        >
+          {isDirty ? "Unsaved changes" : "Saved"}
+        </span>
+        {newerPoolVersion != null && (
+          <button
+            type="button"
+            onClick={() =>
+              onCollateralRiskSettingsChange(
+                toCollateralRiskSettings({
+                  ...collateralRiskSettings,
+                  poolVersion: newerPoolVersion,
+                }),
+              )
+            }
+            className="text-xs px-2 py-0.5 rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-200"
+          >
+            Pool v{newerPoolVersion} available (click to pin)
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={handleCloseDealSession}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border text-xs text-muted-foreground hover:text-foreground"
+        >
+          <XCircle className="w-3.5 h-3.5" />
+          Close deal
+        </button>
       </div>
 
       <TabBar
@@ -465,6 +896,7 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
       {studioTab === "solver" && (
         <SolverStudioPanel
           savedDealId={savedDealId}
+          productFamily={collateralRiskSettings.productFamily}
           runBusy={runBusy}
           solveBusy={solveBusy}
           availableRuns={availableRuns}
@@ -490,7 +922,7 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
       {studioTab === "ir" && (
         <div className="flex-1 min-h-0 px-1">
           <pre
-            className="h-full min-h-[200px] overflow-auto rounded-md border border-border bg-[#0d1220] px-3 py-2 text-[11px] leading-relaxed text-secondary-foreground"
+            className="h-full min-h-[200px] overflow-auto rounded-md border border-border bg-[#0d1220] px-3 py-2 text-xs leading-relaxed text-secondary-foreground"
             style={MONO}
           >
             {errors.length > 0
@@ -504,8 +936,10 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
         </div>
       )}
 
-      {studioTab === "design" && (
-        <div className="flex min-h-0 flex-1 gap-0">
+      <div
+        ref={designSplitRef}
+        className={studioTab === "design" ? "flex min-h-0 flex-1 gap-0" : "hidden min-h-0 flex-1 gap-0"}
+      >
           <BlocklyCanvas onChange={handleWorkspaceChange} />
           <div
             role="separator"
@@ -522,77 +956,28 @@ export default function DealEditor({ initialSourceRunId = null }: DealEditorProp
             style={{ width: sidebarWidth }}
             className="flex h-full min-h-0 min-w-0 shrink-0 flex-col"
           >
-            <div
-              className={
-                showDesignIr
-                  ? "flex flex-col min-h-0 overflow-hidden rounded-md border border-border bg-[#0d1220]"
-                  : "flex flex-1 flex-col min-h-0 overflow-hidden rounded-md border border-border bg-[#0d1220]"
-              }
-              style={showDesignIr ? { height: `${propertiesPct}%`, minHeight: 120 } : undefined}
-            >
+            <div className="flex flex-1 flex-col min-h-0 overflow-hidden rounded-md border border-border bg-[#0d1220]">
               <div className="shrink-0 flex items-center gap-1.5 px-3 pt-3 pb-2 border-b border-border/60">
                 <Settings2 className="w-3.5 h-3.5 text-muted-foreground" />
                 <span className="text-xs font-medium text-foreground">Properties</span>
               </div>
               <div className="flex-1 min-h-0 overflow-auto p-3 pt-2">
-                <PropertyPanel workspace={workspace} />
+                <PropertyPanel
+                  workspace={workspace}
+                  collateralRiskSettings={collateralRiskSettings}
+                  onCollateralRiskSettingsChange={onCollateralRiskSettingsChange}
+                  onOpenTape={onOpenTape}
+                  onRunCashflow={handleRunDeal}
+                  canRunCashflow={!!savedDealId}
+                  runCashflowBusy={runBusy}
+                  availableRuns={availableRuns}
+                  availableTapes={uploadLibrary}
+                  poolSnapshots={poolSnapshots}
+                />
               </div>
-            </div>
-
-            {showDesignIr && (
-              <div
-                role="separator"
-                aria-orientation="horizontal"
-                aria-label="Resize Properties and Deal IR"
-                onMouseDown={onRowResizeStart}
-                className="group relative h-2 shrink-0 cursor-row-resize flex items-center justify-center hover:bg-primary/15"
-              >
-                <div className="absolute inset-x-2 h-px bg-border group-hover:bg-primary/50" />
-                <GripVertical className="w-3 h-3 text-muted-foreground/60 group-hover:text-muted-foreground rotate-90 relative z-[1]" />
-              </div>
-            )}
-
-            <div
-              className={
-                showDesignIr
-                  ? "flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-[#0d1220]"
-                  : "shrink-0 rounded-md border border-border bg-[#0d1220]"
-              }
-            >
-              <button
-                type="button"
-                onClick={() => setShowDesignIr(!showDesignIr)}
-                className="w-full flex items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
-              >
-                {showDesignIr ? (
-                  <ChevronDown className="w-3 h-3" />
-                ) : (
-                  <ChevronRight className="w-3 h-3" />
-                )}
-                <Code2 className="w-3 h-3" />
-                <span>Deal IR</span>
-                {errors.length > 0 && (
-                  <span className="ml-auto text-destructive text-[10px]">error</span>
-                )}
-              </button>
-              {showDesignIr && (
-                <pre
-                  className="flex-1 min-h-[120px] overflow-auto px-3 pb-2 text-[10px] leading-relaxed text-secondary-foreground border-t border-border"
-                  style={MONO}
-                >
-                  {errors.length > 0
-                    ? errors.map((e, i) => (
-                        <div key={i} className="text-destructive">
-                          {e}
-                        </div>
-                      ))
-                    : irJson || "// Build the waterfall to see IR"}
-                </pre>
-              )}
             </div>
           </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }

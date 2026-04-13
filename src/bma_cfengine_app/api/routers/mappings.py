@@ -40,3 +40,8 @@ async def save_mapping(req: MappingRequest):
 async def group_preview(upload_id: str, grouping: GroupingConfig):
     df, _ = run_store.load_upload_df(upload_id)
     return preview_groups(df, grouping)
+
+
+@router.get("/mappings/{upload_id}/{mapping_id}")
+async def get_mapping(upload_id: str, mapping_id: str):
+    return run_store.load_mapping(upload_id, mapping_id)

@@ -15,6 +15,30 @@ interface UseBlocklyWorkspaceOptions {
   onChange?: (workspace: any) => void;
 }
 
+function updateBondFieldVisibility(block: any) {
+  if (!block || block.type !== "bond_target") return;
+  const isFloating = block.getFieldValue("BOND_TYPE") === "FLOATING";
+  const indexLabel = block.getField("INDEX_LABEL");
+  const indexField = block.getField("INDEX_NAME");
+  const spreadLabel = block.getField("SPREAD_LABEL");
+  const marginField = block.getField("MARGIN");
+
+  if (!isFloating) {
+    if (indexField && block.getFieldValue("INDEX_NAME")) {
+      indexField.setValue("SOFR");
+    }
+    if (marginField && block.getFieldValue("MARGIN") !== "0") {
+      marginField.setValue(0 as any);
+    }
+  }
+
+  indexLabel?.setVisible?.(isFloating);
+  indexField?.setVisible?.(isFloating);
+  spreadLabel?.setVisible?.(isFloating);
+  marginField?.setVisible?.(isFloating);
+  block.render?.();
+}
+
 export function useBlocklyWorkspace({
   containerRef,
   blocks,
@@ -47,6 +71,21 @@ export function useBlocklyWorkspace({
           init(this: any) { this.jsonInit(block); },
         };
       }
+      try {
+        Blockly.Extensions.register("bond_target_dynamic_fields", function() {
+          const block = this as any;
+          const bondType = block.getField("BOND_TYPE");
+          if (bondType?.setValidator) {
+            bondType.setValidator((next: string) => {
+              setTimeout(() => updateBondFieldVisibility(block), 0);
+              return next;
+            });
+          }
+          setTimeout(() => updateBondFieldVisibility(block), 0);
+        });
+      } catch {
+        // extension already registered in a prior workspace mount
+      }
 
       let resolvedTheme = theme;
       if (typeof theme === "object" && theme.name) {
@@ -60,7 +99,8 @@ export function useBlocklyWorkspace({
         grid: { spacing: 24, length: 2, colour: "#1e293b", snap: true },
         zoom: {
           controls: true, wheel: true,
-          startScale: 0.85, maxScale: 2, minScale: 0.3, scaleSpeed: 1.1,
+          // +15%, then +10% more default zoom for readability.
+          startScale: 0.633, maxScale: 2, minScale: 0.25, scaleSpeed: 1.1,
         },
         trashcan: true,
         move: { scrollbars: true, drag: true, wheel: true },
@@ -82,11 +122,21 @@ export function useBlocklyWorkspace({
       ro = new ResizeObserver(doResize);
       ro.observe(container);
       doResize();
+      workspace.scrollCenter();
       setTimeout(doResize, 100);
+      setTimeout(() => workspace.scrollCenter(), 120);
       setTimeout(doResize, 300);
+      setTimeout(() => workspace.scrollCenter(), 320);
 
       let timer: ReturnType<typeof setTimeout> | null = null;
-      workspace.addChangeListener(() => {
+      workspace.addChangeListener((event: any) => {
+        if (event?.type === "change" && event?.element === "field") {
+          const changed = event.blockId ? workspace.getBlockById(event.blockId) : null;
+          if (changed?.type === "bond_target") {
+            updateBondFieldVisibility(changed);
+          }
+          synchronizeBondTargets(workspace, event.blockId);
+        }
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
           if (onChangeRef.current && workspaceRef.current) {
@@ -114,4 +164,36 @@ export function useBlocklyWorkspace({
   }, [containerRef]);
 
   return { workspace: workspaceRef.current, ready };
+}
+
+function synchronizeBondTargets(workspace: any, changedBlockId: string | null | undefined) {
+  if (!changedBlockId) return;
+  const changed = workspace.getBlockById(changedBlockId);
+  if (!changed || changed.type !== "bond_target") return;
+  const name = changed.getFieldValue("NAME");
+  if (!name) return;
+
+  const canonical = {
+    BOND_TYPE: changed.getFieldValue("BOND_TYPE"),
+    FACE_AMT: changed.getFieldValue("FACE_AMT"),
+    SIZE_PCT_POOL: changed.getFieldValue("SIZE_PCT_POOL"),
+    COUPON: changed.getFieldValue("COUPON"),
+    INDEX_NAME: changed.getFieldValue("BOND_TYPE") === "FLOATING" ? changed.getFieldValue("INDEX_NAME") : "SOFR",
+    MARGIN: changed.getFieldValue("BOND_TYPE") === "FLOATING" ? changed.getFieldValue("MARGIN") : 0,
+    ACCRUAL: changed.getFieldValue("ACCRUAL"),
+  };
+
+  for (const block of workspace.getAllBlocks(false)) {
+    if (block.type !== "bond_target" || block.id === changed.id) continue;
+    if (block.getFieldValue("NAME") !== name) continue;
+    for (const [field, value] of Object.entries(canonical)) {
+      const fieldRef = block.getField(field);
+      if (!fieldRef) continue;
+      if (block.getFieldValue(field) !== value) {
+        fieldRef.setValue(value as any);
+      }
+    }
+    updateBondFieldVisibility(block);
+  }
+  updateBondFieldVisibility(changed);
 }

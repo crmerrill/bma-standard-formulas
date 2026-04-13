@@ -17,6 +17,7 @@ _CONFIG_DIR = APP_HOME / "config"
 
 RAW_SUBDIR = "raw"
 WORKING_SUBDIR = "working"
+UPLOAD_META_FILE = "upload_meta.json"
 
 
 def init_workspace() -> Path:
@@ -59,13 +60,53 @@ def run_dir(run_id: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def save_upload(upload_id: str, file_name: str, content: bytes) -> Path:
+def _upload_meta_path(upload_id: str) -> Path:
+    return upload_dir(upload_id) / UPLOAD_META_FILE
+
+
+def load_upload_metadata(upload_id: str) -> dict[str, Any]:
+    """Load persisted upload metadata (friendly display name, etc.)."""
+    path = _upload_meta_path(upload_id)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_upload_metadata(upload_id: str, payload: dict[str, Any]) -> Path:
+    path = _upload_meta_path(upload_id)
+    path.write_text(json.dumps(payload, indent=2, default=str))
+    return path
+
+
+def set_upload_display_name(upload_id: str, display_name: str | None) -> dict[str, Any]:
+    """Persist a friendly upload name and return the stored metadata."""
+    _raw_file(upload_id)
+    base = load_upload_metadata(upload_id)
+    resolved = (display_name or "").strip()
+    if not resolved:
+        try:
+            _, file_name = load_raw_df(upload_id)
+        except FileNotFoundError:
+            file_name = "tape.csv"
+        resolved = Path(file_name).stem or file_name
+    base["display_name"] = resolved
+    base["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _save_upload_metadata(upload_id, base)
+    return base
+
+
+def save_upload(upload_id: str, file_name: str, content: bytes, display_name: str | None = None) -> Path:
     """Save the original upload as an immutable raw file."""
     d = upload_dir(upload_id)
     raw_dir = d / RAW_SUBDIR
     raw_dir.mkdir(exist_ok=True)
     dest = raw_dir / file_name
     dest.write_bytes(content)
+    set_upload_display_name(upload_id, display_name)
     return dest
 
 
@@ -337,3 +378,64 @@ def load_mapping(upload_id: str, mapping_id: str) -> dict:
     if not p.exists():
         raise FileNotFoundError(f"Mapping {mapping_id} not found")
     return json.loads(p.read_text())
+
+
+def list_uploads() -> list[dict[str, Any]]:
+    """List saved uploads with lightweight metadata and latest mapping id."""
+    init_workspace()
+    rows: list[dict[str, Any]] = []
+    for d in _UPLOADS_DIR.iterdir():
+        if not d.is_dir() or not d.name.startswith("upl_"):
+            continue
+        upload_id = d.name
+        try:
+            raw = _raw_file(upload_id)
+            df, file_name = load_raw_df(upload_id)
+            meta = load_upload_metadata(upload_id)
+            display_name = str(meta.get("display_name") or "").strip() or Path(file_name).stem or file_name
+            mapping_files = sorted(d.glob("map_*.json"))
+            latest_mapping = mapping_files[-1].stem if mapping_files else None
+            rows.append(
+                {
+                    "upload_id": upload_id,
+                    "file_name": file_name,
+                    "display_name": display_name,
+                    "row_count": int(len(df)),
+                    "column_count": int(len(df.columns)),
+                    "file_size_bytes": int(raw.stat().st_size),
+                    "latest_mapping_id": latest_mapping,
+                    "updated_at": datetime.fromtimestamp(raw.stat().st_mtime, timezone.utc).isoformat(),
+                }
+            )
+        except Exception:
+            continue
+    rows.sort(key=lambda r: r.get("updated_at", ""), reverse=True)
+    return rows
+
+
+def list_mappings(upload_id: str) -> list[dict[str, Any]]:
+    """List mapping ids for an upload."""
+    d = upload_dir(upload_id)
+    rows: list[dict[str, Any]] = []
+    for p in sorted(d.glob("map_*.json")):
+        try:
+            payload = json.loads(p.read_text())
+            rows.append(
+                {
+                    "mapping_id": p.stem,
+                    "asof_date": payload.get("asof_date"),
+                    "mapped_fields": len(payload.get("mappings", [])),
+                    "updated_at": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat(),
+                }
+            )
+        except Exception:
+            rows.append(
+                {
+                    "mapping_id": p.stem,
+                    "asof_date": None,
+                    "mapped_fields": 0,
+                    "updated_at": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat(),
+                }
+            )
+    rows.sort(key=lambda r: r.get("updated_at", ""), reverse=True)
+    return rows

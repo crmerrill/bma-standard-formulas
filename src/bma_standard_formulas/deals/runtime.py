@@ -1,14 +1,7 @@
-"""Waterfall runtime engine — executes a DealDefinition IR against collateral inputs.
-
-The engine:
-1. Allocates internal mutable workspace arrays from the immutable IR + input.
-2. Pre-compiles the waterfall rules into a dispatch table (once per deal).
-3. Runs the period loop calling pre-resolved function pointers.
-4. Produces output bundles with deferred Pydantic construction.
-
-External inputs (collateral arrays) are never mutated.
-"""
-from dataclasses import dataclass
+"""Waterfall runtime engine — executes DealDefinition IR against collateral inputs."""
+from dataclasses import dataclass, field
+import ast
+import operator as _op
 from typing import Any
 
 import numpy as np
@@ -21,13 +14,15 @@ from .ops import (
     pay_interest_from_reserve,
     pay_principal,
     pay_principal_from_reserve,
+    pay_recourse_interest,
+    pay_recourse_principal,
     pay_residual,
     pay_to_reserve,
     pay_writedown,
     update_bonds_post_ws,
     update_bonds_pre_ws,
 )
-from .schemas.common import RuleType
+from .schemas.common import RuleType, TriggerState
 from .schemas.input import (
     DealRunInput,
     GroupedCollateralInput,
@@ -37,12 +32,8 @@ from .schemas.input import (
 from .schemas.ir import DealDefinition
 from .schemas.output_bond import BondCashflowRow
 from .schemas.output_bundle import ScenarioOutputBundle
-from .schemas.output_waterfall import WaterfallTraceRow
+from .schemas.output_waterfall import DealAccountRow, TriggerStateRow, WaterfallTraceRow
 
-
-# ---------------------------------------------------------------------------
-# Workspace — internal mutable state for one waterfall run
-# ---------------------------------------------------------------------------
 
 _RT = RuleType
 
@@ -50,6 +41,7 @@ _RT = RuleType
 @dataclass
 class BondWorkspace:
     """Mutable workspace arrays for a single bond during execution."""
+
     name: str
     is_bond: bool
     is_pseudo: bool
@@ -70,8 +62,59 @@ class BondWorkspace:
     tracks_bonds: dict[str, list[str]] | None = None
 
 
+@dataclass
+class AccountWorkspace:
+    """Mutable workspace arrays for account/reserve balances."""
+
+    name: str
+    account_type: str
+    balance: np.ndarray
+    deposit: np.ndarray
+    withdrawal: np.ndarray
+    required_minimum: np.ndarray
+    minimum_basis: str
+
+
+@dataclass
+class CompiledRulePlan:
+    """Typed compiled rule plan for one RuleNode."""
+
+    tag: int
+    source_keys: tuple[str, ...]
+    target_names: tuple[str, ...]
+    reserve_name: str | None
+    max_amount_fixed: float | None
+    max_amount_expr: str | None
+    condition_trigger: str | None
+    condition_invert: bool
+    condition_expr: str | None
+    allow_negative_source: bool
+    rule_id: str
+    order: int
+    rule_type_str: str
+    payment_style: str
+
+
+@dataclass
+class ExecutionContext:
+    """Mutable state for one scenario run."""
+
+    scenario_name: str
+    collateral: dict[str, np.ndarray]
+    bonds: dict[str, BondWorkspace]
+    accounts: dict[str, AccountWorkspace]
+    fee_defs_by_name: dict[str, Any]
+    compiled_rules: list[CompiledRulePlan]
+    trigger_states: dict[str, bool] = field(default_factory=dict)
+    calculation_values: dict[str, float] = field(default_factory=dict)
+    virtual_sources: dict[str, np.ndarray] = field(default_factory=dict)
+    cash_avail: np.ndarray | None = None
+    trace_buf: list[tuple] | None = None
+    trigger_rows: list[TriggerStateRow] = field(default_factory=list)
+
+
 def _allocate_bond_workspace(
-    bond_def,
+    bond_def: Any,
     cf_len: int,
     collateral_balance_0: float,
 ) -> BondWorkspace:
@@ -85,9 +128,16 @@ def _allocate_bond_workspace(
     balance = np.zeros(cf_len)
     balance[0] = initial_balance
 
+    # LDCMA-like behavior: pseudo non-bonds carry forward from initialized balance.
+    # Most pseudo fee nodes start at 0, while reserve-like pseudo nodes can start
+    # with an explicit configured balance.
     if bond_def.is_pseudo and not bond_def.is_bond:
-        balance[:] = collateral_balance_0
-        balance[0] = initial_balance if initial_balance > 0 else collateral_balance_0
+        balance[:] = 0.0
+        balance[0] = initial_balance
+        tranche_type = getattr(getattr(bond_def, "tranche_type", None), "value", None)
+        if tranche_type == "RESIDUAL" and balance[0] <= 0.0:
+            # LDCMA initializes residual pseudo bond with collateral start balance.
+            balance[0] = collateral_balance_0
 
     opt_coupons = np.zeros(cf_len)
     if bond_def.is_bond and not bond_def.is_pseudo:
@@ -116,32 +166,30 @@ def _allocate_bond_workspace(
     )
 
 
-# ---------------------------------------------------------------------------
-# Pre-compiled dispatch table
-# ---------------------------------------------------------------------------
+def _allocate_account_workspace(account_def: Any, cf_len: int, collateral_balance_0: float) -> AccountWorkspace:
+    starting_amount = float(account_def.starting_amount or 0.0)
+    if account_def.starting_pct is not None:
+        starting_amount = collateral_balance_0 * float(account_def.starting_pct) / 100.0
+    minimum = float(account_def.minimum_amount or 0.0)
+    if account_def.minimum_pct is not None:
+        minimum = max(minimum, collateral_balance_0 * float(account_def.minimum_pct) / 100.0)
 
-
-@dataclass
-class CompiledRule:
-    """Pre-resolved rule — no enum comparison or dict lookup in the hot path."""
-    __slots__ = (
-        "op_fn", "source_keys", "target_name", "reserve_name",
-        "max_amount", "condition_trigger", "condition_invert",
-        "rule_id", "order", "rule_type_str",
+    balance = np.zeros(cf_len)
+    balance[0] = starting_amount
+    required_minimum = np.zeros(cf_len)
+    required_minimum[:] = minimum
+    return AccountWorkspace(
+        name=account_def.name,
+        account_type=account_def.account_type.value,
+        balance=balance,
+        deposit=np.zeros(cf_len),
+        withdrawal=np.zeros(cf_len),
+        required_minimum=required_minimum,
+        minimum_basis=account_def.minimum_basis.value,
     )
-    op_fn: Any
-    source_keys: tuple
-    target_name: str
-    reserve_name: str | None
-    max_amount: float | None
-    condition_trigger: str | None
-    condition_invert: bool
-    rule_id: str
-    order: int
-    rule_type_str: str
 
 
-# Dispatch tag constants (avoid enum comparison in hot loop)
+# Dispatch tags
 _OP_INTEREST = 1
 _OP_INTEREST_SF = 2
 _OP_PRINCIPAL = 3
@@ -152,8 +200,10 @@ _OP_TO_RESERVE = 7
 _OP_FROM_RESERVE_INT = 8
 _OP_FROM_RESERVE_PRIN = 9
 _OP_FROM_RESERVE = 10
+_OP_RECOURSE_INT = 11
+_OP_RECOURSE_PRIN = 12
 
-_RULE_TYPE_TO_TAG = {
+_RULE_TYPE_TO_TAG: dict[RuleType, int] = {
     _RT.PAY_INTEREST: _OP_INTEREST,
     _RT.PAY_INTEREST_SHORTFALL: _OP_INTEREST_SF,
     _RT.PAY_PRINCIPAL: _OP_PRINCIPAL,
@@ -164,80 +214,34 @@ _RULE_TYPE_TO_TAG = {
     _RT.PAY_FROM_RESERVE_INTEREST: _OP_FROM_RESERVE_INT,
     _RT.PAY_FROM_RESERVE_PRINCIPAL: _OP_FROM_RESERVE_PRIN,
     _RT.PAY_FROM_RESERVE: _OP_FROM_RESERVE,
+    _RT.PAY_RECOURSE_INTEREST: _OP_RECOURSE_INT,
+    _RT.PAY_RECOURSE_PRINCIPAL: _OP_RECOURSE_PRIN,
 }
 
 
-def _compile_rules(deal: DealDefinition) -> list[tuple]:
-    """Pre-compile waterfall rules into a flat dispatch list.
-
-    Each entry is (op_tag, source_keys, target_name, reserve_name,
-                   max_amount, condition_trigger, condition_invert,
-                   rule_id, order, rule_type_str).
-    """
+def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
     sorted_rules = sorted(deal.waterfall_rules, key=lambda r: r.order)
-    compiled: list[tuple] = []
-
+    compiled: list[CompiledRulePlan] = []
     for rule in sorted_rules:
-        tag = _RULE_TYPE_TO_TAG.get(rule.rule_type, 0)
-        src_keys = tuple(rule.from_sources)
-        for tgt_name in rule.to_targets:
-            compiled.append((
-                tag,
-                src_keys,
-                tgt_name,
-                rule.reserve_account,
-                rule.max_amount_fixed,
-                rule.condition_trigger,
-                rule.condition_invert,
-                rule.rule_id,
-                rule.order,
-                rule.rule_type.value,
-            ))
-
+        compiled.append(
+            CompiledRulePlan(
+                tag=_RULE_TYPE_TO_TAG.get(rule.rule_type, 0),
+                source_keys=tuple(rule.from_sources),
+                target_names=tuple(rule.to_targets),
+                reserve_name=rule.reserve_account,
+                max_amount_fixed=rule.max_amount_fixed,
+                max_amount_expr=rule.max_amount_expr,
+                condition_trigger=rule.condition_trigger,
+                condition_invert=rule.condition_invert,
+                condition_expr=rule.condition_expr,
+                allow_negative_source=rule.allow_negative_source,
+                rule_id=rule.rule_id,
+                order=rule.order,
+                rule_type_str=rule.rule_type.value,
+                payment_style=rule.payment_style.value,
+            )
+        )
     return compiled
-
-
-# ---------------------------------------------------------------------------
-# Trigger evaluation
-# ---------------------------------------------------------------------------
-
-
-def _evaluate_triggers(
-    deal: DealDefinition,
-    bonds: dict[str, BondWorkspace],
-    collateral: dict[str, np.ndarray],
-    i: int,
-    trigger_states: dict[str, bool],
-    orig_collat_bal: float,
-    cum_loss_cache: np.ndarray | None = None,
-) -> dict[str, bool]:
-    for trigger in deal.triggers:
-        active = False
-        if trigger.metric_type.value == "CUMULATIVE_LOSS":
-            if cum_loss_cache is not None:
-                metric = cum_loss_cache[i] / orig_collat_bal if orig_collat_bal > 0 else 0.0
-            else:
-                metric = float(np.sum(collateral["loss"][:i + 1])) / orig_collat_bal if orig_collat_bal > 0 else 0.0
-
-            threshold = trigger.threshold_value or 0.0
-            if trigger.threshold_schedule and i < len(trigger.threshold_schedule):
-                threshold = trigger.threshold_schedule[i]
-
-            active = metric > threshold
-
-            trig_bond = bonds.get(trigger.name)
-            if trig_bond is not None:
-                trig_bond.trigger_val[i] = metric
-                trig_bond.trigger_tgt[i] = threshold
-                trig_bond.trigger_event[i] = active
-
-        trigger_states[trigger.name] = active
-    return trigger_states
-
-
-# ---------------------------------------------------------------------------
-# Main execution
-# ---------------------------------------------------------------------------
 
 
 def _extract_collateral_arrays(run_input: DealRunInput) -> dict[str, np.ndarray]:
@@ -245,6 +249,7 @@ def _extract_collateral_arrays(run_input: DealRunInput) -> dict[str, np.ndarray]
     if isinstance(coll, PooledCollateralInput):
         cf = coll.collateral
     elif isinstance(coll, GroupedCollateralInput):
+        # Keep current behavior (first group) for compatibility.
         cf = next(iter(coll.groups.values()))
     elif isinstance(coll, StripCollateralInput):
         cf = coll.principal_strip
@@ -258,6 +263,334 @@ def _extract_collateral_arrays(run_input: DealRunInput) -> dict[str, np.ndarray]
     }
 
 
+_SAFE_BIN_OPS = {
+    ast.Add: _op.add,
+    ast.Sub: _op.sub,
+    ast.Mult: _op.mul,
+    ast.Div: _op.truediv,
+    ast.Pow: _op.pow,
+    ast.Mod: _op.mod,
+}
+_SAFE_UNARY_OPS = {
+    ast.UAdd: _op.pos,
+    ast.USub: _op.neg,
+}
+_SAFE_FUNCS = {
+    "min": min,
+    "max": max,
+    "abs": abs,
+}
+
+
+def _safe_eval_expr(expr: str, values: dict[str, float]) -> float:
+    def _eval(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float)):
+                return float(node.value)
+            raise ValueError("Unsupported constant")
+        if isinstance(node, ast.Name):
+            return float(values.get(node.id, 0.0))
+        if isinstance(node, ast.BinOp):
+            fn = _SAFE_BIN_OPS.get(type(node.op))
+            if fn is None:
+                raise ValueError("Unsupported binary operator")
+            return float(fn(_eval(node.left), _eval(node.right)))
+        if isinstance(node, ast.UnaryOp):
+            fn = _SAFE_UNARY_OPS.get(type(node.op))
+            if fn is None:
+                raise ValueError("Unsupported unary operator")
+            return float(fn(_eval(node.operand)))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            fn = _SAFE_FUNCS.get(node.func.id)
+            if fn is None:
+                raise ValueError("Unsupported function")
+            args = [_eval(a) for a in node.args]
+            return float(fn(*args))
+        raise ValueError("Unsupported expression node")
+
+    return float(_eval(ast.parse(expr, mode="eval")))
+
+
+def _build_expr_context(
+    deal: DealDefinition,
+    run_input: DealRunInput,
+    collateral: dict[str, np.ndarray],
+    bonds: dict[str, BondWorkspace],
+    accounts: dict[str, AccountWorkspace],
+    trigger_states: dict[str, bool],
+    calculation_values: dict[str, float],
+    virtual_sources: dict[str, np.ndarray],
+    cash_avail: np.ndarray | None,
+    i: int,
+    orig_collat_bal: float,
+) -> dict[str, float]:
+    bal = float(collateral["balance"][i])
+    bal_prev = float(collateral["balance"][i - 1]) if i > 0 else bal
+    ctx: dict[str, float] = {
+        "period": float(i),
+        "collateral_balance": bal,
+        "collateral_balance_prev": bal_prev,
+        "collateral_cashflow": float(collateral["cashflow"][i]),
+        "collateral_interest": float(collateral["interest"][i]),
+        "collateral_principal": float(collateral["principal"][i]),
+        "collateral_loss": float(collateral["loss"][i]),
+        "cash_available": float(cash_avail[i]) if cash_avail is not None else 0.0,
+        "loan_count": float(run_input.loan_count or 0),
+        "orig_collateral_balance": float(orig_collat_bal),
+        "surv_fac_prev": float(collateral["surv_fac"][i - 1]) if i > 0 and "surv_fac" in collateral else 1.0,
+    }
+    for key, value in (deal.deal_knobs or {}).items():
+        if isinstance(value, (int, float)) and key.isidentifier():
+            ctx[key] = float(value)
+    for name, ws in bonds.items():
+        if name.isidentifier():
+            ctx[f"{name}_balance"] = float(ws.balance[i])
+            ctx[f"{name}_principal"] = float(ws.principal[i])
+            ctx[f"{name}_interest"] = float(ws.interest[i])
+            ctx[f"{name}_shortfall"] = float(ws.int_shortfall[i])
+    for name, ws in accounts.items():
+        if name.isidentifier():
+            ctx[f"{name}_balance"] = float(ws.balance[i])
+            ctx[f"{name}_deposit"] = float(ws.deposit[i])
+            ctx[f"{name}_withdrawal"] = float(ws.withdrawal[i])
+    for trig_name, active in trigger_states.items():
+        if trig_name.isidentifier():
+            ctx[f"{trig_name}_active"] = 1.0 if active else 0.0
+    for calc_name, value in calculation_values.items():
+        if calc_name.isidentifier():
+            ctx[calc_name] = float(value)
+    for src_name, arr in virtual_sources.items():
+        if src_name.isidentifier():
+            ctx[f"{src_name}_available"] = float(arr[i])
+    return ctx
+
+
+def _evaluate_calculations(deal: DealDefinition, base_ctx: dict[str, float]) -> dict[str, float]:
+    if not deal.calculations:
+        return {}
+    values = dict(base_ctx)
+    out: dict[str, float] = {}
+    pending = {c.name: c.expression for c in deal.calculations}
+    for _ in range(len(pending) + 2):
+        progressed = False
+        for name in list(pending.keys()):
+            expr = pending[name]
+            try:
+                val = _safe_eval_expr(expr, values)
+            except Exception:
+                continue
+            out[name] = val
+            values[name] = val
+            pending.pop(name, None)
+            progressed = True
+        if not pending or not progressed:
+            break
+    for name in pending:
+        out[name] = 0.0
+    return out
+
+
+def _resolve_source_arrays(ctx: ExecutionContext, source_keys: tuple[str, ...]) -> list[np.ndarray]:
+    arrays: list[np.ndarray] = []
+    for key in source_keys:
+        if key in ("CASH", "COLLATERAL") and ctx.cash_avail is not None:
+            arrays.append(ctx.cash_avail)
+            continue
+        if key == "LOSS" and "loss" in ctx.collateral:
+            arrays.append(ctx.collateral["loss"])
+            continue
+        acct = ctx.accounts.get(key)
+        if acct is not None:
+            arrays.append(acct.balance)
+            continue
+        bond = ctx.bonds.get(key)
+        if bond is not None:
+            arrays.append(bond.balance)
+            continue
+        virt = ctx.virtual_sources.get(key)
+        if virt is not None:
+            arrays.append(virt)
+    if not arrays and ctx.cash_avail is not None:
+        arrays.append(ctx.cash_avail)
+    return arrays
+
+
+def _update_virtual_sources(
+    deal: DealDefinition,
+    ctx: ExecutionContext,
+    run_input: DealRunInput,
+    i: int,
+    orig_collat_bal: float,
+) -> None:
+    formulas = deal.deal_knobs.get("source_formulas")
+    if not isinstance(formulas, dict):
+        return
+    expr_ctx = _build_expr_context(
+        deal,
+        run_input,
+        ctx.collateral,
+        ctx.bonds,
+        ctx.accounts,
+        ctx.trigger_states,
+        ctx.calculation_values,
+        ctx.virtual_sources,
+        ctx.cash_avail,
+        i,
+        orig_collat_bal,
+    )
+    for src_name, expr in formulas.items():
+        if not isinstance(src_name, str) or not isinstance(expr, str):
+            continue
+        if src_name not in ctx.virtual_sources:
+            ctx.virtual_sources[src_name] = np.zeros_like(ctx.cash_avail if ctx.cash_avail is not None else np.zeros(1))
+        try:
+            value = max(0.0, float(_safe_eval_expr(expr, expr_ctx)))
+        except Exception:
+            value = 0.0
+        ctx.virtual_sources[src_name][i] = value
+
+
+def _apply_balance_trackers(
+    deal: DealDefinition,
+    ctx: ExecutionContext,
+    run_input: DealRunInput,
+    i: int,
+    orig_collat_bal: float,
+) -> None:
+    trackers = deal.deal_knobs.get("balance_trackers")
+    if not isinstance(trackers, dict):
+        return
+    expr_ctx = _build_expr_context(
+        deal,
+        run_input,
+        ctx.collateral,
+        ctx.bonds,
+        ctx.accounts,
+        ctx.trigger_states,
+        ctx.calculation_values,
+        ctx.virtual_sources,
+        ctx.cash_avail,
+        i,
+        orig_collat_bal,
+    )
+    for target_name, expr in trackers.items():
+        if not isinstance(target_name, str) or not isinstance(expr, str):
+            continue
+        tgt = ctx.bonds.get(target_name)
+        if tgt is None:
+            acct = ctx.accounts.get(target_name)
+            if acct is None:
+                continue
+            try:
+                acct.balance[i] = float(_safe_eval_expr(expr, expr_ctx))
+            except Exception:
+                pass
+            continue
+        try:
+            tgt.balance[i] = float(_safe_eval_expr(expr, expr_ctx))
+        except Exception:
+            pass
+
+
+def _resolve_fee_due_amount(
+    fee_def: Any,
+    run_input: DealRunInput,
+    collateral_balance_start: float,
+    i: int,
+    expr_context: dict[str, float] | None = None,
+) -> float:
+    """Compute scheduled fee amount for current period from fee definition."""
+    if fee_def is None:
+        return 0.0
+    basis = getattr(fee_def, "basis_type", None)
+    basis_val = basis.value if hasattr(basis, "value") else str(basis)
+    amount = float(getattr(fee_def, "amount", 0.0) or 0.0)
+    if getattr(fee_def, "amount_expr", None):
+        amount = _safe_eval_expr(str(fee_def.amount_expr), expr_context or {})
+    minimum = float(getattr(fee_def, "minimum", 0.0) or 0.0)
+    frequency = getattr(fee_def, "frequency", None)
+    freq_val = frequency.value if hasattr(frequency, "value") else str(frequency or "MONTHLY")
+    periods_per_year = 12
+    if freq_val == "QUARTERLY":
+        periods_per_year = 4
+        if (i % 3) != 0:
+            return 0.0
+    elif freq_val == "ANNUAL":
+        periods_per_year = 1
+        if (i % 12) != 0:
+            return 0.0
+
+    if i <= 0:
+        return 0.0
+
+    due = 0.0
+    if basis_val == "FIXED_DOLLAR":
+        due = amount / float(periods_per_year)
+    elif basis_val == "PER_LOAN":
+        due = (amount * float(run_input.loan_count or 0.0)) / float(periods_per_year)
+    elif basis_val == "COLLATERAL_BALANCE":
+        annual_rate_pct = float(getattr(fee_def, "rate", 0.0) or 0.0)
+        if getattr(fee_def, "rate_expr", None):
+            annual_rate_pct = _safe_eval_expr(str(fee_def.rate_expr), expr_context or {})
+        due = collateral_balance_start * (annual_rate_pct / 100.0) / float(periods_per_year)
+
+    return max(due, minimum)
+
+
+def _resolve_rule_max_amount(rule: CompiledRulePlan, expr_ctx: dict[str, float], calc_values: dict[str, float]) -> float | None:
+    if rule.max_amount_expr:
+        full_ctx = dict(expr_ctx)
+        full_ctx.update(calc_values)
+        return float(_safe_eval_expr(rule.max_amount_expr, full_ctx))
+    return rule.max_amount_fixed
+
+
+def _evaluate_triggers(
+    deal: DealDefinition,
+    ctx: ExecutionContext,
+    i: int,
+    orig_collat_bal: float,
+    cum_loss_cache: np.ndarray | None = None,
+) -> dict[str, bool]:
+    for trigger in deal.triggers:
+        metric = 0.0
+        if trigger.calculation_ref:
+            metric = float(ctx.calculation_values.get(trigger.calculation_ref, 0.0))
+        elif trigger.metric_type.value == "CUMULATIVE_LOSS":
+            if cum_loss_cache is not None:
+                metric = cum_loss_cache[i] / orig_collat_bal if orig_collat_bal > 0 else 0.0
+            else:
+                metric = float(np.sum(ctx.collateral["loss"][: i + 1])) / orig_collat_bal if orig_collat_bal > 0 else 0.0
+
+        threshold = trigger.threshold_value or 0.0
+        if trigger.threshold_schedule and i < len(trigger.threshold_schedule):
+            threshold = trigger.threshold_schedule[i]
+        if trigger.comparison_ref:
+            threshold = float(ctx.calculation_values.get(trigger.comparison_ref, threshold))
+        active = metric > threshold
+
+        trig_bond = ctx.bonds.get(trigger.name)
+        if trig_bond is not None:
+            trig_bond.trigger_val[i] = metric
+            trig_bond.trigger_tgt[i] = threshold
+            trig_bond.trigger_event[i] = active
+
+        ctx.trigger_rows.append(
+            TriggerStateRow(
+                scenario_name=ctx.scenario_name,
+                trigger_id=trigger.name,
+                period=i,
+                metric_value=metric,
+                threshold_value=threshold,
+                state=TriggerState.FAIL if active else TriggerState.PASS,
+            )
+        )
+        ctx.trigger_states[trigger.name] = active
+    return ctx.trigger_states
+
+
 def run_deal(
     deal: DealDefinition,
     run_input: DealRunInput,
@@ -265,161 +598,383 @@ def run_deal(
     *,
     collect_trace: bool = True,
 ) -> ScenarioOutputBundle:
-    """Execute a deal waterfall and return the full output bundle for one scenario.
-
-    Args:
-        deal:          Immutable deal IR.
-        run_input:     Collateral cashflows and overrides.
-        scenario_name: Label for this scenario in outputs.
-        collect_trace: If False, skip waterfall trace collection (faster for solvers).
-    """
+    """Execute a deal waterfall and return the full output bundle for one scenario."""
     collateral = _extract_collateral_arrays(run_input)
     cf_len = len(collateral["balance"])
     collat_bal_0 = float(collateral["balance"][0])
-    orig_collat_bal = run_input.original_collateral_balance or collat_bal_0
+    orig_override = deal.deal_knobs.get("orig_collat_bal_override")
+    orig_collat_bal = float(orig_override) if isinstance(orig_override, (int, float)) else float(run_input.original_collateral_balance or collat_bal_0)
 
-    # --- Allocate bond workspaces ---
-    bonds: dict[str, BondWorkspace] = {}
-    for bond_def in deal.bonds:
-        bonds[bond_def.name] = _allocate_bond_workspace(bond_def, cf_len, collat_bal_0)
-
+    bonds: dict[str, BondWorkspace] = {
+        bond_def.name: _allocate_bond_workspace(bond_def, cf_len, collat_bal_0) for bond_def in deal.bonds
+    }
     if "R" not in bonds:
         bonds["R"] = BondWorkspace(
-            name="R", is_bond=False, is_pseudo=True,
-            balance=np.zeros(cf_len), principal=np.zeros(cf_len),
-            interest=np.zeros(cf_len), opt_interest=np.zeros(cf_len),
-            opt_coupons=np.zeros(cf_len), int_shortfall=np.zeros(cf_len),
-            coupons=np.zeros(cf_len), cashflow=np.zeros(cf_len),
-            writedown=np.zeros(cf_len), trigger_val=np.zeros(cf_len),
-            trigger_tgt=np.zeros(cf_len), trigger_event=[""] * cf_len,
-            xs_spread=np.zeros(cf_len), xs_spread_cpn=np.zeros(cf_len),
+            name="R",
+            is_bond=False,
+            is_pseudo=True,
+            balance=np.zeros(cf_len),
+            principal=np.zeros(cf_len),
+            interest=np.zeros(cf_len),
+            opt_interest=np.zeros(cf_len),
+            opt_coupons=np.zeros(cf_len),
+            int_shortfall=np.zeros(cf_len),
+            coupons=np.zeros(cf_len),
+            cashflow=np.zeros(cf_len),
+            writedown=np.zeros(cf_len),
+            trigger_val=np.zeros(cf_len),
+            trigger_tgt=np.zeros(cf_len),
+            trigger_event=[""] * cf_len,
+            xs_spread=np.zeros(cf_len),
+            xs_spread_cpn=np.zeros(cf_len),
         )
 
-    # --- Pre-compile dispatch table ---
+    accounts: dict[str, AccountWorkspace] = {
+        account_def.name: _allocate_account_workspace(account_def, cf_len, collat_bal_0) for account_def in deal.accounts
+    }
     compiled = _compile_rules(deal)
-
-    # --- Pre-compute cumulative loss for trigger eval ---
+    fee_defs_by_name = {fee.name: fee for fee in deal.fees}
     cum_loss_cache = np.cumsum(collateral["loss"]) if deal.triggers else None
-
-    # --- Allocate trace buffer as raw tuples (deferred Pydantic) ---
     trace_buf: list[tuple] | None = [] if collect_trace else None
-
-    # --- Period loop ---
-    trigger_states: dict[str, bool] = {}
     cash_avail = np.zeros(cf_len)
+    ctx = ExecutionContext(
+        scenario_name=scenario_name,
+        collateral=collateral,
+        bonds=bonds,
+        accounts=accounts,
+        fee_defs_by_name=fee_defs_by_name,
+        compiled_rules=compiled,
+        cash_avail=cash_avail,
+        trace_buf=trace_buf,
+    )
 
     for i in range(1, cf_len):
         update_bonds_pre_ws(bonds, i)
-
-        if deal.triggers:
-            _evaluate_triggers(
-                deal, bonds, collateral, i, trigger_states, orig_collat_bal, cum_loss_cache,
-            )
-
+        for acct in accounts.values():
+            acct.balance[i] = acct.balance[i - 1]
         cash_avail[i] = collateral["cashflow"][i]
 
-        for (tag, src_keys, tgt_name, reserve_name, max_amt,
-             cond_trigger, cond_invert, rule_id, order, rt_str) in compiled:
+        expr_ctx = _build_expr_context(
+            deal,
+            run_input,
+            collateral,
+            bonds,
+            accounts,
+            ctx.trigger_states,
+            ctx.calculation_values,
+            ctx.virtual_sources,
+            ctx.cash_avail,
+            i,
+            orig_collat_bal,
+        )
+        ctx.calculation_values = _evaluate_calculations(deal, expr_ctx)
+        if deal.triggers:
+            _evaluate_triggers(deal, ctx, i, orig_collat_bal, cum_loss_cache)
+        _update_virtual_sources(deal, ctx, run_input, i, orig_collat_bal)
+        expr_ctx = _build_expr_context(
+            deal,
+            run_input,
+            collateral,
+            bonds,
+            accounts,
+            ctx.trigger_states,
+            ctx.calculation_values,
+            ctx.virtual_sources,
+            ctx.cash_avail,
+            i,
+            orig_collat_bal,
+        )
+        allow_negative_cash_math = bool(deal.deal_knobs.get("allow_negative_cashflow_math", False))
 
-            if cond_trigger:
-                trig_active = trigger_states.get(cond_trigger, False)
-                if cond_invert:
+        for rule in compiled:
+            rule_expr_ctx = _build_expr_context(
+                deal,
+                run_input,
+                collateral,
+                bonds,
+                accounts,
+                ctx.trigger_states,
+                ctx.calculation_values,
+                ctx.virtual_sources,
+                ctx.cash_avail,
+                i,
+                orig_collat_bal,
+            )
+            if rule.condition_trigger:
+                trig_active = ctx.trigger_states.get(rule.condition_trigger, False)
+                if rule.condition_invert:
                     trig_active = not trig_active
                 if not trig_active:
                     continue
+            if rule.condition_expr:
+                if _safe_eval_expr(rule.condition_expr, rule_expr_ctx) <= 0.0:
+                    continue
 
-            tgt = bonds.get(tgt_name)
-            if tgt is None:
+            max_amt = _resolve_rule_max_amount(rule, rule_expr_ctx, ctx.calculation_values)
+            sources = _resolve_source_arrays(ctx, rule.source_keys)
+
+            if rule.payment_style == "PRO_RATA" and rule.tag == _OP_PRINCIPAL and len(rule.target_names) > 1:
+                active_targets = [(name, bonds[name]) for name in rule.target_names if name in bonds]
+                avail_cash = float(min(src[i] for src in sources)) if sources else 0.0
+                if max_amt is not None:
+                    avail_cash = min(avail_cash, float(max_amt))
+                due_by_target = [(name, max(0.0, float(tgt.balance[i]))) for name, tgt in active_targets]
+                total_due = float(sum(d for _, d in due_by_target))
+                remaining = max(0.0, avail_cash)
+                paid_by_target: dict[str, float] = {name: 0.0 for name, _ in active_targets}
+
+                if remaining > 0.0 and total_due > 0.0:
+                    nonzero = [name for name, due in due_by_target if due > 0.0]
+                    last_nonzero = nonzero[-1] if nonzero else None
+                    for name, due in due_by_target:
+                        if due <= 0.0 or remaining <= 0.0:
+                            continue
+                        if name == last_nonzero:
+                            alloc = min(due, remaining)
+                        else:
+                            alloc = min(due, avail_cash * (due / total_due))
+                        alloc = max(0.0, min(alloc, remaining, due))
+                        if alloc <= 0.0:
+                            continue
+                        tgt = bonds[name]
+                        tgt.principal[i] += alloc
+                        tgt.balance[i] -= alloc
+                        for src in sources:
+                            src[i] -= alloc
+                        remaining -= alloc
+                        paid_by_target[name] = alloc
+
+                if trace_buf is not None:
+                    for name in rule.target_names:
+                        if name not in bonds:
+                            continue
+                        trace_buf.append(
+                            (
+                                scenario_name,
+                                i,
+                                rule.rule_id,
+                                rule.order,
+                                rule.rule_type_str,
+                                ",".join(rule.source_keys),
+                                name,
+                                max_amt or 0.0,
+                                paid_by_target.get(name, 0.0),
+                                0.0,
+                                0.0,
+                                rule.condition_trigger,
+                                ctx.trigger_states.get(rule.condition_trigger) if rule.condition_trigger else None,
+                            )
+                        )
                 continue
 
-            sources = [cash_avail]
-            pmt = 0.0
+            for tgt_name in rule.target_names:
+                tgt = bonds.get(tgt_name)
+                acct_tgt = accounts.get(tgt_name)
+                if tgt is None and acct_tgt is None:
+                    continue
 
-            if tag == _OP_INTEREST:
-                pmt = pay_interest(sources, tgt.interest, tgt.opt_interest, tgt.int_shortfall, i, max_amount=max_amt)
-            elif tag == _OP_INTEREST_SF:
-                pmt = pay_interest(sources, tgt.interest, tgt.opt_interest, tgt.int_shortfall, i, max_amount=max_amt, shortfall=True)
-            elif tag == _OP_PRINCIPAL:
-                pmt = pay_principal(sources, tgt.principal, tgt.balance, i, max_amount=max_amt)
-            elif tag == _OP_WRITEDOWN:
-                pmt = pay_writedown(sources, tgt.writedown, tgt.balance, i, max_amount=max_amt)
-            elif tag == _OP_FEE:
-                pmt = pay_fee(sources, tgt.interest, i, max_amt if max_amt is not None else 0.0)
-            elif tag == _OP_RESIDUAL:
-                pmt = pay_residual(sources, tgt.interest, i, max_amt)
-            elif tag == _OP_TO_RESERVE:
-                pmt = pay_to_reserve(sources, tgt.balance, tgt.principal, i, max_amount=max_amt if max_amt is not None else 0.0)
-            elif tag == _OP_FROM_RESERVE_INT:
-                if reserve_name and reserve_name in bonds:
-                    rsv = bonds[reserve_name]
-                    pmt = pay_interest_from_reserve(sources, tgt.interest, tgt.opt_interest, tgt.int_shortfall, rsv.balance, rsv.principal, i, max_amount=max_amt)
-            elif tag == _OP_FROM_RESERVE_PRIN:
-                if reserve_name and reserve_name in bonds:
-                    rsv = bonds[reserve_name]
-                    pmt = pay_principal_from_reserve(sources, tgt.principal, tgt.balance, rsv.balance, rsv.principal, i, max_amount=max_amt)
-            elif tag == _OP_FROM_RESERVE:
-                if reserve_name and reserve_name in bonds:
-                    rsv = bonds[reserve_name]
-                    pmt = pay_from_reserve(sources, tgt.interest, rsv.balance, rsv.principal, i, max_amt)
+                pmt = 0.0
+                if tgt is None and acct_tgt is not None and rule.tag == _OP_TO_RESERVE:
+                    pmt = pay_to_reserve(sources, acct_tgt.balance, acct_tgt.withdrawal, i, max_amount=max_amt if max_amt is not None else 0.0)
+                    acct_tgt.deposit[i] += pmt
+                    acct_tgt.withdrawal[i] = max(0.0, acct_tgt.withdrawal[i] - pmt)
+                elif tgt is not None:
+                    if rule.tag == _OP_INTEREST:
+                        pmt = pay_interest(
+                            sources,
+                            tgt.interest,
+                            tgt.opt_interest,
+                            tgt.int_shortfall,
+                            i,
+                            max_amount=max_amt,
+                            allow_negative=allow_negative_cash_math,
+                        )
+                    elif rule.tag == _OP_INTEREST_SF:
+                        pmt = pay_interest(
+                            sources,
+                            tgt.interest,
+                            tgt.opt_interest,
+                            tgt.int_shortfall,
+                            i,
+                            max_amount=max_amt,
+                            shortfall=True,
+                            allow_negative=allow_negative_cash_math,
+                        )
+                    elif rule.tag == _OP_PRINCIPAL:
+                        pmt = pay_principal(
+                            sources,
+                            tgt.principal,
+                            tgt.balance,
+                            i,
+                            max_amount=max_amt,
+                            allow_negative=allow_negative_cash_math,
+                        )
+                    elif rule.tag == _OP_WRITEDOWN:
+                        pmt = pay_writedown(
+                            sources,
+                            tgt.writedown,
+                            tgt.balance,
+                            i,
+                            max_amount=max_amt,
+                            allow_negative=allow_negative_cash_math,
+                        )
+                    elif rule.tag == _OP_FEE:
+                        collateral_balance_start = collateral["balance"][i - 1] if i > 0 else collateral["balance"][0]
+                        fee_due = _resolve_fee_due_amount(
+                            fee_defs_by_name.get(tgt_name),
+                            run_input,
+                            float(collateral_balance_start),
+                            i,
+                            {**rule_expr_ctx, **ctx.calculation_values},
+                        )
+                        if max_amt is not None and fee_due > 0.0:
+                            fee_due = min(fee_due, max_amt)
+                        elif max_amt is not None and fee_due <= 0.0:
+                            fee_due = max_amt
+                        if rule.allow_negative_source:
+                            pmt = max(0.0, fee_due)
+                            tgt.interest[i] += pmt
+                            for src in sources:
+                                src[i] -= pmt
+                        else:
+                            pmt = pay_fee(
+                                sources,
+                                tgt.interest,
+                                i,
+                                fee_due,
+                                allow_negative=allow_negative_cash_math,
+                            )
+                    elif rule.tag == _OP_RESIDUAL:
+                        pmt = pay_residual(
+                            sources,
+                            tgt.interest,
+                            i,
+                            max_amt,
+                            allow_negative=allow_negative_cash_math,
+                        )
+                    elif rule.tag == _OP_TO_RESERVE:
+                        pmt = pay_to_reserve(sources, tgt.balance, tgt.principal, i, max_amount=max_amt if max_amt is not None else 0.0)
+                    elif rule.tag == _OP_FROM_RESERVE_INT:
+                        if rule.reserve_name and rule.reserve_name in bonds:
+                            rsv = bonds[rule.reserve_name]
+                            pmt = pay_interest_from_reserve([], tgt.interest, tgt.opt_interest, tgt.int_shortfall, rsv.balance, rsv.principal, i, max_amount=max_amt)
+                        elif rule.reserve_name and rule.reserve_name in accounts:
+                            rsv_a = accounts[rule.reserve_name]
+                            pmt = pay_interest_from_reserve([], tgt.interest, tgt.opt_interest, tgt.int_shortfall, rsv_a.balance, rsv_a.withdrawal, i, max_amount=max_amt)
+                            rsv_a.withdrawal[i] += pmt
+                    elif rule.tag == _OP_FROM_RESERVE_PRIN:
+                        if rule.reserve_name and rule.reserve_name in bonds:
+                            rsv = bonds[rule.reserve_name]
+                            pmt = pay_principal_from_reserve([], tgt.principal, tgt.balance, rsv.balance, rsv.principal, i, max_amount=max_amt)
+                        elif rule.reserve_name and rule.reserve_name in accounts:
+                            rsv_a = accounts[rule.reserve_name]
+                            pmt = pay_principal_from_reserve([], tgt.principal, tgt.balance, rsv_a.balance, rsv_a.withdrawal, i, max_amount=max_amt)
+                            rsv_a.withdrawal[i] += pmt
+                    elif rule.tag == _OP_FROM_RESERVE:
+                        if rule.reserve_name and rule.reserve_name in bonds:
+                            rsv = bonds[rule.reserve_name]
+                            pmt = pay_from_reserve([], tgt.interest, rsv.balance, rsv.principal, i, max_amt)
+                        elif rule.reserve_name and rule.reserve_name in accounts:
+                            rsv_a = accounts[rule.reserve_name]
+                            pmt = pay_from_reserve([], tgt.interest, rsv_a.balance, rsv_a.withdrawal, i, max_amt)
+                            rsv_a.withdrawal[i] += pmt
+                    elif rule.tag == _OP_RECOURSE_INT and len(rule.source_keys) == 1 and rule.source_keys[0] in bonds:
+                        src_bond = bonds[rule.source_keys[0]]
+                        pmt = pay_recourse_interest(src_bond.principal, src_bond.balance, tgt.interest, tgt.opt_interest, tgt.int_shortfall, i)
+                    elif rule.tag == _OP_RECOURSE_PRIN and len(rule.source_keys) == 1 and rule.source_keys[0] in bonds:
+                        src_bond = bonds[rule.source_keys[0]]
+                        rec_amt = max_amt or 0.0
+                        pmt = pay_recourse_principal(src_bond.principal, src_bond.balance, tgt.principal, tgt.balance, i, rec_amt)
 
-            if trace_buf is not None:
-                trace_buf.append((
-                    scenario_name, i, rule_id, order, rt_str,
-                    ",".join(src_keys), tgt_name,
-                    max_amt or 0.0, pmt,
-                    0.0, 0.0,
-                    cond_trigger, trigger_states.get(cond_trigger) if cond_trigger else None,
-                ))
+                if trace_buf is not None:
+                    trace_buf.append(
+                        (
+                            scenario_name,
+                            i,
+                            rule.rule_id,
+                            rule.order,
+                            rule.rule_type_str,
+                            ",".join(rule.source_keys),
+                            tgt_name,
+                            max_amt or 0.0,
+                            pmt,
+                            0.0,
+                            0.0,
+                            rule.condition_trigger,
+                            ctx.trigger_states.get(rule.condition_trigger) if rule.condition_trigger else None,
+                        )
+                    )
 
+        _apply_balance_trackers(deal, ctx, run_input, i, orig_collat_bal)
         update_bonds_post_ws(bonds, i)
 
-    # --- Finalize bonds ---
     for ws in bonds.values():
         finalize_bond_ws(ws, ws.is_pseudo, ws.is_bond)
 
-    # --- Build output: deferred Pydantic construction ---
     bond_cf_rows: list[BondCashflowRow] = []
     for ws in bonds.values():
-        bal = ws.balance
-        prin = ws.principal
-        opt_int = ws.opt_interest
-        intr = ws.interest
-        sf = ws.int_shortfall
-        wd = ws.writedown
-        cf = ws.cashflow
-        cpn = ws.coupons
-        nm = ws.name
         for p in range(cf_len):
-            bond_cf_rows.append(BondCashflowRow(
-                scenario_name=scenario_name,
-                tranche_id=nm,
-                period=p,
-                begin_balance=float(bal[p - 1]) if p > 0 else float(bal[0]),
-                total_principal=float(prin[p]),
-                interest_due=float(opt_int[p]),
-                interest_paid=float(intr[p]),
-                interest_shortfall=float(sf[p]),
-                writedown=float(wd[p]),
-                end_balance=float(bal[p]),
-                cashflow_total=float(cf[p]),
-                coupon_rate=float(cpn[p]),
-            ))
+            bond_cf_rows.append(
+                BondCashflowRow(
+                    scenario_name=scenario_name,
+                    tranche_id=ws.name,
+                    period=p,
+                    begin_balance=float(ws.balance[p - 1]) if p > 0 else float(ws.balance[0]),
+                    total_principal=float(ws.principal[p]),
+                    interest_due=float(ws.opt_interest[p]),
+                    interest_paid=float(ws.interest[p]),
+                    interest_shortfall=float(ws.int_shortfall[p]),
+                    writedown=float(ws.writedown[p]),
+                    end_balance=float(ws.balance[p]),
+                    cashflow_total=float(ws.cashflow[p]),
+                    coupon_rate=float(ws.coupons[p]),
+                )
+            )
 
-    # Convert trace tuples to Pydantic only at end
+    account_rows: list[DealAccountRow] = []
+    for ws in accounts.values():
+        for p in range(cf_len):
+            account_rows.append(
+                DealAccountRow(
+                    scenario_name=scenario_name,
+                    account_id=ws.name,
+                    account_type=ws.account_type,
+                    period=p,
+                    begin_balance=float(ws.balance[p - 1]) if p > 0 else float(ws.balance[0]),
+                    deposit=float(ws.deposit[p]),
+                    withdrawal=float(ws.withdrawal[p]),
+                    end_balance=float(ws.balance[p]),
+                    required_minimum=float(ws.required_minimum[p]),
+                    minimum_basis=ws.minimum_basis,
+                    breach_flag=bool(ws.balance[p] < ws.required_minimum[p]),
+                )
+            )
+
     trace_rows: list[WaterfallTraceRow] = []
     if trace_buf:
         for t in trace_buf:
-            trace_rows.append(WaterfallTraceRow(
-                scenario_name=t[0], period=t[1], rule_id=t[2],
-                rule_order=t[3], rule_type=t[4],
-                from_source=t[5], to_target=t[6],
-                amount_requested=t[7], amount_paid=t[8],
-                remaining_source=t[9], remaining_obligation=t[10],
-                condition_id=t[11], condition_result=t[12],
-            ))
+            trace_rows.append(
+                WaterfallTraceRow(
+                    scenario_name=t[0],
+                    period=t[1],
+                    rule_id=t[2],
+                    rule_order=t[3],
+                    rule_type=t[4],
+                    from_source=t[5],
+                    to_target=t[6],
+                    amount_requested=t[7],
+                    amount_paid=t[8],
+                    remaining_source=t[9],
+                    remaining_obligation=t[10],
+                    condition_id=t[11],
+                    condition_result=t[12],
+                )
+            )
 
     return ScenarioOutputBundle(
         scenario_name=scenario_name,
         bond_cashflows=bond_cf_rows,
+        deal_accounts=account_rows,
         waterfall_trace=trace_rows,
+        trigger_state_history=ctx.trigger_rows,
     )

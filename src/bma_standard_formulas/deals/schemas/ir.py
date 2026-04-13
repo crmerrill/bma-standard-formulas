@@ -103,7 +103,9 @@ class FeeDef(BaseModel):
     name: str = Field(min_length=1)
     basis_type: FeeBasisType = FeeBasisType.FIXED_DOLLAR
     amount: Dollars = 0.0
+    amount_expr: str | None = None
     rate: Rate | None = None
+    rate_expr: str | None = None
     minimum: Dollars = 0.0
     frequency: FeeFrequency = FeeFrequency.MONTHLY
     cumulative: bool = False
@@ -165,6 +167,8 @@ class RuleNode(BaseModel):
 
     condition_trigger: str | None = None
     condition_invert: bool = False
+    condition_expr: str | None = None
+    allow_negative_source: bool = False
 
     description: str = ""
 
@@ -200,15 +204,20 @@ class DealDefinition(BaseModel):
         fee_names = {f.name for f in self.fees}
         trigger_names = {t.name for t in self.triggers}
         calc_names = {c.name for c in self.calculations}
+        source_formula_names: set[str] = set()
+        raw_source_formulas = self.deal_knobs.get("source_formulas")
+        if isinstance(raw_source_formulas, dict):
+            source_formula_names = {str(k) for k in raw_source_formulas.keys()}
         all_targets = bond_names | account_names | fee_names | {"CASH"}
+        valid_sources = all_targets | {"COLLATERAL", "LOSS"} | source_formula_names
 
         errors: list[str] = []
         for rule in self.waterfall_rules:
             for src in rule.from_sources:
-                if src not in all_targets and src != "COLLATERAL":
+                if src not in valid_sources:
                     errors.append(
                         f"Rule {rule.rule_id!r}: from_source {src!r} not found "
-                        f"in bonds/accounts/fees"
+                        f"in bonds/accounts/fees/source_formulas"
                     )
             for tgt in rule.to_targets:
                 if tgt not in all_targets:

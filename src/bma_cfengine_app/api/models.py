@@ -72,6 +72,7 @@ class TapeProfile(BaseModel):
 class UploadResponse(BaseModel):
     upload_id: str
     file_name: str
+    display_name: str
     row_count: int
     column_count: int
 

@@ -21,14 +21,14 @@ export default function IrPreviewPanel({ irJson, errors, onSave }: IrPreviewPane
         <Code2 className="w-3.5 h-3.5 text-muted-foreground" />
         <span className="text-xs font-medium text-foreground">Deal IR</span>
         {lineCount > 0 && (
-          <span className="text-[10px] text-muted-foreground" style={MONO}>
+          <span className="text-xs text-muted-foreground" style={MONO}>
             {lineCount} lines
           </span>
         )}
         <button
           onClick={onSave}
           disabled={errors.length > 0 || !irJson}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded text-[11px]
+          className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded text-xs
             font-medium transition-colors bg-primary/10 text-primary hover:bg-primary/20
             disabled:opacity-30 disabled:cursor-not-allowed"
         >
@@ -41,7 +41,7 @@ export default function IrPreviewPanel({ irJson, errors, onSave }: IrPreviewPane
       {errors.length > 0 && (
         <div className="mb-2 px-3 py-2 rounded-md border border-destructive/40 bg-destructive/10">
           {errors.map((e, i) => (
-            <div key={i} className="flex items-start gap-1.5 text-[11px] text-destructive">
+            <div key={i} className="flex items-start gap-1.5 text-xs text-destructive">
               <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
               <span>{e}</span>
             </div>
@@ -52,7 +52,7 @@ export default function IrPreviewPanel({ irJson, errors, onSave }: IrPreviewPane
       {/* JSON preview */}
       <pre
         className="flex-1 min-h-0 overflow-auto rounded-md border border-border
-          bg-[#0d1220] px-3 py-2 text-[11px] leading-relaxed text-secondary-foreground"
+          bg-[#0d1220] px-3 py-2 text-xs leading-relaxed text-secondary-foreground"
         style={MONO}
       >
         {irJson || (

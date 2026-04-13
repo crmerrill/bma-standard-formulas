@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { RotateCw, Search } from "lucide-react";
-import { fmtDate } from "../../../lib/format";
+import FormSelect from "../../../components/FormSelect";
+import { fmtDate, fmtNamedId } from "../../../lib/format";
 import type { RunListItem } from "../../../services/api";
 
 interface Props {
@@ -81,7 +82,7 @@ export default function ExistingRunSelector({
         </button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
         <Toggle value={completedOnly} onChange={setCompletedOnly} label="Completed only" />
         <Toggle value={structuredOnly} onChange={setStructuredOnly} label="Structured only" />
         <Toggle value={solverOnly} onChange={setSolverOnly} label="Solver only" />
@@ -105,10 +106,9 @@ export default function ExistingRunSelector({
 
       {!loading && !error && filtered.length > 0 && (
         <>
-          <select
+          <FormSelect
             value={value ?? ""}
             onChange={(e) => onChange(e.target.value || null)}
-            className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground text-xs"
             aria-label="Select existing run"
           >
             <option value="">Select base CF run</option>
@@ -117,12 +117,12 @@ export default function ExistingRunSelector({
               const scenarios = run.scenario_names?.join(", ") || "Base Case";
               return (
                 <option key={run.run_id} value={run.run_id}>
-                  {`${runLabel} :: ${scenarios} | ${shortRunId(run.run_id)} | ${fmtDate(run.created_at)} | ${run.status} | ${run.run_kind ?? "run"}`}
+                  {`${fmtNamedId(runLabel, shortRunId(run.run_id))} - ${scenarios} | ${fmtDate(run.created_at)} | ${run.status} | ${run.run_kind ?? "run"}`}
                 </option>
               );
             })}
-          </select>
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+          </FormSelect>
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>
               {filtered.length} result{filtered.length === 1 ? "" : "s"}
             </span>

@@ -14,6 +14,8 @@ interface BondDefIR {
   is_bond: boolean;
   is_pseudo: boolean;
   coupon_type: string;
+  index_name: string | null;
+  margin: number | null;
 }
 
 interface AccountDefIR {
@@ -28,8 +30,9 @@ interface FeeDefIR {
   name: string;
   basis_type: string;
   amount: number;
-  /** Basis points when basis_type is PCT_POOL; otherwise null */
-  bps: number | null;
+  /** Percent rate when basis_type is COLLATERAL_BALANCE; otherwise null */
+  rate: number | null;
+  frequency: string;
 }
 
 interface TriggerNodeIR {
@@ -90,6 +93,43 @@ const PAY_TYPE_MAP: Record<string, string> = {
   REMAINING: "PAY_RESIDUAL",
 };
 
+const FEE_BASIS_MAP: Record<string, string> = {
+  PCT_POOL: "COLLATERAL_BALANCE",
+  FIXED_DOLLAR: "FIXED_DOLLAR",
+  PER_LOAN: "PER_LOAN",
+};
+
+const TRIGGER_METRIC_MAP: Record<string, string> = {
+  CUM_LOSS: "CUMULATIVE_LOSS",
+  CUM_DEFAULT: "CUMULATIVE_DEFAULT",
+  DELINQUENCY: "DELINQUENCY_RATE",
+  OC_RATIO: "OC_TEST",
+  IC_RATIO: "IC_TEST",
+  CUSTOM: "CUSTOM",
+};
+
+const RULE_SOURCE_MAP: Record<string, string> = {
+  COLLECTION: "CASH",
+  PRIN_COLLECTION: "CASH",
+  INT_COLLECTION: "CASH",
+  DISTRIBUTION: "CASH",
+  RESERVE: "CASH",
+  PREFUNDING: "CASH",
+  CAP_INTEREST: "CASH",
+  EXPENSE: "CASH",
+  REINVESTMENT: "CASH",
+  SWAP_HEDGE: "CASH",
+  ESCROW: "CASH",
+  YIELD_SUPPLEMENT: "CASH",
+  COLLATERAL: "COLLATERAL",
+  CASH: "CASH",
+};
+
+function normalizeRuleSource(source: string | null | undefined): string {
+  const token = source || "COLLECTION";
+  return RULE_SOURCE_MAP[token] || "CASH";
+}
+
 // ---------------------------------------------------------------------------
 // Target extraction (bonds + accounts from inside pay rules)
 // ---------------------------------------------------------------------------
@@ -99,7 +139,10 @@ interface TargetInfo {
   isBond: boolean;
   bondType?: string;
   faceAmt?: number;
+  sizePctPool?: number;
   coupon?: number;
+  indexName?: string;
+  margin?: number | null;
   accrual?: string;
   accountType?: string;
   /** PCT_STACK = % of total bond face; FIXED_DOLLAR = $ */
@@ -111,12 +154,16 @@ function extractTargets(ruleBlock: any): TargetInfo[] {
   const targets: TargetInfo[] = [];
   for (const t of getStatementChain(ruleBlock, "TARGETS")) {
     if (t.type === "bond_target") {
+      const bondType = t.getFieldValue("BOND_TYPE") || "FIXED";
       targets.push({
         name: t.getFieldValue("NAME") || "X",
         isBond: true,
-        bondType: t.getFieldValue("BOND_TYPE") || "FIXED",
+        bondType,
         faceAmt: t.getFieldValue("FACE_AMT") || 0,
+        sizePctPool: Number(t.getFieldValue("SIZE_PCT_POOL") || 0),
         coupon: t.getFieldValue("COUPON") || 0,
+        indexName: bondType === "FLOATING" ? (t.getFieldValue("INDEX_NAME") || null) : null,
+        margin: bondType === "FLOATING" ? Number(t.getFieldValue("MARGIN") || 0) : null,
         accrual: t.getFieldValue("ACCRUAL") || "30_360",
       });
     } else if (t.type === "residual_target") {
@@ -185,7 +232,7 @@ function registerTargets(targets: TargetInfo[], ctx: Ctx): void {
 
 function emitSequential(block: any, ctx: Ctx): void {
   const payType = block.getFieldValue("PAY_TYPE") || "INTEREST";
-  const source = block.getFieldValue("SOURCE") || "COLLECTION";
+  const source = normalizeRuleSource(block.getFieldValue("SOURCE"));
   const ruleType = PAY_TYPE_MAP[payType] || "PAY_INTEREST";
   const targets = extractTargets(block);
   registerTargets(targets, ctx);
@@ -209,7 +256,7 @@ function emitSequential(block: any, ctx: Ctx): void {
 
 function emitProRata(block: any, ctx: Ctx): void {
   const payType = block.getFieldValue("PAY_TYPE") || "PRINCIPAL";
-  const source = block.getFieldValue("SOURCE") || "COLLECTION";
+  const source = normalizeRuleSource(block.getFieldValue("SOURCE"));
   const ruleType = PAY_TYPE_MAP[payType] || "PAY_PRINCIPAL";
   const targets = extractTargets(block);
   registerTargets(targets, ctx);
@@ -234,16 +281,20 @@ function emitProRata(block: any, ctx: Ctx): void {
 
 function emitFee(block: any, ctx: Ctx): void {
   const payee = block.getFieldValue("PAYEE") || "SERVICER";
-  const source = block.getFieldValue("SOURCE") || "COLLECTION";
+  const source = normalizeRuleSource(block.getFieldValue("SOURCE"));
   const basis = block.getFieldValue("BASIS") || "FIXED_DOLLAR";
+  const canonicalBasis = FEE_BASIS_MAP[basis] || basis;
   const amount = Number(block.getFieldValue("AMOUNT")) || 0;
-  const isBps = basis === "PCT_POOL";
+  const frequency = block.getFieldValue("FREQ") || "MONTHLY";
+  const isPctPoolBps = basis === "PCT_POOL";
 
   ctx.fees.push({
     name: payee,
-    basis_type: basis,
-    amount: isBps ? 0 : amount,
-    bps: isBps ? amount : null,
+    basis_type: canonicalBasis,
+    amount: isPctPoolBps ? 0 : amount,
+    // UI stores annual bps (25 = 0.25% annual rate).
+    rate: isPctPoolBps ? amount / 100 : null,
+    frequency,
   });
 
   ctx.rules.push({
@@ -253,7 +304,7 @@ function emitFee(block: any, ctx: Ctx): void {
     from_sources: [source],
     to_targets: [payee],
     payment_style: "SEQUENTIAL",
-    max_amount_fixed: !isBps && amount > 0 ? amount : null,
+    max_amount_fixed: !isPctPoolBps && amount > 0 ? amount : null,
     condition_trigger: ctx.activeTrigger,
     condition_invert: ctx.conditionInvert,
   });
@@ -263,9 +314,10 @@ function emitFee(block: any, ctx: Ctx): void {
 function emitTrigger(block: any, ctx: Ctx): void {
   const name = block.getFieldValue("TRIGGER_NAME") || "TRIGGER";
   const metric = block.getFieldValue("METRIC") || "CUSTOM";
+  const canonicalMetric = TRIGGER_METRIC_MAP[metric] || metric;
   const threshold = block.getFieldValue("THRESHOLD") || 0;
 
-  ctx.triggers.push({ name, metric_type: metric, threshold_value: threshold });
+  ctx.triggers.push({ name, metric_type: canonicalMetric, threshold_value: threshold });
 
   const outerTrig = ctx.activeTrigger;
   const outerInv = ctx.conditionInvert;
@@ -324,11 +376,13 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       name,
       tranche_type: "SEQUENTIAL",
       coupon: info.coupon || 0,
-      size_pct: 0,
+      size_pct: Number(info.sizePctPool || 0),
       size_dollars: info.faceAmt || 0,
       is_bond: true,
       is_pseudo: info.faceAmt === 0,
       coupon_type: info.bondType || "FIXED",
+      index_name: info.bondType === "FLOATING" ? (info.indexName ?? null) : null,
+      margin: info.bondType === "FLOATING" ? Number(info.margin || 0) : null,
     });
   }
 
@@ -336,7 +390,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
   if (!ctx.bonds.has("R") && !bonds.find((b) => b.tranche_type === "RESIDUAL")) {
     bonds.push({
       name: "R", tranche_type: "RESIDUAL", coupon: 0, size_pct: 0, size_dollars: 0,
-      is_bond: false, is_pseudo: true, coupon_type: "FIXED",
+      is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
     });
   }
 
@@ -361,7 +415,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
     if (!bondNames.has(fee.name)) {
       bonds.push({
         name: fee.name, tranche_type: "PSEUDO", coupon: 0, size_pct: 0, size_dollars: 0,
-        is_bond: false, is_pseudo: true, coupon_type: "FIXED",
+        is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
       });
       bondNames.add(fee.name);
     }
@@ -370,7 +424,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
     if (!bondNames.has(acct.name)) {
       bonds.push({
         name: acct.name, tranche_type: "PSEUDO", coupon: 0, size_pct: 0, size_dollars: 0,
-        is_bond: false, is_pseudo: true, coupon_type: "FIXED",
+        is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
       });
       bondNames.add(acct.name);
     }

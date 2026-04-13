@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Clock, Eye, Play } from "lucide-react";
 import type { RunListItem } from "../services/api";
 import * as api from "../services/api";
-import { fmtCcy, fmtDate } from "../lib/format";
+import { fmtCcy, fmtDate, fmtNamedId } from "../lib/format";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import LoadingState from "../components/LoadingState";
 import EmptyState from "../components/EmptyState";
@@ -59,14 +59,20 @@ export default function RunHistoryPage({ onViewRun, onRerun, onOpenSolverStudio 
             header: "Deal / Run",
             accessorFn: (r: RunListItem) =>
               (r.run_type ?? "portfolio") === "structured_deal"
-                ? `${r.deal_name ?? "Structured Deal"} :: ${r.scenario_names.join(", ") || "Base Case"} :: ${r.run_kind ?? "deal_run"}`
+                ? `${fmtNamedId(r.deal_name ?? "Structured Deal", r.run_id)} - ${r.scenario_names.join(", ") || "Base Case"} - ${r.run_kind ?? "deal_run"}`
                 : "Portfolio Run",
             mono: false,
           },
           { id: "created_at", header: "Date", accessorKey: "created_at", mono: false, cell: (v) => fmtDate(String(v ?? "")) },
           { id: "status", header: "Status", accessorKey: "status", align: "center", mono: false, cell: (_v, r: RunListItem) => <StatusBadge status={r.status} /> },
           { id: "loan_count", header: "Loans", accessorKey: "loan_count", align: "right", cell: (v) => Number(v).toLocaleString() },
-          { id: "group_count", header: "Groups", accessorKey: "group_count", align: "right" },
+          {
+            id: "group_count",
+            header: "Groups",
+            accessorKey: "group_count",
+            align: "right",
+            cell: (v, r: RunListItem) => ((r.run_type ?? "portfolio") === "portfolio" ? String(v ?? "0") : "—"),
+          },
           { id: "total_balance", header: "Balance", accessorKey: "total_balance", align: "right", cell: (v) => fmtCcy(Number(v)) },
           { id: "wac", header: "WAC", accessorKey: "wac", align: "right", cell: (v) => v ? `${Number(v).toFixed(2)}%` : "—" },
           { id: "scenarios", header: "Scenarios", accessorFn: (r: RunListItem) => r.scenario_names.join(", ") || "—", mono: false },

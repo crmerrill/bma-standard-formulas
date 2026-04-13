@@ -38,8 +38,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export interface UploadResponse {
   upload_id: string;
   file_name: string;
+  display_name: string;
   row_count: number;
   column_count: number;
+}
+
+export interface UploadLibraryItem {
+  upload_id: string;
+  file_name: string;
+  display_name: string;
+  row_count: number;
+  column_count: number;
+  file_size_bytes: number;
+  latest_mapping_id: string | null;
+  updated_at: string;
+}
+
+export interface UploadMappingSummary {
+  mapping_id: string;
+  asof_date: string | null;
+  mapped_fields: number;
+  updated_at: string;
 }
 
 export interface ColumnProfile {
@@ -149,14 +168,35 @@ export interface TapePreview {
 
 // ---------- Upload ----------
 
-export function uploadTape(file: File): Promise<UploadResponse> {
+export function uploadTape(file: File, displayName?: string): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
+  if (displayName?.trim()) {
+    form.append("display_name", displayName.trim());
+  }
   return request("/uploads", { method: "POST", body: form });
 }
 
 export function getProfile(uploadId: string): Promise<TapeProfile> {
   return request(`/uploads/${uploadId}/profile`);
+}
+
+export function listUploads(): Promise<{ items: UploadLibraryItem[] }> {
+  return request("/uploads");
+}
+
+export function renameUpload(uploadId: string, displayName: string): Promise<{ upload_id: string; display_name: string }> {
+  return request(`/uploads/${uploadId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ display_name: displayName }),
+  });
+}
+
+export function listUploadMappings(
+  uploadId: string,
+): Promise<{ upload_id: string; items: UploadMappingSummary[] }> {
+  return request(`/uploads/${uploadId}/mappings`);
 }
 
 export function getAutoMap(uploadId: string): Promise<FieldMapping[]> {
@@ -541,6 +581,13 @@ export function saveMapping(body: {
   });
 }
 
+export function getSavedMapping(
+  uploadId: string,
+  mappingId: string,
+): Promise<{ mappings: FieldMapping[]; asof_date?: string | null }> {
+  return request(`/mappings/${uploadId}/${mappingId}`);
+}
+
 export function getGroupPreview(
   uploadId: string,
   grouping: { keys: string[] }
@@ -575,9 +622,11 @@ export function getRun(runId: string): Promise<RunResponse> {
 
 export function getPreview(
   runId: string,
-  section: string
+  section: string,
+  maxRows?: number,
 ): Promise<CashflowPreview> {
-  return request(`/runs/${runId}/preview/${section}`);
+  const q = maxRows != null ? `?max_rows=${Math.max(1, Math.floor(maxRows))}` : "";
+  return request(`/runs/${runId}/preview/${section}${q}`);
 }
 
 export function getArtifacts(
@@ -731,6 +780,22 @@ export interface StudioDealSnapshot {
   ir: Record<string, unknown>;
 }
 
+export interface PoolSnapshotSummary {
+  pool_id: string;
+  pool_name: string;
+  current_version: number;
+  updated_at: string;
+  created_at?: string;
+}
+
+export interface PoolSnapshot {
+  pool_id: string;
+  pool_name: string;
+  version: number;
+  saved_at: string;
+  payload: unknown;
+}
+
 export function listStudioDeals(): Promise<StudioDealSummary[]> {
   return request("/deals");
 }
@@ -749,6 +814,28 @@ export function saveStudioDeal(body: {
   ir: Record<string, unknown>;
 }): Promise<StudioDealSaveResponse> {
   return request("/deals", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function listPoolSnapshots(search?: string): Promise<{ items: PoolSnapshotSummary[] }> {
+  const q = search ? `?search=${encodeURIComponent(search)}` : "";
+  return request(`/deals/pools${q}`);
+}
+
+export function getPoolSnapshot(poolId: string, version?: number): Promise<PoolSnapshot> {
+  const q = version != null ? `?version=${version}` : "";
+  return request(`/deals/pools/${poolId}${q}`);
+}
+
+export function savePoolSnapshot(body: {
+  pool_id?: string | null;
+  pool_name: string;
+  payload: unknown;
+}): Promise<{ pool_id: string; pool_name: string; version: number; saved_at: string }> {
+  return request("/deals/pools", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

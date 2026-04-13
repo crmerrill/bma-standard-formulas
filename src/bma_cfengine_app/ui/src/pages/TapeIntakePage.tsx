@@ -19,6 +19,7 @@ import type {
 } from "../services/api";
 import * as api from "../services/api";
 import { MONO } from "../lib/format";
+import FormSelect from "../components/FormSelect";
 
 const REQUIRED_FIELDS = [
   "loan_id", "origination_date", "asof_date", "original_balance",
@@ -81,7 +82,9 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
     setUploading(true);
     setFlowError(null);
     try {
-      const res = await api.uploadTape(files[0]);
+      const file = files[0];
+      const fallbackName = file.name.replace(/\.[^/.]+$/, "").trim() || file.name;
+      const res = await api.uploadTape(file, fallbackName);
       const [prof, autoMap] = await Promise.all([
         api.getProfile(res.upload_id),
         api.getAutoMap(res.upload_id),
@@ -210,7 +213,7 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
           <div className="min-w-0 flex-1">
             <p className="font-medium text-foreground">Something went wrong</p>
             <p className="text-xs mt-1 break-words opacity-90">{flowError}</p>
-            <p className="text-[10px] text-muted-foreground mt-2">
+            <p className="text-xs text-muted-foreground mt-2">
               From repo root with deps installed:{" "}
               <code className="text-foreground/80 break-all" style={MONO}>
                 PYTHONPATH=src uvicorn bma_cfengine_app.api.main:app --reload --port 8000
@@ -254,7 +257,7 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
           <div className="flex items-center gap-3 mb-3">
             <FileSpreadsheet className="w-5 h-5 text-primary" />
             <div>
-              <p className="text-sm font-medium" style={MONO}>{upload.file_name}</p>
+              <p className="text-sm font-medium" style={MONO}>{upload.display_name || upload.file_name}</p>
               <p className="text-xs text-muted-foreground">
                 {upload.row_count.toLocaleString()} rows &middot;{" "}
                 {upload.column_count} columns &middot;{" "}
@@ -268,7 +271,7 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
             <div className="bg-grid-header px-3 py-2 flex items-center gap-2">
               <Link2 className="w-3.5 h-3.5 text-primary" />
               <span className="text-xs font-medium">Field Mapping</span>
-              <span className="text-[10px] text-muted-foreground ml-auto">
+              <span className="text-xs text-muted-foreground ml-auto">
                 {mappings.length} mapped
               </span>
             </div>
@@ -286,7 +289,7 @@ export default function TapeIntakePage({ onComplete, asofDate }: Props) {
                   {FIELD_SECTIONS.map((section) => (
                     <React.Fragment key={section.label}>
                       <tr className="bg-secondary/50">
-                        <td colSpan={3} className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                        <td colSpan={3} className="px-3 py-1.5 text-xs uppercase tracking-wider text-muted-foreground font-medium">
                           {section.label}
                         </td>
                       </tr>
@@ -399,23 +402,23 @@ function MappingRow({
           {field}
         </span>
         {required && (
-          <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-engine-amber/10 text-engine-amber border border-engine-amber/20">
+          <span className="ml-1.5 text-xs px-1 py-0.5 rounded bg-engine-amber/10 text-engine-amber border border-engine-amber/20">
             required
           </span>
         )}
       </td>
       <td className="px-3 py-1.5">
-        <select
+        <FormSelect
           value={currentMapping}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full px-2 py-1 bg-input-background border border-border rounded text-xs text-foreground"
+          className="text-xs"
           style={MONO}
         >
           <option value="">— select —</option>
           {sourceColumns.map((col) => (
             <option key={col} value={col}>{col}</option>
           ))}
-        </select>
+        </FormSelect>
       </td>
       <td className="px-3 py-1.5 text-center">
         {mapped ? (
@@ -502,12 +505,12 @@ function DqMappingPanel({
         <Activity className="w-3.5 h-3.5 text-primary" />
         <span className="text-xs font-medium">Delinquency Mapping</span>
         {applied && (
-          <span className="ml-auto text-[10px] text-engine-green flex items-center gap-1">
+          <span className="ml-auto text-xs text-engine-green flex items-center gap-1">
             <Check className="w-3 h-3" /> Applied
           </span>
         )}
         {!applied && !isNone && (
-          <span className="ml-auto text-[10px] text-muted-foreground">
+          <span className="ml-auto text-xs text-muted-foreground">
             {Math.round(mapping.confidence * 100)}% confidence
           </span>
         )}
@@ -574,8 +577,8 @@ function DqMappingPanel({
 
         {tapeColumns.length > 0 && (
           <div className="mt-3 pt-3 border-t border-border space-y-2">
-            <p className="text-[11px] font-medium text-foreground">FC / REO code mapping</p>
-            <p className="text-muted-foreground text-[10px] leading-snug">
+            <p className="text-xs font-medium text-foreground">FC / REO code mapping</p>
+            <p className="text-muted-foreground text-xs leading-snug">
               When FC/REO are not simple Y/N flags, choose the source column(s) and enter which
               raw values mean foreclosure vs REO (comma-separated). Often the same column for both
               (e.g. <span className="font-mono">zerobal_code</span>).
@@ -583,8 +586,8 @@ function DqMappingPanel({
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
                 <span className="text-muted-foreground">FC column</span>
-                <select
-                  className="rounded border border-border bg-background px-2 py-1 font-mono text-[11px]"
+                <FormSelect
+                  className="bg-background font-mono"
                   value={mapping.fc_col ?? ""}
                   onChange={(e) => {
                     const v = e.target.value || null;
@@ -597,12 +600,12 @@ function DqMappingPanel({
                       {c}
                     </option>
                   ))}
-                </select>
+                </FormSelect>
               </label>
               <label className="flex flex-col gap-1">
                 <span className="text-muted-foreground">REO column</span>
-                <select
-                  className="rounded border border-border bg-background px-2 py-1 font-mono text-[11px]"
+                <FormSelect
+                  className="bg-background font-mono"
                   value={mapping.reo_col ?? ""}
                   onChange={(e) => {
                     const v = e.target.value || null;
@@ -615,7 +618,7 @@ function DqMappingPanel({
                       {c}
                     </option>
                   ))}
-                </select>
+                </FormSelect>
               </label>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
@@ -623,7 +626,7 @@ function DqMappingPanel({
                 <span className="text-muted-foreground">Values = FC</span>
                 <input
                   type="text"
-                  className="rounded border border-border bg-background px-2 py-1 font-mono text-[11px]"
+                  className="rounded border border-border bg-background px-2 py-1 font-mono text-xs"
                   placeholder="e.g. 2, 3, 6"
                   value={fcCodesText}
                   onChange={(e) => setFcCodesText(e.target.value)}
@@ -634,7 +637,7 @@ function DqMappingPanel({
                 <span className="text-muted-foreground">Values = REO</span>
                 <input
                   type="text"
-                  className="rounded border border-border bg-background px-2 py-1 font-mono text-[11px]"
+                  className="rounded border border-border bg-background px-2 py-1 font-mono text-xs"
                   placeholder="e.g. 9, 15, 16"
                   value={reoCodesText}
                   onChange={(e) => setReoCodesText(e.target.value)}

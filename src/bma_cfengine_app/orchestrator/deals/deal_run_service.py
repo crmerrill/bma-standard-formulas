@@ -27,6 +27,7 @@ def execute_deal_run(
     run_inputs_by_scenario: dict[str, DealRunInput] | None = None,
     source_mode: str = "deal_native",
     run_kind: str = "deal_run",
+    collateral_risk_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a deal waterfall and persist all outputs.
 
@@ -70,6 +71,7 @@ def execute_deal_run(
             "scenario_set": scenario_names,
             "source_mode": source_mode,
             "deal_version": deal_version,
+            "collateral_risk_settings": collateral_risk_settings or {},
         }
         manifest = {
             "status": "completed",
@@ -79,6 +81,10 @@ def execute_deal_run(
             "deal_name": deal.deal_name,
             "deal_version": deal_version,
             "deal_context": deal_context,
+            "tape_id": (collateral_risk_settings or {}).get("tapeId"),
+            "tape_mapping_id": (collateral_risk_settings or {}).get("tapeMappingId"),
+            "pool_id": (collateral_risk_settings or {}).get("poolId"),
+            "pool_version": (collateral_risk_settings or {}).get("poolVersion"),
             "scenario_names": scenario_names,
             "elapsed_seconds": elapsed,
             "created_at": created_at,
@@ -100,6 +106,7 @@ def execute_deal_run(
                 "scenario_names": scenario_names,
                 "deal_id": deal_id,
                 "deal_version": deal_version,
+                "collateral_risk_settings": collateral_risk_settings or {},
             },
         )
         run_store.save_manifest(run_id, manifest)

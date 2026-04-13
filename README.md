@@ -94,6 +94,19 @@ pool_df = portfolio.pool.to_dataframe()
 This repo also includes an optional app scaffold at `src/bma_cfengine_app/`
 (FastAPI backend + React/Vite UI).
 
+Current structured-deal UI capabilities include:
+
+- Structuring Studio with `Design | Solver | IR` tabs.
+- Session-persistent Blockly layout + draft state.
+- Open/save/load/close deal lifecycle with unsaved-change guardrails.
+- Named, versioned pool snapshot save/load for tape/pool reuse.
+- Mirrored collateral/risk settings across Structuring and Structured Deal Analysis.
+- Structured Deal Analysis artifact views with solver run comparison.
+
+Storage note:
+
+- Tape uploads and mappings are currently persisted in the local app workspace (`PrismaRisk/BMA-CFEngine`) using file-backed storage, not relational DB tables. The UI now includes a tape library picker to reopen prior uploads/mappings.
+
 Install with app extras:
 
 ```bash

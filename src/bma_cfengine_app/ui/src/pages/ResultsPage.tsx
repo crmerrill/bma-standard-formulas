@@ -13,6 +13,7 @@ import { MONO, fmtCcy, fmtNum } from "../lib/format";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import TabBar from "../components/TabBar";
 import PillToggle from "../components/PillToggle";
+import FormSelect from "../components/FormSelect";
 import MetricCard from "../components/MetricCard";
 import SummaryRow from "../components/SummaryRow";
 import CollapsiblePanel from "../components/CollapsiblePanel";
@@ -46,8 +47,12 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
 
   const [allRuns, setAllRuns] = useState<RunListItem[]>([]);
   useEffect(() => {
-    api.listRuns().then((runs) => setAllRuns(runs.filter((r) => r.status === "completed")));
+    // Results is collateral-engine only; structured-deal runs belong in Structured Deal Analysis.
+    api.listRuns("portfolio").then((runs) => setAllRuns(runs.filter((r) => r.status === "completed")));
   }, [run.run_id]);
+
+  const currentRunMeta = allRuns.find((r) => r.run_id === run.run_id);
+  const isPortfolioRun = (currentRunMeta?.run_type ?? "portfolio") === "portfolio";
 
   const [scenarioNames, setScenarioNames] = useState<string[]>([]);
   const [selectedScenario, setSelectedScenario] = useState<string>("");
@@ -146,26 +151,31 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
   };
 
   const summary = run.summary;
-  const hasGroups = groupNames.length > 0;
+  const hasGroups = isPortfolioRun && groupNames.length > 0;
 
   const groupsLabel = `Group CF${hasGroups ? ` (${groupNames.length})` : ""}`;
   const tabDefs = TABS.map((t) => t.id === "groups" ? { ...t, label: groupsLabel } : t);
 
   return (
     <div className="space-y-4">
+      {!isPortfolioRun && (
+        <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          This run belongs to the waterfall engine. Open it in Structured Deal Analysis.
+        </div>
+      )}
       {/* Run selector */}
       {allRuns.length > 1 && onSwitchRun && (
         <div className="flex items-center gap-2 text-xs">
           <Clock className="w-3.5 h-3.5 text-muted-foreground" />
           <span className="text-muted-foreground">Run:</span>
-          <select value={run.run_id} onChange={(e) => onSwitchRun(e.target.value)}
-            className="px-2 py-1 bg-input-background border border-border rounded text-xs text-foreground" style={MONO}>
+          <FormSelect value={run.run_id} onChange={(e) => onSwitchRun(e.target.value)}
+            className="w-auto" style={MONO}>
             {allRuns.map((r) => (
               <option key={r.run_id} value={r.run_id}>
                 {r.run_id.replace("run_", "").slice(0, 8)} — {r.scenario_names.join(", ") || "Base"} — {r.loan_count} loans — {new Date(r.created_at).toLocaleString()}
               </option>
             ))}
-          </select>
+          </FormSelect>
         </div>
       )}
 
@@ -203,7 +213,7 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
           </div>
           {hasGroups && (
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mt-3 mb-1">Groups</p>
+              <p className="text-xs uppercase tracking-wider text-muted-foreground mt-3 mb-1">Groups</p>
               <div className="flex flex-wrap gap-1.5">
                 {groupNames.map((g) => <MonoChip key={g}>{g}</MonoChip>)}
               </div>
@@ -321,7 +331,9 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
 
       {/* Group cashflows tab */}
       {tab === "groups" && (
-        hasGroups ? (
+        !isPortfolioRun ? (
+          <EmptyState message="Group cashflows are only available for collateral-engine runs. Use Structured Deal Analysis for bond cashflows." />
+        ) : hasGroups ? (
           <div className="space-y-3">
             <div className="flex items-center gap-3 flex-wrap">
               {scenarioNames.length > 1 && (
@@ -358,6 +370,9 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
 
       {/* Risk tab */}
       {tab === "risk" && (
+        !isPortfolioRun ? (
+          <EmptyState message="Risk analytics in Results are tied to collateral runs. Use Structured Deal Analysis for waterfall/bond risk." />
+        ) : (
         <div className="space-y-4">
           <div className="bg-card border border-border rounded-lg p-4 space-y-3">
             <h3 className="text-xs font-medium text-foreground flex items-center gap-2">
@@ -365,7 +380,7 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
               {hasGroups && <span className="text-muted-foreground font-normal ml-1">(portfolio + {groupNames.length} groups)</span>}
             </h3>
             <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-20 shrink-0">Quote Type</span>
+              <span className="text-xs uppercase tracking-wider text-muted-foreground w-20 shrink-0">Quote Type</span>
               <PillToggle
                 options={[{ id: "yield", label: "Yield" }, { id: "price", label: "Price" }]}
                 selected={riskInputKind}
@@ -373,7 +388,7 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
               />
             </div>
             <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-20 shrink-0">
+              <span className="text-xs uppercase tracking-wider text-muted-foreground w-20 shrink-0">
                 Base {riskInputKind === "yield" ? "Yield %" : "Price"}
               </span>
               <input type="text" value={riskBaseValue} onChange={(e) => setRiskBaseValue(e.target.value)}
@@ -381,7 +396,7 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
                 placeholder={riskInputKind === "yield" ? "6.0" : "100.0"} />
             </div>
             <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-20 shrink-0">Sensitivity</span>
+              <span className="text-xs uppercase tracking-wider text-muted-foreground w-20 shrink-0">Sensitivity</span>
               <span className="text-xs text-muted-foreground">&plusmn;</span>
               <input type="text" value={riskSensSteps} onChange={(e) => setRiskSensSteps(e.target.value)}
                 className="w-14 px-2 py-1 bg-input-background border border-border rounded text-xs" style={MONO} placeholder="4" />
@@ -406,7 +421,7 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
                   <div className="bg-card border border-primary/20 rounded-lg p-4">
                     <h4 className="text-xs font-medium text-primary mb-1 flex items-center gap-2">
                       <TrendingUp className="w-3.5 h-3.5" /> Portfolio Risk
-                      <span className="text-muted-foreground font-normal ml-auto text-[10px]">
+                      <span className="text-muted-foreground font-normal ml-auto text-xs">
                         Quoted at {riskInputKind === "yield" ? `yield = ${riskBaseValue}%` : `price = ${riskBaseValue}`}
                       </span>
                     </h4>
@@ -475,6 +490,7 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
 
           {!riskData && <EmptyState message="Configure inputs above and click Compute." />}
         </div>
+        )
       )}
     </div>
   );

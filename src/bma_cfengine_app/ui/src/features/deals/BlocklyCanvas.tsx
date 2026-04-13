@@ -38,7 +38,7 @@ export default function BlocklyCanvas({ onChange }: BlocklyCanvasProps) {
       <div className="flex items-center gap-2 mb-2 px-1">
         <Layers className="w-3.5 h-3.5 text-primary" />
         <span className="text-xs font-medium text-foreground">Deal Workspace</span>
-        <span className="text-[10px] text-muted-foreground ml-auto">
+        <span className="text-xs text-muted-foreground ml-auto">
           Sources → Rules → Bonds
         </span>
       </div>

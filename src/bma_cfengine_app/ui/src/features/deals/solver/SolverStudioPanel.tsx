@@ -3,6 +3,7 @@ import { CircleStop, Play, Sigma } from "lucide-react";
 import { toast } from "sonner";
 import CollapsiblePanel from "../../../components/CollapsiblePanel";
 import DataTable, { type DataTableColumn } from "../../../components/DataTable";
+import FormSelect from "../../../components/FormSelect";
 import MetricCard from "../../../components/MetricCard";
 import type { RunListItem } from "../../../services/api";
 import AdvancedJsonEditor from "./AdvancedJsonEditor";
@@ -22,6 +23,7 @@ import type {
 
 interface Props {
   savedDealId: string | null;
+  productFamily: "AGENCY" | "PRIME_JUMBO" | "NON_QM_QRM" | "CUSTOM";
   runBusy: boolean;
   solveBusy: boolean;
   availableRuns: RunListItem[];
@@ -45,6 +47,7 @@ interface Props {
 
 export default function SolverStudioPanel({
   savedDealId,
+  productFamily,
   runBusy,
   solveBusy,
   availableRuns,
@@ -163,7 +166,7 @@ export default function SolverStudioPanel({
         <div className="p-3 space-y-3 text-xs">
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground">Collateral/Assumptions Source</span>
-            <select
+            <FormSelect
               value={solverSpecDraft.sourceMode}
               onChange={(e) =>
                 setSolverSpecDraft((prev) => ({
@@ -171,11 +174,11 @@ export default function SolverStudioPanel({
                   sourceMode: e.target.value as "runsetup_ref" | "deal_native",
                 }))
               }
-              className="px-2 py-1 rounded border border-border bg-input-background text-foreground"
+              className="w-auto"
             >
               <option value="runsetup_ref">Run Setup ref</option>
               <option value="deal_native">Deal-native</option>
-            </select>
+            </FormSelect>
           </div>
 
           <label className="block space-y-1">
@@ -208,7 +211,7 @@ export default function SolverStudioPanel({
 
               <label className="block space-y-1">
                 <span className="text-muted-foreground">Scenario</span>
-                <select
+                <FormSelect
                   value={solverSpecDraft.sourceScenarioName ?? ""}
                   onChange={(e) =>
                     setSolverSpecDraft((prev) => ({
@@ -216,7 +219,6 @@ export default function SolverStudioPanel({
                       sourceScenarioName: e.target.value || null,
                     }))
                   }
-                  className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
                 >
                   <option value="">Auto-select from scenario set</option>
                   {scenarioOptions.map((scenarioName) => (
@@ -224,7 +226,7 @@ export default function SolverStudioPanel({
                       {scenarioName}
                     </option>
                   ))}
-                </select>
+                </FormSelect>
               </label>
             </div>
           ) : (
@@ -257,6 +259,7 @@ export default function SolverStudioPanel({
         <div className="p-3 text-xs">
           <PresetLibrary
             draft={solverSpecDraft}
+            productFamily={productFamily}
             onApplyPreset={(next) => {
               setSolverSpecDraft(next);
               setAdvancedJson((prev) => ({ ...prev, lastSyncedAt: null }));
@@ -326,7 +329,7 @@ export default function SolverStudioPanel({
             onApplyToBuilder={applyJsonToBuilder}
           />
           {builderValidationErrors.length > 0 && (
-            <div className="rounded border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive">
+            <div className="rounded border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
               {builderValidationErrors.map((error) => (
                 <div key={error}>{error}</div>
               ))}
@@ -410,7 +413,7 @@ export default function SolverStudioPanel({
 
       <CollapsiblePanel title="Deal IR drawer" defaultOpen={false}>
         <div className="p-3">
-          <pre className="max-h-[240px] overflow-auto rounded border border-border px-2 py-1 text-[10px]">
+          <pre className="max-h-[240px] overflow-auto rounded border border-border px-2 py-1 text-xs">
             {irErrors.length > 0 ? irErrors.join("\n") : irJson || "// Build the waterfall to see IR"}
           </pre>
         </div>

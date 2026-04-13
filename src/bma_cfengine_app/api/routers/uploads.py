@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, File, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -50,19 +50,47 @@ def _load_mapped_df(upload_id: str, mapping_id: str | None = None):
 
 
 @router.post("/uploads", response_model=UploadResponse)
-async def upload_tape(file: UploadFile = File(...)):
+async def upload_tape(file: UploadFile = File(...), display_name: str | None = Form(None)):
     upload_id = run_store.new_upload_id()
     content = await file.read()
     file_name = file.filename or "tape.csv"
-    run_store.save_upload(upload_id, file_name, content)
+    run_store.save_upload(upload_id, file_name, content, display_name=display_name)
 
     df, _ = run_store.load_upload_df(upload_id)
+    stored_meta = run_store.load_upload_metadata(upload_id)
     return UploadResponse(
         upload_id=upload_id,
         file_name=file_name,
+        display_name=str(stored_meta.get("display_name") or "").strip() or file_name,
         row_count=len(df),
         column_count=len(df.columns),
     )
+
+
+@router.get("/uploads")
+async def list_uploads():
+    return {"items": run_store.list_uploads()}
+
+
+class UploadRenameRequest(BaseModel):
+    display_name: str
+
+
+@router.patch("/uploads/{upload_id}")
+async def rename_upload(upload_id: str, body: UploadRenameRequest):
+    try:
+        meta = run_store.set_upload_display_name(upload_id, body.display_name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Upload {upload_id!r} not found") from e
+    return {
+        "upload_id": upload_id,
+        "display_name": str(meta.get("display_name") or "").strip(),
+    }
+
+
+@router.get("/uploads/{upload_id}/mappings")
+async def list_upload_mappings(upload_id: str):
+    return {"upload_id": upload_id, "items": run_store.list_mappings(upload_id)}
 
 
 @router.get("/uploads/{upload_id}/profile", response_model=TapeProfile)

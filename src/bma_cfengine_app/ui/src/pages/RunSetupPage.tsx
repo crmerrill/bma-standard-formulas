@@ -10,6 +10,7 @@ import * as api from "../services/api";
 import { MONO } from "../lib/format";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import CollapsiblePanel from "../components/CollapsiblePanel";
+import FormSelect from "../components/FormSelect";
 import LoadingState from "../components/LoadingState";
 
 interface Props {
@@ -274,7 +275,7 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
           {tapePreflight.blocking.map((b, i) => (
             <div key={i} className="text-xs text-engine-red/80 pl-6">{b}</div>
           ))}
-          <p className="text-[10px] text-muted-foreground pl-6">
+          <p className="text-xs text-muted-foreground pl-6">
             Go to Tape View &rarr; Data Quality to fix these issues.
           </p>
         </div>
@@ -306,7 +307,7 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
               <div className="space-y-2 text-xs">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Required Indexes (from tape)</p>
+                    <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Required Indexes (from tape)</p>
                     {ratesPreflight.required_indexes.map((idx) => (
                       <div key={idx} className="flex items-center gap-2 py-0.5">
                         <span style={MONO} className="text-foreground">{idx}</span>
@@ -320,7 +321,7 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
                     ))}
                   </div>
                   <div>
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Provided Columns (from file)</p>
+                    <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Provided Columns (from file)</p>
                     {ratesPreflight.provided_columns.length > 0 ? (
                       ratesPreflight.provided_columns.map((col) => (
                         <div key={col} className="py-0.5" style={MONO}>{col}</div>
@@ -360,23 +361,23 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
       >
         <div className="px-4 pb-4 space-y-3">
           <div className="flex items-center gap-2">
-            <select
+            <FormSelect
               value=""
               onChange={(e) => { if (e.target.value) addGroupKey(e.target.value); }}
-              className="px-2 py-1 bg-input-background border border-border rounded text-xs text-foreground flex-1"
+              className="flex-1"
             >
               <option value="">Add column to group by...</option>
               {allColumns.filter((col) => !groupKeys.includes(col)).map((col) => (
                 <option key={col} value={col}>{col}</option>
               ))}
-            </select>
+            </FormSelect>
           </div>
           {groupKeys.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {groupKeys.map((key) => (
                 <span key={key} className="px-2 py-0.5 rounded bg-secondary text-xs text-foreground flex items-center gap-1.5">
                   {key}
-                  <button onClick={() => removeGroupKey(key)} className="text-muted-foreground hover:text-engine-red text-[10px]">x</button>
+                  <button onClick={() => removeGroupKey(key)} className="text-muted-foreground hover:text-engine-red text-xs">x</button>
                 </span>
               ))}
             </div>
@@ -481,13 +482,13 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
                     onPreview={(v) => handleCurvePreview(v, "Severity")} />
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[10px] text-muted-foreground block mb-1">Severity Lag (months)</label>
+                      <label className="text-xs text-muted-foreground block mb-1">Severity Lag (months)</label>
                       <input type="number" value={sc.assumptions.severity_lag_months}
                         onChange={(e) => updateAssumption("severity_lag_months", e.target.value)}
                         className="w-full px-2 py-1 bg-input-background border border-border rounded text-xs" style={MONO} />
                     </div>
                     <div>
-                      <label className="text-[10px] text-muted-foreground block mb-1">Months to Liquidation</label>
+                      <label className="text-xs text-muted-foreground block mb-1">Months to Liquidation</label>
                       <input type="number" value={sc.assumptions.months_to_liquidation}
                         onChange={(e) => updateAssumption("months_to_liquidation", e.target.value)}
                         className="w-full px-2 py-1 bg-input-background border border-border rounded text-xs" style={MONO} />
@@ -519,7 +520,7 @@ export default function RunSetupPage({ uploadId, mappingId, mappings, asofDate, 
                 {overrideCount > 0 && (
                   <button
                     onClick={() => updateScenario({ group_overrides: {} })}
-                    className="ml-auto text-[10px] text-muted-foreground hover:text-engine-red flex items-center gap-1 transition-colors"
+                    className="ml-auto text-xs text-muted-foreground hover:text-engine-red flex items-center gap-1 transition-colors"
                   >
                     <Trash2 className="w-3 h-3" /> Clear all overrides
                   </button>
@@ -633,14 +634,14 @@ function CurveRow({
   return (
     <div className="flex items-center gap-2">
       <label className="text-xs text-muted-foreground w-28 shrink-0">{label}</label>
-      <select value={input.type} onChange={(e) => onChange({ ...input, type: e.target.value as CurveType })}
-        className="px-2 py-1 bg-input-background border border-border rounded text-xs w-24">
+      <FormSelect value={input.type} onChange={(e) => onChange({ ...input, type: e.target.value as CurveType })}
+        className="w-24">
         <option value="constant">Constant</option>
         <option value="psa">PSA</option>
         <option value="sda">SDA</option>
         <option value="vector">Vector</option>
         <option value="ramp">Ramp</option>
-      </select>
+      </FormSelect>
       {input.type === "ramp" ? (
         <textarea value={input.value} onChange={(e) => onChange({ ...input, value: e.target.value })}
           className="flex-1 px-2 py-1 bg-input-background border border-border rounded text-xs resize-none h-8"
@@ -653,7 +654,7 @@ function CurveRow({
       )}
       {onPreview && (
         <button onClick={() => onPreview(input)}
-          className="text-muted-foreground hover:text-primary text-[10px] shrink-0">
+          className="text-muted-foreground hover:text-primary text-xs shrink-0">
           <BarChart3 className="w-3.5 h-3.5" />
         </button>
       )}
@@ -687,14 +688,14 @@ function GroupOverrideRow({
         </button>
         {hasOverride ? (
           <div className="flex items-center gap-2 shrink-0 ml-2">
-            <span className="text-engine-blue text-[9px]">overridden</span>
+            <span className="text-engine-blue text-xs">overridden</span>
             <button onClick={(e) => { e.stopPropagation(); onClear(); }}
               className="text-muted-foreground hover:text-engine-red" title="Clear this group override">
               <X className="w-3 h-3" />
             </button>
           </div>
         ) : (
-          <span className="text-muted-foreground/40 text-[9px] shrink-0 ml-2">inherits</span>
+          <span className="text-muted-foreground/40 text-xs shrink-0 ml-2">inherits</span>
         )}
       </div>
       {expanded && (
@@ -706,7 +707,7 @@ function GroupOverrideRow({
           <CurveRow label="Severity" input={override?.severity ?? { type: "constant", value: "" }}
             onChange={(v) => onUpdate({ ...override, severity: v })} />
           {hasOverride && (
-            <button onClick={onClear} className="text-[10px] text-muted-foreground hover:text-engine-red flex items-center gap-1">
+            <button onClick={onClear} className="text-xs text-muted-foreground hover:text-engine-red flex items-center gap-1">
               <Trash2 className="w-3 h-3" /> Clear overrides
             </button>
           )}

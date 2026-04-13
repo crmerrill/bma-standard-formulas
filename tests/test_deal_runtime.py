@@ -18,17 +18,22 @@ from bma_standard_formulas.deals.deal_library import (
 from bma_standard_formulas.deals.runtime import run_deal
 from bma_standard_formulas.deals.schema import DealValidationError, validate_deal
 from bma_standard_formulas.deals.adapters import from_collateral_dict
+from bma_standard_formulas.deals.schemas.migrations import migrate_deal_payload
 from bma_standard_formulas.deals.schemas.input import (
     CollateralCashflows,
     DealRunInput,
     PooledCollateralInput,
 )
 from bma_standard_formulas.deals.schemas.ir import (
+    AccountDef,
     BondDef,
+    CalculationNode,
     DealDefinition,
+    FeeDef,
     RuleNode,
+    TriggerNode,
 )
-from bma_standard_formulas.deals.schemas.common import RuleType, TrancheType
+from bma_standard_formulas.deals.schemas.common import RuleType, TrancheType, TriggerMetricType
 
 TOLERANCE = 1e-2
 
@@ -174,6 +179,137 @@ class TestThreeClass:
         assert "PAY_INTEREST" in rule_types
         assert "PAY_PRINCIPAL" in rule_types
 
+    def test_pool_bps_fee_is_applied(self):
+        deal = DealDefinition(
+            deal_name="FeeBpsDeal",
+            bonds=[
+                BondDef(name="SERVICER_FEE", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            fees=[
+                FeeDef(
+                    name="SERVICER_FEE",
+                    basis_type="COLLATERAL_BALANCE",
+                    rate=0.5,  # 50 bps = 0.50% annual.
+                )
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="fee_1",
+                    rule_type=RuleType.PAY_FEE,
+                    order=0,
+                    from_sources=["COLLATERAL"],
+                    to_targets=["SERVICER_FEE"],
+                ),
+                RuleNode(
+                    rule_id="resid_1",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=1,
+                    from_sources=["COLLATERAL"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=1_000_000,
+            n_periods=3,
+            monthly_principal_rate=0.0,
+            annual_coupon=12.0,
+            monthly_loss_rate=0.0,
+        )
+        result = run_deal(deal, run_input)
+        fee_totals = _bond_totals(result, "SERVICER_FEE")
+        # 0.50% annual -> 1,000,000 * 0.50% / 12 = 416.67 per month, two active periods.
+        assert fee_totals["interest"] == pytest.approx(833.33, rel=0.02)
+
+    def test_pool_bps_fee_honors_quarterly_frequency(self):
+        deal = DealDefinition(
+            deal_name="FeeBpsQuarterly",
+            bonds=[
+                BondDef(name="SERVICER_FEE", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            fees=[
+                FeeDef(
+                    name="SERVICER_FEE",
+                    basis_type="COLLATERAL_BALANCE",
+                    rate=1.2,  # 1.20% annual.
+                    frequency="QUARTERLY",
+                )
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="fee_1",
+                    rule_type=RuleType.PAY_FEE,
+                    order=0,
+                    from_sources=["COLLATERAL"],
+                    to_targets=["SERVICER_FEE"],
+                ),
+                RuleNode(
+                    rule_id="resid_1",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=1,
+                    from_sources=["COLLATERAL"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=1_000_000,
+            n_periods=13,
+            monthly_principal_rate=0.0,
+            annual_coupon=24.0,
+            monthly_loss_rate=0.0,
+        )
+        result = run_deal(deal, run_input)
+        fee_totals = _bond_totals(result, "SERVICER_FEE")
+        # Quarterly frequency with 1.20% annual rate -> 3,000 per payment, four payments.
+        assert fee_totals["interest"] == pytest.approx(12_000.0, rel=0.01)
+
+    def test_pool_bps_fee_honors_annual_frequency(self):
+        deal = DealDefinition(
+            deal_name="FeeBpsAnnual",
+            bonds=[
+                BondDef(name="SERVICER_FEE", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            fees=[
+                FeeDef(
+                    name="SERVICER_FEE",
+                    basis_type="COLLATERAL_BALANCE",
+                    rate=1.2,  # 1.20% annual.
+                    frequency="ANNUAL",
+                )
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="fee_1",
+                    rule_type=RuleType.PAY_FEE,
+                    order=0,
+                    from_sources=["COLLATERAL"],
+                    to_targets=["SERVICER_FEE"],
+                ),
+                RuleNode(
+                    rule_id="resid_1",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=1,
+                    from_sources=["COLLATERAL"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=1_000_000,
+            n_periods=13,
+            monthly_principal_rate=0.0,
+            annual_coupon=24.0,
+            monthly_loss_rate=0.0,
+        )
+        result = run_deal(deal, run_input)
+        fee_totals = _bond_totals(result, "SERVICER_FEE")
+        # Annual: one payment at month 12 equal to annual fee.
+        assert fee_totals["interest"] == pytest.approx(12_000.0, rel=0.01)
+
 
 # ---------------------------------------------------------------------------
 # Jumbo sequential tests
@@ -278,3 +414,164 @@ class TestSchemaValidation:
                              to_targets=["NONEXISTENT"]),
                 ],
             )
+
+
+class TestGeneralizedRuntime:
+    def test_rule_max_amount_expression_is_applied(self):
+        deal = DealDefinition(
+            deal_name="MaxAmountExpr",
+            bonds=[
+                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, size_pct=100.0, coupon=0.0),
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="prin_cap",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["A"],
+                    max_amount_expr="1000 + period",
+                ),
+                RuleNode(
+                    rule_id="resid",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=1,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=100_000,
+            n_periods=3,
+            monthly_principal_rate=0.0,
+            annual_coupon=120.0,
+            monthly_loss_rate=0.0,
+        )
+        result = run_deal(deal, run_input)
+        a_rows = [r for r in result.bond_cashflows if r.tranche_id == "A" and r.period > 0]
+        assert a_rows[0].total_principal == pytest.approx(1001.0, rel=1e-6)
+        assert a_rows[1].total_principal == pytest.approx(1002.0, rel=1e-6)
+
+    def test_fee_amount_expression_uses_loan_count_and_survival(self):
+        deal = DealDefinition(
+            deal_name="FeeExpr",
+            bonds=[
+                BondDef(name="FEE", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            fees=[
+                FeeDef(
+                    name="FEE",
+                    basis_type="FIXED_DOLLAR",
+                    amount_expr="1.2 * loan_count * surv_fac_prev",
+                )
+            ],
+            waterfall_rules=[
+                RuleNode(rule_id="fee", rule_type=RuleType.PAY_FEE, order=0, from_sources=["CASH"], to_targets=["FEE"]),
+                RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=1, from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=1_000_000,
+            n_periods=3,
+            monthly_principal_rate=0.0,
+            annual_coupon=24.0,
+            monthly_loss_rate=0.0,
+        )
+        run_input.loan_count = 100
+        result = run_deal(deal, run_input)
+        fee_totals = _bond_totals(result, "FEE")
+        # Monthly amount should be 0.1 * loan_count = 10 for each active period.
+        assert fee_totals["interest"] == pytest.approx(20.0, rel=0.01)
+
+    def test_account_rows_emitted_for_reserve_accounts(self):
+        deal = DealDefinition(
+            deal_name="AccountLedger",
+            bonds=[
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            accounts=[
+                AccountDef(name="RESV", account_type="RESERVE", starting_amount=100.0)
+            ],
+            waterfall_rules=[
+                RuleNode(rule_id="fund", rule_type=RuleType.PAY_TO_RESERVE, order=0, from_sources=["CASH"], to_targets=["RESV"], max_amount_fixed=50.0),
+                RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=1, from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=100_000,
+            n_periods=3,
+            monthly_principal_rate=0.0,
+            annual_coupon=12.0,
+            monthly_loss_rate=0.0,
+        )
+        result = run_deal(deal, run_input)
+        reserve_rows = [r for r in result.deal_accounts if r.account_id == "RESV" and r.period > 0]
+        assert len(reserve_rows) == 2
+        assert reserve_rows[0].deposit == pytest.approx(50.0, rel=1e-6)
+
+    def test_trigger_uses_calculation_refs(self):
+        deal = DealDefinition(
+            deal_name="TriggerCalcRef",
+            bonds=[
+                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, size_pct=100.0, coupon=0.0),
+                BondDef(name="TRIG", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
+                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            calculations=[
+                CalculationNode(name="metric_calc", expression="collateral_loss * 2"),
+                CalculationNode(name="threshold_calc", expression="100"),
+            ],
+            triggers=[
+                TriggerNode(
+                    name="TRIG",
+                    metric_type=TriggerMetricType.CUSTOM,
+                    calculation_ref="metric_calc",
+                    comparison_ref="threshold_calc",
+                ),
+            ],
+            waterfall_rules=[
+                RuleNode(rule_id="a_int", rule_type=RuleType.PAY_INTEREST, order=0, from_sources=["CASH"], to_targets=["A"], condition_trigger="TRIG"),
+                RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=1, from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=1_000_000,
+            n_periods=3,
+            monthly_principal_rate=0.0,
+            annual_coupon=0.0,
+            monthly_loss_rate=0.001,
+        )
+        result = run_deal(deal, run_input)
+        assert any(row.trigger_id == "TRIG" for row in result.trigger_state_history)
+
+    def test_collect_trace_false_preserves_api_contract(self):
+        deal = passthrough_deal()
+        run_input, _ = _make_simple_collateral(initial_balance=500_000, n_periods=6)
+        result = run_deal(deal, run_input, collect_trace=False)
+        assert result.scenario_name == "Base Case"
+        assert len(result.bond_cashflows) == 6
+        assert result.waterfall_trace == []
+
+    def test_migration_helper_injects_new_optional_fields(self):
+        payload = {
+            "deal_name": "LegacyPayload",
+            "bonds": [{"name": "A"}, {"name": "R", "is_bond": False, "is_pseudo": True}],
+            "fees": [{"name": "FEE", "basis_type": "FIXED_DOLLAR", "amount": 0.0}],
+            "triggers": [{"name": "TRIG", "metric_type": "CUSTOM"}],
+            "waterfall_rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_type": "PAY_RESIDUAL",
+                    "order": 0,
+                    "from_sources": ["CASH"],
+                    "to_targets": ["R"],
+                }
+            ],
+        }
+        migrated = migrate_deal_payload(payload)
+        assert "amount_expr" in migrated["fees"][0]
+        assert "rate_expr" in migrated["fees"][0]
+        assert "max_amount_expr" in migrated["waterfall_rules"][0]

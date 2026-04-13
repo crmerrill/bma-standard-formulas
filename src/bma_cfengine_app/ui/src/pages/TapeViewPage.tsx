@@ -2,17 +2,18 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3, Hash, DollarSign, Percent, Clock, ChevronDown, Table2,
   Layers, Filter, X, GripVertical, AlertTriangle, Check, Wrench, Eye,
-  Loader2, Plus, Trash2, Download, FileSpreadsheet, PieChart, ListTree,
+  Loader2, Plus, Trash2, Download, FileSpreadsheet, PieChart, ListTree, FolderOpen,
 } from "lucide-react";
 import type {
   TapeStats, TapePreview, StratDimension, StratResult,
   DiagnoseResult, RepairPreview, TapeSummaryResult, UniqueValuesResult,
 } from "../services/api";
 import * as api from "../services/api";
-import { MONO, fmtCcy, fmtNum, STRAT_COL_LABELS, formatStratCell } from "../lib/format";
+import { MONO, fmtCcy, fmtNamedId, fmtNum, STRAT_COL_LABELS, formatStratCell } from "../lib/format";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import TabBar from "../components/TabBar";
 import MetricCard from "../components/MetricCard";
+import FormSelect from "../components/FormSelect";
 import SummaryRow from "../components/SummaryRow";
 import CollapsiblePanel from "../components/CollapsiblePanel";
 import LoadingState from "../components/LoadingState";
@@ -29,9 +30,10 @@ interface ColumnFilter {
 interface Props {
   uploadId: string;
   mappingId: string;
+  onOpenTape: (uploadId: string, mappingId: string) => Promise<void> | void;
 }
 
-export default function TapeViewPage({ uploadId, mappingId }: Props) {
+export default function TapeViewPage({ uploadId, mappingId, onOpenTape }: Props) {
   const [stats, setStats] = useState<TapeStats | null>(null);
   const [preview, setPreview] = useState<TapePreview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,6 +75,13 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
   const [applyingRule, setApplyingRule] = useState<string | null>(null);
   const [hasWorkingCopy, setHasWorkingCopy] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [uploadLibrary, setUploadLibrary] = useState<api.UploadLibraryItem[]>([]);
+  const [selectedUploadId, setSelectedUploadId] = useState(uploadId);
+  const [uploadMappings, setUploadMappings] = useState<api.UploadMappingSummary[]>([]);
+  const [selectedMappingId, setSelectedMappingId] = useState(mappingId);
+  const [openingTape, setOpeningTape] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renamingTape, setRenamingTape] = useState(false);
 
   const reload = () => {
     setLoading(true);
@@ -96,6 +105,65 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
   useEffect(() => {
     reload();
   }, [uploadId, mappingId, refreshKey]);
+
+  useEffect(() => {
+    setSelectedUploadId(uploadId);
+  }, [uploadId]);
+
+  useEffect(() => {
+    setSelectedMappingId(mappingId);
+  }, [mappingId]);
+
+  useEffect(() => {
+    api.listUploads()
+      .then((res) => setUploadLibrary(res.items))
+      .catch(() => setUploadLibrary([]));
+  }, [refreshKey]);
+
+  useEffect(() => {
+    const selected = uploadLibrary.find((item) => item.upload_id === selectedUploadId);
+    if (!selected) return;
+    setRenameDraft((selected.display_name || selected.file_name || "").trim());
+  }, [uploadLibrary, selectedUploadId]);
+
+  useEffect(() => {
+    if (!selectedUploadId) {
+      setUploadMappings([]);
+      return;
+    }
+    api.listUploadMappings(selectedUploadId)
+      .then((res) => {
+        setUploadMappings(res.items);
+        setSelectedMappingId((prev) => {
+          if (prev && res.items.some((m) => m.mapping_id === prev)) return prev;
+          return res.items[0]?.mapping_id ?? "";
+        });
+      })
+      .catch(() => setUploadMappings([]));
+  }, [selectedUploadId]);
+
+  const handleOpenSelectedTape = async () => {
+    if (!selectedUploadId || !selectedMappingId) return;
+    setOpeningTape(true);
+    try {
+      await onOpenTape(selectedUploadId, selectedMappingId);
+    } finally {
+      setOpeningTape(false);
+    }
+  };
+
+  const handleRenameSelectedTape = async () => {
+    if (!selectedUploadId || !renameDraft.trim()) return;
+    setRenamingTape(true);
+    try {
+      await api.renameUpload(selectedUploadId, renameDraft.trim());
+      const refreshed = await api.listUploads();
+      setUploadLibrary(refreshed.items);
+      setRefreshKey((k) => k + 1);
+    } finally {
+      setRenamingTape(false);
+    }
+  };
 
   const handlePreviewRepair = async (ruleId: string) => {
     setPreviewingRule(ruleId);
@@ -372,6 +440,70 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
 
   return (
     <div className="space-y-4">
+      <div className="rounded-lg border border-border bg-card px-3 py-2 flex flex-wrap items-end gap-2">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground w-full">
+          Tape Library
+        </div>
+        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          Tape
+          <FormSelect
+            value={selectedUploadId}
+            onChange={(e) => setSelectedUploadId(e.target.value)}
+            className="min-w-[280px]"
+          >
+            {uploadLibrary.length === 0 && <option value="">No saved tapes</option>}
+            {uploadLibrary.map((item) => (
+              <option key={item.upload_id} value={item.upload_id}>
+                {fmtNamedId(item.display_name || item.file_name, item.upload_id)}
+              </option>
+            ))}
+          </FormSelect>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          Friendly name
+          <div className="flex items-center gap-1.5">
+            <input
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              className="min-w-[220px] px-2 py-1 rounded border border-border bg-input-background text-xs text-foreground"
+              placeholder="Tape name"
+            />
+            <button
+              type="button"
+              onClick={handleRenameSelectedTape}
+              disabled={!selectedUploadId || !renameDraft.trim() || renamingTape}
+              className="px-2.5 py-1 rounded border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
+            >
+              {renamingTape ? "Saving..." : "Save name"}
+            </button>
+          </div>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          Mapping
+          <FormSelect
+            value={selectedMappingId}
+            onChange={(e) => setSelectedMappingId(e.target.value)}
+            className="min-w-[220px]"
+          >
+            {uploadMappings.length === 0 && <option value="">No mappings</option>}
+            {uploadMappings.map((item) => (
+              <option key={item.mapping_id} value={item.mapping_id}>
+                {item.mapping_id} ({item.mapped_fields} fields)
+              </option>
+            ))}
+          </FormSelect>
+        </label>
+        <button
+          type="button"
+          onClick={handleOpenSelectedTape}
+          disabled={!selectedUploadId || !selectedMappingId || openingTape}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
+        >
+          <FolderOpen className="w-3.5 h-3.5" />
+          {openingTape ? "Opening..." : "Open tape"}
+        </button>
+      </div>
+
       {/* Stats cards */}
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
@@ -417,12 +549,12 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
             </h3>
             {hasWorkingCopy && (
               <>
-                <span className="px-1.5 py-0.5 rounded bg-engine-blue/10 border border-engine-blue/20 text-engine-blue text-[9px]">
+                <span className="px-1.5 py-0.5 rounded bg-engine-blue/10 border border-engine-blue/20 text-engine-blue text-xs">
                   Working Copy
                 </span>
                 <button
                   onClick={handleRevert}
-                  className="text-[10px] text-muted-foreground hover:text-engine-red transition-colors ml-auto"
+                  className="text-xs text-muted-foreground hover:text-engine-red transition-colors ml-auto"
                 >
                   Revert to original
                 </button>
@@ -433,7 +565,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
           {/* Missing values summary */}
           {diagnosis.issues.length > 0 && (
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+              <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
                 Missing Values
               </p>
               <div className="flex flex-wrap gap-2">
@@ -446,7 +578,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                     <span className="text-engine-amber" style={MONO}>
                       {issue.missing_count}
                     </span>
-                    <span className="text-muted-foreground text-[9px]">
+                    <span className="text-muted-foreground text-xs">
                       ({issue.missing_pct}%)
                     </span>
                   </div>
@@ -458,7 +590,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
           {/* Available repairs */}
           {diagnosis.available_repairs.length > 0 && (
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+              <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
                 Available Fixes
               </p>
               <div className="space-y-2">
@@ -564,7 +696,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
           {/* Filter bar */}
           <div className="bg-grid-header px-3 py-2 flex items-center gap-2 text-xs border-b border-border min-h-[36px]">
             <Filter className={`w-3.5 h-3.5 shrink-0 ${hasFilters ? "text-primary" : "text-muted-foreground/50"}`} />
-            <span className={`text-[10px] uppercase tracking-wider shrink-0 ${hasFilters ? "text-primary" : "text-muted-foreground/50"}`}>
+            <span className={`text-xs uppercase tracking-wider shrink-0 ${hasFilters ? "text-primary" : "text-muted-foreground/50"}`}>
               Filtered By
             </span>
             {hasFilters ? (
@@ -595,7 +727,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                         >
                           {f.column}
                         </button>
-                        <span className="text-muted-foreground text-[9px]">
+                        <span className="text-muted-foreground text-xs">
                           ({f.selected.size}/{totalForCol}{availableInContext < totalForCol ? ` · ${availableInContext} in view` : ""})
                         </span>
                         <button
@@ -610,13 +742,13 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                 </div>
                 <button
                   onClick={clearAllFilters}
-                  className="text-muted-foreground hover:text-foreground text-[10px] shrink-0"
+                  className="text-muted-foreground hover:text-foreground text-xs shrink-0"
                 >
                   Clear all
                 </button>
               </>
             ) : (
-              <span className="text-muted-foreground/40 text-[10px] flex-1">
+              <span className="text-muted-foreground/40 text-xs flex-1">
                 Click column headers to add filters
               </span>
             )}
@@ -729,7 +861,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                             <div className="flex-1 bg-secondary rounded-full h-2 overflow-hidden">
                               <div className="h-2 rounded-full" style={{ width: `${100 - r.missing_pct}%`, backgroundColor: r.missing_pct > 50 ? "var(--engine-red)" : r.missing_pct > 10 ? "var(--engine-amber)" : "var(--engine-green)" }} />
                             </div>
-                            <span className="text-[10px] text-muted-foreground w-10 text-right shrink-0">{(100 - r.missing_pct).toFixed(0)}%</span>
+                            <span className="text-xs text-muted-foreground w-10 text-right shrink-0">{(100 - r.missing_pct).toFixed(0)}%</span>
                           </div>
                         )},
                       ] as DataTableColumn<any>[]}
@@ -790,9 +922,9 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                     { id: "top_values", header: "Top Values (by frequency)", accessorKey: "top_values", size: 400, mono: false, cell: (v: any) => v?.length > 0 ? (
                       <div className="flex flex-wrap gap-1">
                         {v.slice(0, 15).map((val: unknown, vi: number) => (
-                          <span key={vi} className="px-1.5 py-0.5 rounded bg-secondary text-[10px]" style={MONO}>{String(val)}</span>
+                          <span key={vi} className="px-1.5 py-0.5 rounded bg-secondary text-xs" style={MONO}>{String(val)}</span>
                         ))}
-                        {v.length > 15 && <span className="text-[10px] text-muted-foreground/60">+{v.length - 15} more</span>}
+                        {v.length > 15 && <span className="text-xs text-muted-foreground/60">+{v.length - 15} more</span>}
                       </div>
                     ) : <span className="text-muted-foreground/40 italic">too many unique values</span> },
                   ] as DataTableColumn<any>[]}
@@ -851,12 +983,12 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                 {dims.map((dim, di) => (
                   <div key={di} className="flex items-center gap-3 flex-wrap">
                     {di === 0 && <Layers className="w-3.5 h-3.5 text-primary shrink-0" />}
-                    {di > 0 && <span className="w-3.5 text-center text-[10px] text-muted-foreground shrink-0">×</span>}
+                    {di > 0 && <span className="w-3.5 text-center text-xs text-muted-foreground shrink-0">×</span>}
                     <div className="relative">
-                      <select
+                      <FormSelect
                         value={dim}
                         onChange={(e) => handleSetDimension(sg.id, di, e.target.value)}
-                        className="appearance-none px-3 py-1.5 pr-8 bg-input-background border border-border rounded text-xs text-foreground min-w-[240px]"
+                        className="appearance-none pr-8 min-w-[240px] px-3 py-1.5"
                       >
                         <option value="">Select a column...</option>
                         {dimensions.map((d) => (
@@ -864,7 +996,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                             {d.column} ({d.type}, {d.unique} unique)
                           </option>
                         ))}
-                      </select>
+                      </FormSelect>
                       <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
                     </div>
                     {di > 0 && (
@@ -880,14 +1012,14 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                 <div className="flex items-center gap-2 pt-1">
                   <button
                     onClick={() => handleAddDimToGroup(sg.id)}
-                    className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
                   >
                     <Plus className="w-3 h-3" /> Add dimension
                   </button>
                   <button
                     onClick={() => handleRunStrat(sg.id)}
                     disabled={sg.loading || dims.filter(Boolean).length === 0}
-                    className="px-3 py-1 rounded border border-primary/20 bg-primary/10 text-primary text-[10px] hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="px-3 py-1 rounded border border-primary/20 bg-primary/10 text-primary text-xs hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {sg.loading ? "Computing..." : "Run Strat"}
                   </button>
@@ -937,7 +1069,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                     }}
                   />
                   {sg.dimensions.length === 1 && (
-                    <div className="px-3 py-1.5 text-[10px] text-muted-foreground border-t border-border">
+                    <div className="px-3 py-1.5 text-xs text-muted-foreground border-t border-border">
                       Click a row to drill down within that bucket.
                     </div>
                   )}
@@ -961,10 +1093,10 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="relative">
-                      <select
+                      <FormSelect
                         value={sg.drillDown.dimension}
                         onChange={(e) => handleRunDrillDown(sg.id, e.target.value)}
-                        className="appearance-none px-3 py-1.5 pr-8 bg-input-background border border-border rounded text-xs text-foreground min-w-[240px]"
+                        className="appearance-none pr-8 min-w-[240px] px-3 py-1.5"
                       >
                         <option value="">Select drill-down dimension...</option>
                         {dimensions.map((d) => (
@@ -972,7 +1104,7 @@ export default function TapeViewPage({ uploadId, mappingId }: Props) {
                             {d.column} ({d.type}, {d.unique} unique)
                           </option>
                         ))}
-                      </select>
+                      </FormSelect>
                       <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
                     </div>
                     {sg.drillDown.loading && (
@@ -1080,13 +1212,13 @@ function FilterDropdown({
         <div className="flex-1" />
         <button
           onClick={onSelectAll}
-          className="text-[10px] text-muted-foreground hover:text-foreground"
+          className="text-xs text-muted-foreground hover:text-foreground"
         >
           All
         </button>
         <button
           onClick={onSelectNone}
-          className="text-[10px] text-muted-foreground hover:text-foreground"
+          className="text-xs text-muted-foreground hover:text-foreground"
         >
           None
         </button>
@@ -1124,7 +1256,7 @@ function FilterDropdown({
                 {val || "(blank)"}
               </span>
               {!inContext && (
-                <span className="text-[9px] text-muted-foreground ml-auto shrink-0">
+                <span className="text-xs text-muted-foreground ml-auto shrink-0">
                   filtered out
                 </span>
               )}
@@ -1132,12 +1264,12 @@ function FilterDropdown({
           );
         })}
         {displayed.length === 0 && (
-          <div className="text-muted-foreground text-[10px] py-2 text-center">
+          <div className="text-muted-foreground text-xs py-2 text-center">
             No matching values
           </div>
         )}
       </div>
-      <div className="text-[10px] text-muted-foreground">
+      <div className="text-xs text-muted-foreground">
         {inContextCount} of {allValues.length} values in current view
       </div>
     </div>

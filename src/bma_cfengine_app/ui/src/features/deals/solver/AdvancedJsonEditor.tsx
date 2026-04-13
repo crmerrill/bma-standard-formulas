@@ -30,7 +30,7 @@ export default function AdvancedJsonEditor({
         rows={12}
         className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground text-xs"
       />
-      {state.parseError && <div className="text-[11px] text-destructive">{state.parseError}</div>}
+      {state.parseError && <div className="text-xs text-destructive">{state.parseError}</div>}
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -53,7 +53,7 @@ export default function AdvancedJsonEditor({
         >
           Apply JSON to builder
         </button>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           {state.lastSyncedAt ? `Last sync: ${new Date(state.lastSyncedAt).toLocaleTimeString()}` : "Not synced"}
         </span>
       </div>

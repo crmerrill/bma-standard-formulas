@@ -12,14 +12,17 @@ from pathlib import Path
 from typing import Any
 
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
+from bma_standard_formulas.deals.schemas.migrations import migrate_deal_payload
 
 from ...storage.run_store import APP_HOME
 
 _DEALS_DIR = APP_HOME / "deals"
+_POOLS_DIR = APP_HOME / "pools"
 
 
 def init_deals_workspace() -> Path:
     _DEALS_DIR.mkdir(parents=True, exist_ok=True)
+    _POOLS_DIR.mkdir(parents=True, exist_ok=True)
     return _DEALS_DIR
 
 
@@ -27,8 +30,18 @@ def new_deal_id() -> str:
     return f"deal_{uuid.uuid4().hex[:12]}"
 
 
+def new_pool_id() -> str:
+    return f"pool_{uuid.uuid4().hex[:12]}"
+
+
 def deal_dir(deal_id: str) -> Path:
     p = _DEALS_DIR / deal_id
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def pool_dir(pool_id: str) -> Path:
+    p = _POOLS_DIR / pool_id
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -105,7 +118,8 @@ def load_deal(deal_id: str, version: int | None = None) -> DealDefinition:
             f"Version {target_version} not found for deal {deal_id}"
         )
 
-    return DealDefinition.model_validate_json(version_file.read_text())
+    payload = json.loads(version_file.read_text())
+    return DealDefinition.model_validate(migrate_deal_payload(payload))
 
 
 def load_deal_manifest(deal_id: str) -> dict[str, Any]:
@@ -292,3 +306,89 @@ def save_solver_preset(
     manifest["updated_at"] = now
     manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Tape/Pool registry — versioned named pool snapshots
+# ---------------------------------------------------------------------------
+
+
+def save_pool_snapshot(
+    pool_id: str | None,
+    pool_name: str,
+    payload: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    init_deals_workspace()
+    pid = pool_id or new_pool_id()
+    d = pool_dir(pid)
+    manifest_path = d / "manifest.json"
+    now = datetime.now(timezone.utc).isoformat()
+
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+    else:
+        manifest = {"pool_id": pid, "pool_name": pool_name, "created_at": now}
+
+    manifest["pool_id"] = pid
+    manifest["pool_name"] = pool_name
+    manifest["updated_at"] = now
+    cur = int(manifest.get("current_version", 0) or 0)
+    new_ver = cur + 1
+    manifest["current_version"] = new_ver
+    manifest.setdefault("versions", []).append({"version": new_ver, "created_at": now})
+
+    body = {
+        "pool_id": pid,
+        "pool_name": pool_name,
+        "saved_at": now,
+        "version": new_ver,
+        "payload": payload,
+    }
+    (d / f"v{new_ver}.json").write_text(json.dumps(body, indent=2, default=str))
+    manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
+    return pid, {"pool_id": pid, "pool_name": pool_name, "version": new_ver, "saved_at": now}
+
+
+def load_pool_snapshot(pool_id: str, version: int | None = None) -> dict[str, Any]:
+    d = pool_dir(pool_id)
+    manifest_path = d / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"No pool {pool_id!r}")
+    manifest = json.loads(manifest_path.read_text())
+    ver = version if version is not None else int(manifest.get("current_version", 0) or 0)
+    if ver < 1:
+        raise FileNotFoundError(f"No versions found for pool {pool_id!r}")
+    path = d / f"v{ver}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"v{ver}.json not found for pool {pool_id!r}")
+    return json.loads(path.read_text())
+
+
+def list_pool_snapshots(search: str | None = None) -> list[dict[str, Any]]:
+    init_deals_workspace()
+    out: list[dict[str, Any]] = []
+    if not _POOLS_DIR.exists():
+        return out
+    needle = (search or "").strip().lower()
+    for sub in sorted(_POOLS_DIR.iterdir(), key=lambda p: p.name):
+        if not sub.is_dir() or not sub.name.startswith("pool_"):
+            continue
+        mp = sub / "manifest.json"
+        if not mp.exists():
+            continue
+        try:
+            m = json.loads(mp.read_text())
+        except Exception:
+            continue
+        row = {
+            "pool_id": m.get("pool_id", sub.name),
+            "pool_name": m.get("pool_name", ""),
+            "current_version": int(m.get("current_version", 0) or 0),
+            "updated_at": m.get("updated_at", m.get("created_at", "")),
+            "created_at": m.get("created_at", ""),
+        }
+        if needle and needle not in f"{row['pool_name']} {row['pool_id']}".lower():
+            continue
+        out.append(row)
+    out.sort(key=lambda r: r.get("updated_at", ""), reverse=True)
+    return out

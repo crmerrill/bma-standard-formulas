@@ -269,3 +269,121 @@ def test_solver_progress_and_cancel_contract(monkeypatch):
     cancel_res = client.post("/api/deals/deal_x/runs/run_solver/cancel")
     assert cancel_res.status_code == 200
     assert cancel_res.json()["cancel_requested"] is True
+
+
+def test_pool_snapshot_contract(monkeypatch):
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    monkeypatch.setattr(
+        deals_router,
+        "list_pool_snapshots",
+        lambda search=None: [
+            {
+                "pool_id": "pool_abc",
+                "pool_name": "Prime Jumbo",
+                "current_version": 3,
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        deals_router,
+        "load_pool_snapshot",
+        lambda pool_id, version=None: {
+            "pool_id": pool_id,
+            "pool_name": "Prime Jumbo",
+            "version": version or 3,
+            "payload": {"tapeId": "upload_1"},
+        },
+    )
+    monkeypatch.setattr(
+        deals_router,
+        "save_pool_snapshot",
+        lambda pool_id, pool_name, payload: (
+            pool_id or "pool_new",
+            {
+                "pool_id": pool_id or "pool_new",
+                "pool_name": pool_name,
+                "version": 1,
+                "saved_at": "2026-01-01T00:00:00Z",
+            },
+        ),
+    )
+
+    client = TestClient(app)
+
+    list_res = client.get("/api/deals/pools?search=prime")
+    assert list_res.status_code == 200
+    assert list_res.json()["items"][0]["pool_id"] == "pool_abc"
+
+    get_res = client.get("/api/deals/pools/pool_abc?version=2")
+    assert get_res.status_code == 200
+    assert get_res.json()["version"] == 2
+
+    post_res = client.post(
+        "/api/deals/pools",
+        json={"pool_name": "Prime Jumbo", "payload": {"tapeId": "upload_1"}},
+    )
+    assert post_res.status_code == 200
+    assert post_res.json()["pool_id"] == "pool_new"
+
+
+def test_ensure_canonical_deal_normalizes_legacy_enums(monkeypatch):
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        deals_router,
+        "load_deal",
+        lambda deal_id, version=None: (_ for _ in ()).throw(FileNotFoundError("missing canonical")),
+    )
+    monkeypatch.setattr(
+        deals_router,
+        "load_studio_snapshot",
+        lambda deal_id, version=None: {
+            "ir": {
+                "schema_version": "1.0.0",
+                "deal_name": "Legacy Deal",
+                "bonds": [
+                    {
+                        "name": "A",
+                        "tranche_type": "SEQUENTIAL",
+                        "coupon_type": "FIXED",
+                        "coupon": 5.0,
+                        "size_dollars": 100.0,
+                    }
+                ],
+                "accounts": [],
+                "fees": [
+                    {"name": "SERVICER", "basis_type": "PCT_POOL", "amount": 0.0, "bps": 25.0}
+                ],
+                "triggers": [
+                    {"name": "CumLoss", "metric_type": "CUM_LOSS", "threshold_value": 0.05}
+                ],
+                "waterfall_rules": [
+                    {
+                        "rule_id": "rule_1",
+                        "rule_type": "PAY_INTEREST",
+                        "order": 0,
+                        "from_sources": ["COLLECTION"],
+                        "to_targets": ["A"],
+                        "payment_style": "SEQUENTIAL",
+                    }
+                ],
+                "deal_knobs": {},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        deals_router,
+        "save_canonical_deal",
+        lambda deal_id, canonical, version=None: captured.update({"deal_id": deal_id, "canonical": canonical}),
+    )
+
+    canonical = deals_router._ensure_canonical_deal("deal_legacy")
+    assert canonical.fees[0].basis_type.value == "COLLATERAL_BALANCE"
+    assert canonical.fees[0].rate == 0.25
+    assert canonical.triggers[0].metric_type.value == "CUMULATIVE_LOSS"
+    assert canonical.waterfall_rules[0].from_sources == ["CASH"]
+    assert captured["deal_id"] == "deal_legacy"

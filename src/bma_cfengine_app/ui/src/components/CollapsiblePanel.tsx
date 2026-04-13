@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { ChevronRight, Check, AlertTriangle } from "lucide-react";
+import { shell, text } from "./system/ui";
 
 interface Props {
   icon?: React.ElementType;
@@ -27,8 +28,9 @@ export default function CollapsiblePanel({
   const toggle = onToggle ?? (() => setInternalOpen((v) => !v));
 
   return (
-    <div className="border border-border rounded-lg overflow-clip">
+    <div className={shell.panel}>
       <button
+        type="button"
         onClick={toggle}
         className="w-full bg-grid-header px-3 py-2 text-xs flex items-center gap-2 hover:bg-grid-row-hover transition-colors"
       >
@@ -38,7 +40,7 @@ export default function CollapsiblePanel({
           }`}
         />
         {Icon && <Icon className="w-3.5 h-3.5 text-primary" />}
-        <span className="text-foreground font-medium">{title}</span>
+        <span className={text.sectionTitle}>{title}</span>
         {badge && (
           <span className="text-muted-foreground font-normal ml-1">
             {badge}

@@ -574,11 +574,18 @@ def list_all_runs() -> list[dict[str, Any]]:
             m = json.loads(mf.read_text())
             summary = m.get("summary", {})
             has_inputs = m.get("has_inputs", (d / "inputs").is_dir())
+            inferred_run_type = m.get("run_type")
+            if not inferred_run_type:
+                # Backward-compatibility for older manifests that predate explicit run_type.
+                if m.get("deal_id") or m.get("deal_context") or m.get("run_kind") in {"deal_run", "solver"}:
+                    inferred_run_type = "structured_deal"
+                else:
+                    inferred_run_type = "portfolio"
             runs.append({
                 "run_id": d.name,
                 "status": m.get("status", "unknown"),
                 "created_at": m.get("created_at", ""),
-                "run_type": m.get("run_type", "portfolio"),
+                "run_type": inferred_run_type,
                 "run_kind": m.get("run_kind"),
                 "loan_count": summary.get("loan_count", m.get("loan_count", 0)),
                 "group_count": summary.get("group_count", m.get("group_count", 0)),
@@ -663,6 +670,9 @@ def get_run_input_mappings(run_id: str) -> dict[str, Any]:
 
 def get_run_groups(run_id: str) -> tuple[list[str], dict[str, str]]:
     manifest = run_store.load_manifest(run_id)
+    if manifest.get("run_type") == "structured_deal":
+        # Bond/waterfall outputs are not collateral group outputs.
+        return [], {}
     return manifest.get("group_names", []), manifest.get("group_artifacts", {})
 
 
@@ -677,6 +687,7 @@ def get_cashflow_preview(
     max_rows: int = 500,
 ) -> CashflowPreview:
     df = run_store.load_artifact(run_id, section)
+    total_rows = len(df)
     truncated = len(df) > max_rows
     if truncated:
         df = df.head(max_rows)
@@ -694,6 +705,6 @@ def get_cashflow_preview(
         section=section,
         columns=list(df.columns),
         rows=rows,
-        row_count=len(rows),
+        row_count=total_rows,
         truncated=truncated,
     )

@@ -1,4 +1,5 @@
 import React from "react";
+import { control, cx } from "./system/ui";
 
 export interface TabDef {
   id: string;
@@ -20,12 +21,15 @@ export default function TabBar({ tabs, active, onSelect }: Props) {
         return (
           <button
             key={t.id}
+            type="button"
             onClick={() => onSelect(t.id)}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs border-b-2 transition-colors ${
+            className={cx(
+              "flex items-center gap-1.5 border-b-2",
+              control.tabButton,
               active === t.id
                 ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
           >
             {Icon && <Icon className="w-3.5 h-3.5" />}
             {t.label}

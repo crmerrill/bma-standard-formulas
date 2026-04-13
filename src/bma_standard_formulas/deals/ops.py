@@ -42,13 +42,14 @@ def pay_interest(
     *,
     max_amount: float | None = None,
     shortfall: bool = False,
+    allow_negative: bool = False,
 ) -> float:
     target = bond_int_shortfall if shortfall else bond_opt_interest
     cash = _source_min(source_balances, i)
     pmt = min(cash, target[i])
     if max_amount is not None:
         pmt = min(pmt, max_amount)
-    if pmt <= 0.0:
+    if pmt <= 0.0 and not allow_negative:
         return 0.0
     bond_interest[i] += pmt
     target[i] -= pmt
@@ -63,12 +64,13 @@ def pay_principal(
     i: int,
     *,
     max_amount: float | None = None,
+    allow_negative: bool = False,
 ) -> float:
     cash = _source_min(source_balances, i)
     pmt = min(cash, bond_balance[i])
     if max_amount is not None:
         pmt = min(pmt, max_amount)
-    if pmt <= 0.0:
+    if pmt <= 0.0 and not allow_negative:
         return 0.0
     bond_principal[i] += pmt
     bond_balance[i] -= pmt
@@ -83,12 +85,13 @@ def pay_writedown(
     i: int,
     *,
     max_amount: float | None = None,
+    allow_negative: bool = False,
 ) -> float:
     cash = _source_min(source_balances, i)
     pmt = min(cash, bond_balance[i])
     if max_amount is not None:
         pmt = min(pmt, max_amount)
-    if pmt <= 0.0:
+    if pmt <= 0.0 and not allow_negative:
         return 0.0
     bond_writedown[i] += pmt
     bond_balance[i] -= pmt
@@ -101,10 +104,12 @@ def pay_fee(
     fee_interest: np.ndarray,
     i: int,
     amount: float,
+    *,
+    allow_negative: bool = False,
 ) -> float:
     cash = _source_min(source_balances, i)
     pmt = min(cash, amount)
-    if pmt <= 0.0:
+    if pmt <= 0.0 and not allow_negative:
         return 0.0
     fee_interest[i] += pmt
     _debit_sources(source_balances, i, pmt)
@@ -116,10 +121,12 @@ def pay_residual(
     resid_interest: np.ndarray,
     i: int,
     amount: float | None = None,
+    *,
+    allow_negative: bool = False,
 ) -> float:
     cash = _source_min(source_balances, i)
     pmt = min(cash, amount) if amount is not None else max(0.0, cash)
-    if pmt <= 0.0:
+    if pmt <= 0.0 and not allow_negative:
         return 0.0
     resid_interest[i] += pmt
     _debit_sources(source_balances, i, pmt)
@@ -298,9 +305,6 @@ def finalize_bond_ws(ws, is_pseudo: bool, is_bond: bool) -> None:
         if not is_pseudo:
             if balance[i - 1] > 0:
                 coupons[i] = interest[i] / balance[i - 1] * 1200.0
-            if i == n - 1 and balance[i] > 0:
-                writedown[i] += balance[i]
-                balance[i] = 0.0
         if is_pseudo or is_bond:
             cashflow[i] = principal[i] + interest[i]
 
@@ -336,8 +340,5 @@ def finalize_bond(ws: dict[str, np.ndarray], is_pseudo: bool, is_bond: bool) -> 
         if not is_pseudo:
             if balance[i - 1] > 0:
                 coupons[i] = interest[i] / balance[i - 1] * 1200.0
-            if i == n - 1 and balance[i] > 0:
-                writedown[i] += balance[i]
-                balance[i] = 0.0
         if is_pseudo or is_bond:
             cashflow[i] = principal[i] + interest[i]

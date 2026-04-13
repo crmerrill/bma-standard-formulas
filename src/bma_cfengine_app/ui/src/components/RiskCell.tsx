@@ -1,5 +1,6 @@
 import React from "react";
 import { MONO } from "../lib/format";
+import { text } from "./system/ui";
 
 interface Props {
   label: string;
@@ -11,7 +12,7 @@ export default function RiskCell({ label, value, highlight }: Props) {
   return (
     <div>
       <span
-        className={`text-[10px] block ${
+        className={`${text.metricLabel} block ${
           highlight ? "text-primary" : "text-muted-foreground"
         }`}
       >

@@ -63,6 +63,12 @@ const FEE_BASIS_OPTIONS: [string, string][] = [
   ["Per loan $", "PER_LOAN"],
 ];
 
+const FEE_FREQUENCY_OPTIONS: [string, string][] = [
+  ["Monthly", "MONTHLY"],
+  ["Quarterly", "QUARTERLY"],
+  ["Annual", "ANNUAL"],
+];
+
 const ACCOUNT_INITIAL_MODE: [string, string][] = [
   ["% bond stack", "PCT_STACK"],
   ["$ amount", "FIXED_DOLLAR"],
@@ -128,18 +134,19 @@ export const DEAL_BLOCKS = [
 
   {
     type: "pay_fee",
-    message0: "Pay Fee %1 from %2 %3 %4",
+    message0: "Pay Fee %1 from %2 %3 %4 freq %5",
     args0: [
       { type: "field_dropdown", name: "PAYEE", options: FEE_PAYEE_OPTIONS },
       { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
       { type: "field_dropdown", name: "BASIS", options: FEE_BASIS_OPTIONS },
       { type: "field_number", name: "AMOUNT", value: 0, min: 0, precision: 0.01 },
+      { type: "field_dropdown", name: "FREQ", options: FEE_FREQUENCY_OPTIONS },
     ],
     previousStatement: "waterfall_item",
     nextStatement: "waterfall_item",
     colour: "#1d4ed8",
     tooltip:
-      "Fee to payee. For “bps of pool bal”, enter basis points (25 = 0.25%). Fixed $ and per loan use dollars.",
+      "Fee to payee. Input values are annual. For “bps of pool bal”, enter annual basis points (25 = 0.25%/yr). Frequency controls payout cadence.",
   },
 
   {
@@ -163,17 +170,23 @@ export const DEAL_BLOCKS = [
   // Bond target — full properties inline, synced by name via property panel
   {
     type: "bond_target",
-    message0: "→ %1 %2 face $%3 cpn %4%% %5",
+    message0: "→ %1 %2 face $%3 %pool %4 cpn %5%% %6 %7 %8 %9 %10",
     args0: [
       { type: "field_input", name: "NAME", text: "A" },
       { type: "field_dropdown", name: "BOND_TYPE", options: BOND_TYPE_OPTIONS },
       { type: "field_number", name: "FACE_AMT", value: 70000000, min: 0, precision: 1 },
+      { type: "field_number", name: "SIZE_PCT_POOL", value: 0, min: 0, precision: 0.01 },
       { type: "field_number", name: "COUPON", value: 5.0, min: 0, precision: 0.01 },
+      { type: "field_label_serializable", name: "INDEX_LABEL", text: "idx" },
+      { type: "field_dropdown", name: "INDEX_NAME", options: INDEX_OPTIONS },
+      { type: "field_label_serializable", name: "SPREAD_LABEL", text: "sprd" },
+      { type: "field_number", name: "MARGIN", value: 0, precision: 0.01 },
       { type: "field_dropdown", name: "ACCRUAL", options: ACCRUAL_OPTIONS },
     ],
     previousStatement: "target_item",
     nextStatement: "target_item",
     colour: "#dc2626",
+    extensions: ["bond_target_dynamic_fields"],
     tooltip:
       "Bond target. Face in dollars. Red/orange hues vary by tranche name (property panel syncs names).",
   },
@@ -197,14 +210,15 @@ export const DEAL_BLOCKS = [
   // Residual target — simplest target, just a name, no face/coupon
   {
     type: "residual_target",
-    message0: "→ %1 (residual)",
+    message0: "→ %1 (residual) %R %2",
     args0: [
       { type: "field_input", name: "NAME", text: "R" },
+      { type: "field_number", name: "SHARE_PCT", value: 0, min: 0, precision: 0.01 },
     ],
     previousStatement: "target_item",
     nextStatement: "target_item",
     colour: "#7c3aed",
-    tooltip: "Residual — remaining funds. Purple family varies by name.",
+    tooltip: "Residual — remaining funds. %R is the editable share weight used for pro-rata residual split in Properties.",
   },
 
   // =================================================================

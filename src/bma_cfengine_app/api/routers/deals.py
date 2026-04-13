@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from bma_standard_formulas.deals.schemas.input import DealRunInput
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
+from bma_standard_formulas.deals.schemas.migrations import migrate_deal_payload
 from bma_standard_formulas.deals.schemas.solver import SolverSpec
 
 from ...orchestrator.deals.collateral_bridge import (
@@ -22,10 +23,13 @@ from ...orchestrator.deals.deal_solver_service import (
     request_solver_cancel,
 )
 from ...orchestrator.deals.deal_store import (
+    list_pool_snapshots,
     list_studio_deals,
     load_deal,
+    load_pool_snapshot,
     list_solver_presets,
     load_studio_snapshot,
+    save_pool_snapshot,
     save_deal as save_canonical_deal,
     save_solver_preset,
     save_studio_ir,
@@ -35,6 +39,33 @@ from ...orchestrator.run_service import get_cashflow_preview, list_all_runs
 from ...storage import run_store
 
 router = APIRouter(tags=["deals"])
+
+_LEGACY_FEE_BASIS_MAP = {
+    "PCT_POOL": "COLLATERAL_BALANCE",
+}
+
+_LEGACY_TRIGGER_METRIC_MAP = {
+    "CUM_LOSS": "CUMULATIVE_LOSS",
+    "CUM_DEFAULT": "CUMULATIVE_DEFAULT",
+    "DELINQUENCY": "DELINQUENCY_RATE",
+    "OC_RATIO": "OC_TEST",
+    "IC_RATIO": "IC_TEST",
+}
+
+_LEGACY_RULE_SOURCE_MAP = {
+    "COLLECTION": "CASH",
+    "PRIN_COLLECTION": "CASH",
+    "INT_COLLECTION": "CASH",
+    "DISTRIBUTION": "CASH",
+    "RESERVE": "CASH",
+    "PREFUNDING": "CASH",
+    "CAP_INTEREST": "CASH",
+    "EXPENSE": "CASH",
+    "REINVESTMENT": "CASH",
+    "SWAP_HEDGE": "CASH",
+    "ESCROW": "CASH",
+    "YIELD_SUPPLEMENT": "CASH",
+}
 
 
 class StudioDealSaveBody(BaseModel):
@@ -91,6 +122,38 @@ class SolverPresetUpsertBody(BaseModel):
     notes: str | None = None
 
 
+class PoolSnapshotSaveBody(BaseModel):
+    pool_id: str | None = None
+    pool_name: str = Field(min_length=1, max_length=256)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/deals/pools")
+async def list_pools(search: str | None = Query(None)):
+    return {"items": list_pool_snapshots(search=search)}
+
+
+@router.get("/deals/pools/{pool_id}")
+async def get_pool(pool_id: str, version: int | None = Query(None)):
+    try:
+        return load_pool_snapshot(pool_id, version=version)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.post("/deals/pools")
+async def save_pool(body: PoolSnapshotSaveBody):
+    try:
+        _, meta = save_pool_snapshot(
+            pool_id=body.pool_id,
+            pool_name=body.pool_name.strip() or "Pool",
+            payload=body.payload,
+        )
+        return meta
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.get("/deals")
 async def list_deals():
     return list_studio_deals()
@@ -122,8 +185,11 @@ def _ensure_canonical_deal(deal_id: str, version: int | None = None):
         return load_deal(deal_id, version=version)
     except FileNotFoundError:
         snapshot = load_studio_snapshot(deal_id, version=version)
+        raw_ir = snapshot.get("ir", {})
+        normalized_ir = _normalize_legacy_studio_ir(raw_ir)
         try:
-            canonical = DealDefinition.model_validate(snapshot.get("ir", {}))
+            # Always validate the normalized view so legacy snapshots are transparently upgraded.
+            canonical = DealDefinition.model_validate(migrate_deal_payload(normalized_ir))
         except Exception as exc:
             raise HTTPException(
                 status_code=422,
@@ -131,6 +197,64 @@ def _ensure_canonical_deal(deal_id: str, version: int | None = None):
             ) from exc
         save_canonical_deal(deal_id, canonical, version=version)
         return canonical
+
+
+def _normalize_legacy_studio_ir(raw_ir: Any) -> dict[str, Any]:
+    if not isinstance(raw_ir, dict):
+        return {}
+
+    def normalize_node(node: Any) -> Any:
+        if isinstance(node, list):
+            return [normalize_node(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+
+        next_node: dict[str, Any] = {
+            key: normalize_node(value) for key, value in node.items()
+        }
+
+        basis = next_node.get("basis_type")
+        if isinstance(basis, str) and basis in _LEGACY_FEE_BASIS_MAP:
+            legacy_basis = basis
+            next_node["basis_type"] = _LEGACY_FEE_BASIS_MAP[legacy_basis]
+            if legacy_basis == "PCT_POOL":
+                # Legacy snapshots may store bps either in `bps` or `amount`.
+                bps = next_node.get("bps")
+                if isinstance(bps, (int, float)):
+                    next_node.setdefault("rate", float(bps) / 100.0)
+                elif (
+                    "rate" not in next_node
+                    and isinstance(next_node.get("amount"), (int, float))
+                    and float(next_node.get("amount") or 0.0) > 0.0
+                ):
+                    next_node["rate"] = float(next_node["amount"]) / 100.0
+                next_node.setdefault("amount", 0.0)
+            next_node.setdefault("frequency", "MONTHLY")
+        elif isinstance(next_node.get("basis"), str) and next_node.get("basis_type") is None:
+            legacy_basis = str(next_node["basis"])
+            if legacy_basis in _LEGACY_FEE_BASIS_MAP:
+                next_node["basis_type"] = _LEGACY_FEE_BASIS_MAP[legacy_basis]
+
+        metric = next_node.get("metric_type")
+        if isinstance(metric, str) and metric in _LEGACY_TRIGGER_METRIC_MAP:
+            next_node["metric_type"] = _LEGACY_TRIGGER_METRIC_MAP[metric]
+        elif isinstance(next_node.get("metric"), str) and next_node.get("metric_type") is None:
+            legacy_metric = str(next_node["metric"])
+            if legacy_metric in _LEGACY_TRIGGER_METRIC_MAP:
+                next_node["metric_type"] = _LEGACY_TRIGGER_METRIC_MAP[legacy_metric]
+
+        if isinstance(next_node.get("from_sources"), list):
+            normalized_sources: list[Any] = []
+            for source in next_node["from_sources"]:
+                if isinstance(source, str) and source in _LEGACY_RULE_SOURCE_MAP:
+                    normalized_sources.append(_LEGACY_RULE_SOURCE_MAP[source])
+                else:
+                    normalized_sources.append(source)
+            next_node["from_sources"] = normalized_sources
+
+        return next_node
+
+    return normalize_node(raw_ir)
 
 
 def _build_inputs(
@@ -145,11 +269,27 @@ def _build_inputs(
     return build_from_deal_native(source.model_dump())
 
 
+def _extract_collateral_risk_settings(deal_id: str, version: int | None) -> dict[str, Any]:
+    try:
+        snapshot = load_studio_snapshot(deal_id, version=version)
+    except FileNotFoundError:
+        return {}
+    ir = snapshot.get("ir", {}) if isinstance(snapshot, dict) else {}
+    if not isinstance(ir, dict):
+        return {}
+    presets = ir.get("solver_presets", {})
+    if not isinstance(presets, dict):
+        return {}
+    payload = presets.get("collateral_risk_settings", {})
+    return payload if isinstance(payload, dict) else {}
+
+
 @router.post("/deals/{deal_id}/runs")
 async def run_deal_endpoint(deal_id: str, body: DealRunRequest):
     _ensure_canonical_deal(deal_id, version=body.deal_version)
     try:
         scenario_inputs = _build_inputs(body.source, body.scenario_names)
+        collateral_risk_settings = _extract_collateral_risk_settings(deal_id, body.deal_version)
         first = next(iter(scenario_inputs.values()))
         run_id = run_store.new_run_id()
         return execute_deal_run(
@@ -160,6 +300,7 @@ async def run_deal_endpoint(deal_id: str, body: DealRunRequest):
             run_inputs_by_scenario=scenario_inputs,
             source_mode=body.source.source_mode,
             run_kind="deal_run",
+            collateral_risk_settings=collateral_risk_settings,
         ) | {"run_id": run_id}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -172,6 +313,7 @@ async def solve_deal_endpoint(deal_id: str, body: DealSolveRequest):
     _ensure_canonical_deal(deal_id, version=body.deal_version)
     try:
         scenario_inputs = _build_inputs(body.source, [body.scenario_name])
+        collateral_risk_settings = _extract_collateral_risk_settings(deal_id, body.deal_version)
         run_input = scenario_inputs.get(body.scenario_name) or next(iter(scenario_inputs.values()))
         run_id = run_store.new_run_id()
         thread = threading.Thread(
@@ -184,6 +326,7 @@ async def solve_deal_endpoint(deal_id: str, body: DealSolveRequest):
                 "solver_spec": body.solver_spec,
                 "scenario_name": body.scenario_name,
                 "source_mode": body.source.source_mode,
+                "collateral_risk_settings": collateral_risk_settings,
             },
             daemon=True,
         )

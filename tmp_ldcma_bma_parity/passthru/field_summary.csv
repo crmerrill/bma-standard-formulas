@@ -1,0 +1,8 @@
+field,rows,max_abs,mean_abs,max_rel,mean_rel
+end_balance,359,0.0,0.0,0.0,0.0
+total_principal,359,0.0,0.0,0.0,0.0
+interest_paid,359,0.0,0.0,0.0,0.0
+interest_shortfall,359,0.0,0.0,0.0,0.0
+cashflow_total,359,0.0,0.0,0.0,0.0
+writedown,359,0.0,0.0,0.0,0.0
+coupon_rate,359,0.0,0.0,0.0,0.0

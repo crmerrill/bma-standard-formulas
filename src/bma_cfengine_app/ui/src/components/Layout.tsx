@@ -11,6 +11,7 @@ import {
   Sigma,
 } from "lucide-react";
 import { MONO } from "../lib/format";
+import { text } from "./system/ui";
 
 export type Page = "intake" | "tape" | "setup" | "results" | "history" | "structuring" | "structured_analysis";
 
@@ -56,7 +57,7 @@ export default function Layout({
           >
             BMA Engine
           </h1>
-          <p className="text-muted-foreground text-[10px] mt-0.5">
+          <p className={`${text.caption} mt-0.5`}>
             Cashflow Analytics
           </p>
         </div>
@@ -96,7 +97,7 @@ export default function Layout({
             </button>
           </div>
         )}
-        <div className="px-4 py-3 border-t border-border text-[10px] text-muted-foreground">
+        <div className="px-4 py-3 border-t border-border text-xs text-muted-foreground">
           v0.1.0
         </div>
       </aside>

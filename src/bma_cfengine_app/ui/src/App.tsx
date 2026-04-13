@@ -11,6 +11,11 @@ import StructuredDealAnalysisPage from "./pages/StructuredDealAnalysisPage";
 import type { FieldMapping, RunResponse } from "./services/api";
 import * as api from "./services/api";
 import { MONO } from "./lib/format";
+import {
+  getDefaultCollateralRiskSettings,
+  validateCollateralRiskSettings,
+  type CollateralRiskSettings,
+} from "./features/deals/shared/riskSettings";
 
 const PAGE_TITLES: Record<Page, string> = {
   intake: "Tape Intake",
@@ -37,6 +42,7 @@ interface SessionState {
   asofDate: string;
   groupKeys: string[];
   structuredRunId: string | null;
+  collateralRiskSettings: CollateralRiskSettings;
 }
 
 const DEFAULTS: SessionState = {
@@ -48,7 +54,40 @@ const DEFAULTS: SessionState = {
   asofDate: new Date().toISOString().slice(0, 10),
   groupKeys: [],
   structuredRunId: null,
+  collateralRiskSettings: getDefaultCollateralRiskSettings(),
 };
+
+function normalizeCollateralRiskSettings(value: unknown): CollateralRiskSettings {
+  const fallback = getDefaultCollateralRiskSettings();
+  if (!value || typeof value !== "object") {
+    return {
+      ...fallback,
+      validation: validateCollateralRiskSettings(fallback),
+    };
+  }
+  const source = value as Record<string, unknown>;
+  const merged: CollateralRiskSettings = {
+    ...fallback,
+    ...source,
+    newRiskParams: {
+      ...fallback.newRiskParams,
+      ...((source.newRiskParams as Record<string, unknown> | undefined) ?? {}),
+    },
+    rateScenario: {
+      ...fallback.rateScenario,
+      ...((source.rateScenario as Record<string, unknown> | undefined) ?? {}),
+    },
+    execution: {
+      ...fallback.execution,
+      ...((source.execution as Record<string, unknown> | undefined) ?? {}),
+    },
+    validation: fallback.validation,
+  };
+  return {
+    ...merged,
+    validation: validateCollateralRiskSettings(merged),
+  };
+}
 
 function loadSession(): SessionState {
   try {
@@ -82,10 +121,31 @@ export default function App() {
   const [asofDate, setAsofDate] = useState<string>(initial.asofDate);
   const [groupKeys, setGroupKeys] = useState<string[]>(initial.groupKeys);
   const [structuredRunId, setStructuredRunId] = useState<string | null>(initial.structuredRunId);
+  const [collateralRiskSettings, setCollateralRiskSettings] = useState<CollateralRiskSettings>(
+    normalizeCollateralRiskSettings(initial.collateralRiskSettings),
+  );
+  const [structuringDirty, setStructuringDirty] = useState(false);
 
   useEffect(() => {
-    saveSession({ page, uploadId, mappingId, mappings, run, asofDate, groupKeys, structuredRunId });
-  }, [page, uploadId, mappingId, mappings, run, asofDate, groupKeys, structuredRunId]);
+    saveSession({
+      page,
+      uploadId,
+      mappingId,
+      mappings,
+      run,
+      asofDate,
+      groupKeys,
+      structuredRunId,
+      collateralRiskSettings,
+    });
+  }, [page, uploadId, mappingId, mappings, run, asofDate, groupKeys, structuredRunId, collateralRiskSettings]);
+
+  const handleCollateralRiskSettingsChange = useCallback((next: CollateralRiskSettings) => {
+    setCollateralRiskSettings({
+      ...next,
+      validation: validateCollateralRiskSettings(next),
+    });
+  }, []);
 
   const enabledPages = new Set<Page>(["intake", "history", "structuring", "structured_analysis"]);
   if (uploadId && mappingId) {
@@ -117,11 +177,19 @@ export default function App() {
     setMappings([]);
     setRun(null);
     setStructuredRunId(null);
+    setCollateralRiskSettings(getDefaultCollateralRiskSettings());
+    setStructuringDirty(false);
     setAsofDate(new Date().toISOString().slice(0, 10));
     setGroupKeys([]);
     setPage("intake");
     sessionStorage.removeItem(STORAGE_KEY);
   }, []);
+
+  useEffect(() => {
+    if (page !== "structuring" && structuringDirty) {
+      setStructuringDirty(false);
+    }
+  }, [page, structuringDirty]);
 
   const handleViewRun = useCallback(async (runId: string) => {
     try {
@@ -173,10 +241,37 @@ export default function App() {
     setPage("structuring");
   }, []);
 
+  const handleOpenTapeLibraryItem = useCallback(
+    async (nextUploadId: string, nextMappingId: string) => {
+      const mapping = await api.getSavedMapping(nextUploadId, nextMappingId);
+      setUploadId(nextUploadId);
+      setMappingId(nextMappingId);
+      setMappings(mapping.mappings ?? []);
+      if (mapping.asof_date) setAsofDate(mapping.asof_date);
+      setPage("tape");
+    },
+    [],
+  );
+
+  const handleNavigate = useCallback(
+    (nextPage: Page) => {
+      if (
+        page === "structuring"
+        && nextPage !== "structuring"
+        && structuringDirty
+        && !window.confirm("You have unsaved structuring changes. Leave this page?")
+      ) {
+        return;
+      }
+      setPage(nextPage);
+    },
+    [page, structuringDirty],
+  );
+
   const asofAction = (
     <div className="flex items-center gap-2">
       <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
-      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
+      <span className="text-xs text-muted-foreground uppercase tracking-wider">
         As-of
       </span>
       <input
@@ -192,7 +287,7 @@ export default function App() {
   return (
     <Layout
       currentPage={page}
-      onNavigate={setPage}
+      onNavigate={handleNavigate}
       pageTitle={PAGE_TITLES[page]}
       enabledPages={enabledPages}
       onReset={handleReset}
@@ -205,7 +300,11 @@ export default function App() {
         />
       )}
       {page === "tape" && uploadId && mappingId && (
-        <TapeViewPage uploadId={uploadId} mappingId={mappingId} />
+        <TapeViewPage
+          uploadId={uploadId}
+          mappingId={mappingId}
+          onOpenTape={handleOpenTapeLibraryItem}
+        />
       )}
       {page === "setup" && uploadId && mappingId && (
         <RunSetupPage
@@ -228,8 +327,22 @@ export default function App() {
           onOpenSolverStudio={handleOpenSolverStudio}
         />
       )}
-      {page === "structuring" && <DealEditor initialSourceRunId={structuredRunId} />}
-      {page === "structured_analysis" && <StructuredDealAnalysisPage runId={structuredRunId} />}
+      {page === "structuring" && (
+        <DealEditor
+          initialSourceRunId={structuredRunId}
+          collateralRiskSettings={collateralRiskSettings}
+          onCollateralRiskSettingsChange={handleCollateralRiskSettingsChange}
+          onOpenTape={handleOpenTapeLibraryItem}
+          onDirtyStateChange={setStructuringDirty}
+        />
+      )}
+      {page === "structured_analysis" && (
+        <StructuredDealAnalysisPage
+          runId={structuredRunId}
+          collateralRiskSettings={collateralRiskSettings}
+          onCollateralRiskSettingsChange={handleCollateralRiskSettingsChange}
+        />
+      )}
     </Layout>
   );
 }

@@ -103,3 +103,19 @@ runs/<run_name>/
 ```
 
 This keeps model outputs reproducible and reviewable.
+
+## 7) Deal Run Manifest Provenance
+
+Structuring deal runs and solver runs now persist collateral context in the run manifest
+to make replay and audit easier.
+
+- persisted at top-level manifest keys:
+  - `tape_id`
+  - `tape_mapping_id`
+  - `pool_id`
+  - `pool_version`
+- persisted as full mirrored object:
+  - `deal_context.collateral_risk_settings`
+- source of truth:
+  - extracted from the saved deal snapshot used for run/solve execution
+  - not inferred from transient UI state at execution time

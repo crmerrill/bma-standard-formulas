@@ -1,4 +1,5 @@
 import React from "react";
+import FormSelect from "../../../components/FormSelect";
 import type { ObjectiveDraftRow } from "./types";
 
 interface Props {
@@ -23,19 +24,18 @@ export default function ObjectiveBuilder({ rows, onChange }: Props) {
           />
           <label className="space-y-1">
             <span className="text-muted-foreground">Type</span>
-            <select
+            <FormSelect
               value={row.objectiveType}
               onChange={(e) =>
                 updateRow(rows, idx, {
                   objectiveType: e.target.value as ObjectiveDraftRow["objectiveType"],
                 }, onChange)
               }
-              className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
             >
               <option value="TARGET">TARGET</option>
               <option value="MINIMIZE">MINIMIZE</option>
               <option value="MAXIMIZE">MAXIMIZE</option>
-            </select>
+            </FormSelect>
           </label>
           <NumberField
             label="Target"

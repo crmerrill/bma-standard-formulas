@@ -1,4 +1,5 @@
 import React from "react";
+import { cx } from "./system/ui";
 
 export interface PillOption {
   id: string;
@@ -20,12 +21,14 @@ export default function PillToggle({ label, options, selected, onSelect }: Props
         {options.map((o) => (
           <button
             key={o.id}
+            type="button"
             onClick={() => onSelect(o.id)}
-            className={`px-2.5 py-1 rounded border text-xs capitalize transition-colors ${
+            className={cx(
+              "px-2.5 py-1 rounded border text-xs capitalize transition-colors",
               selected === o.id
                 ? "bg-primary/15 text-primary border-primary/30"
-                : "text-muted-foreground border-border hover:text-foreground hover:bg-white/5"
-            }`}
+                : "text-muted-foreground border-border hover:text-foreground hover:bg-white/5",
+            )}
           >
             {o.label}
           </button>

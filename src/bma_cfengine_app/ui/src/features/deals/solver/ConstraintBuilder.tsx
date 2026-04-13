@@ -1,4 +1,5 @@
 import React from "react";
+import FormSelect from "../../../components/FormSelect";
 import type { ConstraintDraftRow } from "./types";
 
 interface Props {
@@ -23,7 +24,7 @@ export default function ConstraintBuilder({ rows, onChange }: Props) {
           />
           <label className="space-y-1">
             <span className="text-muted-foreground">Operator</span>
-            <select
+            <FormSelect
               value={row.operator}
               onChange={(e) =>
                 updateRow(
@@ -33,13 +34,12 @@ export default function ConstraintBuilder({ rows, onChange }: Props) {
                   onChange,
                 )
               }
-              className="w-full px-2 py-1 rounded border border-border bg-input-background text-foreground"
             >
               <option value="GE">GE</option>
               <option value="LE">LE</option>
               <option value="EQ">EQ</option>
               <option value="BETWEEN">BETWEEN</option>
-            </select>
+            </FormSelect>
           </label>
           <NumberField
             label={row.operator === "BETWEEN" ? "Min" : row.operator === "GE" ? "Value" : "Optional"}

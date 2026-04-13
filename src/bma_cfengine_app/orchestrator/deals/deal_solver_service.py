@@ -90,6 +90,7 @@ def execute_deal_solve(
     *,
     scenario_name: str = "Base Case",
     source_mode: str = "deal_native",
+    collateral_risk_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     created_at = datetime.now(timezone.utc).isoformat()
     init_solver_progress(run_id, deal_id=deal_id, scenario_name=scenario_name)
@@ -163,6 +164,7 @@ def execute_deal_solve(
                 "solver_spec": solver_spec.model_dump(),
                 "source_mode": source_mode,
                 "scenario_name": scenario_name,
+                "collateral_risk_settings": collateral_risk_settings or {},
             },
         )
         manifest = {
@@ -173,12 +175,17 @@ def execute_deal_solve(
             "deal_name": solved_deal.deal_name,
             "deal_version": saved_version,
             "scenario_names": [scenario_name],
+            "tape_id": (collateral_risk_settings or {}).get("tapeId"),
+            "tape_mapping_id": (collateral_risk_settings or {}).get("tapeMappingId"),
+            "pool_id": (collateral_risk_settings or {}).get("poolId"),
+            "pool_version": (collateral_risk_settings or {}).get("poolVersion"),
             "deal_context": {
                 "deal_id": deal_id,
                 "deal_name": solved_deal.deal_name,
                 "scenario_set": [scenario_name],
                 "source_mode": source_mode,
                 "deal_version": saved_version,
+                "collateral_risk_settings": collateral_risk_settings or {},
             },
             "solver_summary": solver_summary.model_dump(),
             "artifact_keys": artifact_keys,
