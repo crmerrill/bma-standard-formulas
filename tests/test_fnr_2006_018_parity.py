@@ -23,6 +23,8 @@ import csv
 from datetime import date
 from pathlib import Path
 
+from datetime import date
+
 import numpy as np
 import pytest
 
@@ -32,11 +34,12 @@ from bma_standard_formulas.deals.schemas.input import (
     DealRunInput,
     PooledCollateralInput,
 )
-from bma_standard_formulas.formulas import (
-    generate_smm_curve_from_psa,
-    run_bma_actual_cashflow,
-    run_bma_scheduled_cashflow,
+from bma_standard_formulas.engine.loan import (
+    Loan,
+    actual_cashflow_from_loan,
+    scheduled_cashflow_from_loan,
 )
+from bma_standard_formulas.formulas import generate_smm_curve_from_psa
 
 from tests.fixtures.fnr_2006_018 import (
     POOL_ASSUMPTIONS,
@@ -51,69 +54,100 @@ from tests.fixtures.fnr_2006_018.deal_definition import build_fnr_2006_018_group
 
 
 # ---------------------------------------------------------------------------
-# Repline -> BMA cashflow engine -> deal engine pipeline
+# Repline via BMA Loan -> cashflow engine -> deal engine pipeline.
 #
-# We treat the Group 1 MBS aggregate as a single repline (132,653,061 UPB
-# at 5.94% gross / 5.50% net pass-through, 360-month original term, 348-month
-# WAM). The repline goes through the BMA scheduled cashflow runner and then
-# the actual cashflow runner with prospectus-published prepayment assumptions
-# (PSA speeds 0%, 100%, 147%, 180%, 227%, 250%, 375%, 500%). The resulting
-# pool cashflow becomes the deal engine's collateral input.
+# The repline is constructed with the BMA `Loan` wrapper so age-indexed PSA
+# curves slice correctly into the loan's projection window (deal month 1
+# corresponds to loan age + 1, not loan month 1). This is the same path the
+# UI/engine uses end-to-end -- no inline shortcuts.
+#
+# Pricing assumptions taken verbatim from the FNR 2006-018 prospectus
+# Reference Sheet:
+#   - Aggregate UPB: $132,653,061
+#   - Gross WAC:     5.94%
+#   - Net pass-through: 5.50% (0.44% servicing wedge)
+#   - Original term: 360 months
+#   - Remaining term: 348 months  (=> loan age = 12 months)
+#   - 0% default, 0% severity in the prospectus decrement assumption.
+#
+# The 0% PSA decrement column uses the prospectus's special override
+# (8.00% gross / 360 term / 360 remaining => age 0).
 # ---------------------------------------------------------------------------
 
+# Use a stable origination/asof pair so the Loan wrapper's age computation is
+# deterministic across runs. Origination 12 months before asof gives age=12,
+# matching original_term - remaining_term.
+_ORIGINATION_DATE = date(2005, 2, 1)
+_ASOF_DATE = date(2006, 2, 1)
 
-def _repline_for_psa(psa_speed: float):
-    """Return repline scheduled cashflow + actual cashflow for a given PSA speed.
 
-    Uses the published Pricing Assumptions: 5.94% gross WAC / 5.50% net
-    pass-through / 360-month original term / 348-month WAM for non-zero PSA
-    speeds, and the special 0% PSA override (8.00% / 360 / 360) when
-    `psa_speed == 0`.
-    """
+def _build_repline_loan(psa_speed: float) -> Loan:
+    """Construct the FNR 2006-018 Group 1 repline as a single BMA Loan."""
+    initial_balance = float(POOL_ASSUMPTIONS["aggregate_upb_dollars"])
     if psa_speed <= 0.0:
         wac_pct = float(ZERO_PSA_PRICING_OVERRIDE["weighted_average_coupon_pct"])
         term = int(ZERO_PSA_PRICING_OVERRIDE["original_term_months"])
         remaining = int(ZERO_PSA_PRICING_OVERRIDE["weighted_average_remaining_term_months"])
+        # 0% PSA case treats loans as if at origination -> age 0; align dates.
+        origination = _ASOF_DATE
     else:
         wac_pct = float(POOL_ASSUMPTIONS["weighted_average_coupon_pct"])
         term = int(POOL_ASSUMPTIONS["original_term_months"])
         remaining = int(POOL_ASSUMPTIONS["weighted_average_remaining_term_months"])
-    initial_balance = float(POOL_ASSUMPTIONS["aggregate_upb_dollars"])
-
-    sched = run_bma_scheduled_cashflow(
+        origination = _ORIGINATION_DATE
+    net_pct = float(POOL_ASSUMPTIONS["mbs_pass_through_rate_pct"])
+    servicing_pct = max(0.0, wac_pct - net_pct)
+    return Loan(
+        loan_id=1,
+        origination_date=origination,
+        asof_date=_ASOF_DATE,
         original_balance=initial_balance,
         current_balance=initial_balance,
-        coupon_vector=wac_pct,
+        rate_margin=wac_pct,
+        servicing_fee=servicing_pct,
         original_term=term,
         remaining_term=remaining,
     )
-    smm = generate_smm_curve_from_psa(float(psa_speed), term)
-    mdr = np.zeros(term + 1)  # 0% default for prospectus decrement assumption.
-    sev = np.zeros(term + 1)  # 0% severity for prospectus decrement assumption.
-    actual = run_bma_actual_cashflow(
+
+
+def _repline_for_psa(psa_speed: float):
+    """Run the repline through the BMA cashflow engine for a given PSA speed.
+
+    Returns `(scheduled_cf, actual_cf, gross_wac_pct)`. Both cashflow objects
+    are produced via the Loan wrapper so age-indexed curve slicing is handled
+    correctly (deal month 1 sees PSA rate at `loan.age + 1`, not `loan.age 0`).
+    """
+    loan = _build_repline_loan(psa_speed)
+    sched = scheduled_cashflow_from_loan(loan)
+    # Age-indexed assumption curves; the wrapper slices to the loan's projection
+    # window automatically. Curves must have length >= loan.age + remaining + 1.
+    full_term = loan.original_term
+    smm = generate_smm_curve_from_psa(float(psa_speed), full_term)
+    mdr = np.zeros(full_term + 1)
+    sev = np.zeros(full_term + 1)
+    actual = actual_cashflow_from_loan(
+        loan=loan,
         scheduled_cf=sched,
         smm_curve=smm,
         mdr_curve=mdr,
         severity_curve=sev,
-        coupon_vector=wac_pct,
     )
-    return sched, actual, wac_pct
+    return sched, actual, loan.rate_margin
 
 
 def _deal_input_from_repline(psa_speed: float, n_periods: int) -> DealRunInput:
-    """Convert BMA repline cashflows into a `DealRunInput` for the deal engine."""
-    sched, actual, wac_pct = _repline_for_psa(psa_speed)
+    """Convert BMA repline cashflows into a `DealRunInput` for the deal engine.
+
+    The BMA actual cashflow runner returns period-indexed arrays where index
+    0 is the as-of snapshot and index t (t >= 1) represents period t of the
+    deal. We adopt the same indexing convention for `CollateralCashflows`.
+    """
+    _sched, actual, wac_pct = _repline_for_psa(psa_speed)
     net_pct = float(POOL_ASSUMPTIONS["mbs_pass_through_rate_pct"])
     initial_balance = float(POOL_ASSUMPTIONS["aggregate_upb_dollars"])
-
-    # The BMA actual cashflow runner returns period-indexed arrays where
-    # index 0 is the snapshot. Pool principal each period = scheduled
-    # amortization + voluntary prepayments. Defaults are zero in the
-    # prospectus decrement assumption.
     horizon = min(n_periods + 1, len(actual.act_am))
     principal = (actual.act_am[:horizon] + actual.vol_prepay[:horizon])
     bal = actual.perf_bal[:horizon].copy()
-    # Net interest distributed to certificateholders at the 5.50% pass-through.
     net_monthly_rate = net_pct / 1200.0
     interest_net = np.zeros(horizon)
     for i in range(1, horizon):
@@ -163,23 +197,34 @@ def _amortize_pool_at_psa(
     psa_speed: float,
     n_periods: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compatibility wrapper: route the seed script through the BMA cashflow engine."""
-    sched = run_bma_scheduled_cashflow(
+    """Compatibility wrapper for the seed script: builds an ephemeral repline
+    Loan with the requested parameters and returns its (balance, sched_prin,
+    vol_prepay) projection arrays via the BMA Loan wrapper.
+    """
+    age = max(0, term - remaining_term)
+    origination = date(2006, 2, 1)
+    asof = date(origination.year + age // 12, ((origination.month - 1 + age % 12) % 12) + 1, 1)
+    loan = Loan(
+        loan_id=1,
+        origination_date=origination,
+        asof_date=asof,
         original_balance=initial_balance,
         current_balance=initial_balance,
-        coupon_vector=annual_coupon_pct,
+        rate_margin=annual_coupon_pct,
+        servicing_fee=0.0,
         original_term=term,
         remaining_term=remaining_term,
     )
+    sched = scheduled_cashflow_from_loan(loan)
     smm = generate_smm_curve_from_psa(float(psa_speed), term)
     mdr = np.zeros(term + 1)
     sev = np.zeros(term + 1)
-    actual = run_bma_actual_cashflow(
+    actual = actual_cashflow_from_loan(
+        loan=loan,
         scheduled_cf=sched,
         smm_curve=smm,
         mdr_curve=mdr,
         severity_curve=sev,
-        coupon_vector=annual_coupon_pct,
     )
     horizon = min(n_periods + 1, len(actual.act_am))
     bal = actual.perf_bal[:horizon].copy()
