@@ -30,13 +30,28 @@ def build_tranche_behavior_diagnostics(
             schedule_type = (
                 ScheduleType.PAC if bond.tranche_behavior == TrancheBehavior.PAC else ScheduleType.TAC
             )
+            # Build per-period scheduled principal from either legacy
+            # `target_principal` entries or new `target_balance` entries.
+            # For balance entries, principal[t] = balance[t-1] - balance[t].
             schedule_map: dict[int, float] = {}
-            for point in bond.schedule_contract:
-                if not isinstance(point, dict):
-                    continue
+            sorted_points = sorted(
+                (p for p in bond.schedule_contract if isinstance(p, dict)),
+                key=lambda p: int(p.get("period", 0) or 0),
+            )
+            prev_balance: float | None = None
+            for point in sorted_points:
                 period = int(point.get("period", 0) or 0)
-                target = float(point.get("target_principal", 0.0) or 0.0)
-                schedule_map[period] = target
+                if point.get("target_principal") is not None:
+                    schedule_map[period] = float(point.get("target_principal") or 0.0)
+                elif point.get("target_balance") is not None:
+                    cur_balance = float(point.get("target_balance") or 0.0)
+                    if prev_balance is None:
+                        # First entry: assume bond was at face before this period.
+                        face = float(getattr(bond, "size_dollars", 0.0) or 0.0)
+                        schedule_map[period] = max(0.0, face - cur_balance)
+                    else:
+                        schedule_map[period] = max(0.0, prev_balance - cur_balance)
+                    prev_balance = cur_balance
 
             initial_balance = float(getattr(rows[0], "begin_balance", 0.0) or 0.0)
             tol_bps = float(bond.schedule_tolerance_bps or 0.0)

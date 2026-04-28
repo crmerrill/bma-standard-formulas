@@ -36,48 +36,49 @@ from bma_standard_formulas.deals.schemas.ir import BondDef, DealDefinition, Rule
 
 from . import (
     GROUP_1_CLASSES,
+    expand_to_monthly_balance_vector,
     load_planned_balance_schedule,
-    planned_balances_to_principal_schedule,
 )
 
 
-def _per_bond_schedule(
-    aggregate_schedule: list[dict[str, float]],
-    bond_size: float,
+def _per_bond_planned_balance_schedule(
+    aggregate_balance_vector: list[float],
     bonds_in_aggregate: list[dict],
     bond_name: str,
+    horizon_periods: int,
 ) -> list[dict[str, float]]:
-    """Allocate aggregate schedule to one bond using sequential rule within aggregate.
+    """Derive a per-bond planned-balance vector from the aggregate planned balance.
 
-    Within Aggregate Group I, principal pays PA first to zero, then PB, etc.
-    Convert the aggregate schedule into per-bond schedules by sequentially
-    consuming aggregate principal up to each bond's notional size.
+    Within an aggregate paid sequentially (PA first to zero, then PB, ...), the
+    senior class's planned balance at period t equals the aggregate planned
+    balance minus the sum of the more-junior classes' faces, capped at the
+    senior class's own face. Once the senior class reaches zero, the next class
+    starts paying down. Returned entries are `{period, target_balance}`
+    consumable by the runtime's `to-Planned-Balance` schedule cap semantics.
     """
     seniority_order = [b["name"] for b in bonds_in_aggregate]
     if bond_name not in seniority_order:
         return []
     bond_idx = seniority_order.index(bond_name)
-    senior_total = sum(b["size"] for b in bonds_in_aggregate[:bond_idx])
-    bond_total = bond_total_remaining = bond_size
-    senior_remaining = senior_total
+    junior_face_total = sum(
+        float(b["size"]) for b in bonds_in_aggregate[bond_idx + 1:]
+    )
+    bond_face = float(bonds_in_aggregate[bond_idx]["size"])
+
     out: list[dict[str, float]] = []
-    for entry in aggregate_schedule:
-        period = int(entry["period"])
-        amount = float(entry["target_principal"])
-        if amount <= 0.0:
-            continue
-        # Senior bonds consume aggregate principal first.
-        if senior_remaining > 0.0:
-            consumed = min(amount, senior_remaining)
-            senior_remaining -= consumed
-            amount -= consumed
-        if amount <= 0.0 or bond_total_remaining <= 0.0:
-            continue
-        my_share = min(amount, bond_total_remaining)
-        bond_total_remaining -= my_share
-        if my_share > 0.0:
-            out.append({"period": period, "target_principal": round(my_share, 2)})
-    _ = bond_total  # keep unused-name lint quiet (documentation purpose).
+    last_emitted: float | None = None
+    horizon = min(len(aggregate_balance_vector), horizon_periods + 1)
+    for period in range(horizon):
+        agg_balance = float(aggregate_balance_vector[period])
+        # The bond owns whatever portion of the aggregate is above the junior
+        # class faces, capped at its own face.
+        planned_balance = max(0.0, agg_balance - junior_face_total)
+        planned_balance = min(planned_balance, bond_face)
+        rounded = round(planned_balance, 2)
+        # Only emit on changes (forward-fill is handled by the runtime).
+        if last_emitted is None or rounded != last_emitted:
+            out.append({"period": period, "target_balance": rounded})
+            last_emitted = rounded
     return out
 
 
@@ -92,10 +93,13 @@ def build_fnr_2006_018_group_1_deal(
         Number of cashflow periods to model. Should be >= the deal's final
         scheduled distribution (March 2035 = period ~349).
     """
+    # Use the dense monthly aggregate planned balance vector (forward-filled
+    # across published "lockout" gaps) so per-bond derivation is consistent
+    # with the runtime's "to Planned Balance" semantics.
     pac_i_balances = load_planned_balance_schedule("I")
     pac_ii_balances = load_planned_balance_schedule("II")
-    pac_i_aggregate_schedule = planned_balances_to_principal_schedule(pac_i_balances, n_periods)
-    pac_ii_aggregate_schedule = planned_balances_to_principal_schedule(pac_ii_balances, n_periods)
+    pac_i_monthly = expand_to_monthly_balance_vector(pac_i_balances, n_periods)
+    pac_ii_monthly = expand_to_monthly_balance_vector(pac_ii_balances, n_periods)
 
     pac_i_bond_specs = [c for c in GROUP_1_CLASSES if c["type"] in ("PAC", "PAC_PO")]
     pac_ii_bond_specs = [c for c in GROUP_1_CLASSES if c["type"] == "PAC_AD"]
@@ -105,7 +109,9 @@ def build_fnr_2006_018_group_1_deal(
 
     bonds: list[BondDef] = []
     for spec in pac_i_bond_specs:
-        per_bond = _per_bond_schedule(pac_i_aggregate_schedule, spec["size"], pac_i_bond_specs, spec["name"])
+        per_bond = _per_bond_planned_balance_schedule(
+            pac_i_monthly, pac_i_bond_specs, spec["name"], n_periods
+        )
         bonds.append(BondDef(
             name=spec["name"],
             tranche_type=TrancheType.PAC,
@@ -117,7 +123,9 @@ def build_fnr_2006_018_group_1_deal(
             support_tranches=[s["name"] for s in sup_bond_specs] + ["PO"],
         ))
     for spec in pac_ii_bond_specs:
-        per_bond = _per_bond_schedule(pac_ii_aggregate_schedule, spec["size"], pac_ii_bond_specs, spec["name"])
+        per_bond = _per_bond_planned_balance_schedule(
+            pac_ii_monthly, pac_ii_bond_specs, spec["name"], n_periods
+        )
         bonds.append(BondDef(
             name=spec["name"],
             tranche_type=TrancheType.PAC,

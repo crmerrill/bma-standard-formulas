@@ -131,30 +131,81 @@ class ExecutionContext:
 
 
 def _build_schedule_cap(bond_def: Any, cf_len: int) -> np.ndarray | None:
-    """Build a per-period principal cap vector from schedule_contract entries.
+    """Build a per-period planned-balance vector from schedule_contract entries.
 
-    Schedule-first PAC/TAC enforcement: each entry `{period, target_principal}` is
-    placed at the indexed period; periods without explicit entries default to 0
-    (no scheduled principal). When `target_principal` is missing or non-numeric
-    the entry is skipped.
+    Each `schedule_contract` entry is `{period, target_balance}` — the
+    end-of-period planned balance for the bond at that distribution date.
+    Sparse entries are forward-filled (a missing month uses the most recent
+    prior published balance, matching the convention in
+    `expand_to_monthly_balance_vector` for published planned-balance
+    schedules that carry forward through "lockout" periods).
+
+    Backward compatibility: legacy `target_principal` entries are converted
+    into a balance vector by treating successive principal targets as
+    decrements from the bond's initial balance. This preserves existing IR
+    payloads that predate the to-Planned-Balance semantics fix.
 
     Returns None when the bond does not carry a schedule_contract.
     """
     contract = getattr(bond_def, "schedule_contract", None) or []
     if not contract:
         return None
-    cap = np.zeros(cf_len)
+
+    # Determine bond face for legacy translation / forward-fill anchoring.
+    bond_face: float
+    if bond_def.size_dollars is not None and bond_def.size_dollars > 0:
+        bond_face = float(bond_def.size_dollars)
+    elif bond_def.size_pct is not None and bond_def.size_pct > 0:
+        bond_face = float(bond_def.size_pct)  # caller will scale; not used numerically here.
+    else:
+        bond_face = 0.0
+
+    target_balance = np.full(cf_len, np.nan)
+    legacy_principal = np.zeros(cf_len)
+    has_target_balance = False
+    has_target_principal = False
     for entry in contract:
         if not isinstance(entry, dict):
             continue
         try:
             period = int(entry.get("period", 0) or 0)
-            target = float(entry.get("target_principal", 0.0) or 0.0)
         except (TypeError, ValueError):
             continue
-        if 0 <= period < cf_len and target > 0.0:
-            cap[period] = target
-    return cap
+        if not (0 <= period < cf_len):
+            continue
+        if entry.get("target_balance") is not None:
+            try:
+                target_balance[period] = float(entry["target_balance"])
+                has_target_balance = True
+            except (TypeError, ValueError):
+                pass
+        if entry.get("target_principal") is not None:
+            try:
+                legacy_principal[period] = float(entry["target_principal"])
+                has_target_principal = True
+            except (TypeError, ValueError):
+                pass
+
+    if has_target_balance:
+        # Forward-fill any missing balance entries from the most recent prior.
+        last = float(bond_face)
+        cap = np.empty(cf_len, dtype=float)
+        for i in range(cf_len):
+            if not np.isnan(target_balance[i]):
+                last = float(target_balance[i])
+            cap[i] = last
+        return cap
+
+    if has_target_principal:
+        # Translate per-period principal targets into running planned balance.
+        cap = np.empty(cf_len, dtype=float)
+        running = float(bond_face)
+        for i in range(cf_len):
+            running = max(0.0, running - float(legacy_principal[i]))
+            cap[i] = running
+        return cap
+
+    return None
 
 
 def _allocate_bond_workspace(
@@ -605,23 +656,27 @@ def _resolve_rule_max_amount(rule: CompiledRulePlan, expr_ctx: dict[str, float],
 
 
 def _schedule_remaining(ws: BondWorkspace, period: int) -> float | None:
-    """Return remaining principal cap for a PAC/TAC bond at this period.
+    """Return remaining principal capacity for a PAC/TAC bond at this period.
 
-    Schedule-first contract: the bond can absorb at most `schedule_cap[period]`
-    of principal during this period across all PAY_PRINCIPAL rules. We track
-    cumulative principal already paid this period via `ws.principal[period]`
-    and subtract it from the schedule cap.
+    Schedule-first contract under "to Planned Balance" semantics: the bond
+    must end the period at the published planned balance for that distribution
+    date. The published prospectus language is "to Aggregate Group X to its
+    Planned Balance for that Distribution Date" -- the cap is a target
+    end-of-period balance, NOT a per-period principal amount.
+
+    `ws.schedule_cap[period]` stores the planned end-of-period balance for
+    this bond. The remaining capacity to absorb principal this period equals
+    the bond's current balance minus the planned end balance, which lets the
+    PAC catch up via additional payments when it has fallen behind in earlier
+    periods. Returns 0 once balance is at or below planned.
 
     Returns None for non-scheduled bonds (no cap applied).
     """
     if ws.schedule_cap is None:
         return None
-    cap = float(ws.schedule_cap[period])
-    if cap <= 0.0:
-        return 0.0
-    already_paid = float(ws.principal[period])
-    remaining = cap - already_paid
-    return max(0.0, remaining)
+    planned_balance = float(ws.schedule_cap[period])
+    current_balance = float(ws.balance[period])
+    return max(0.0, current_balance - planned_balance)
 
 
 def _effective_principal_cap(ws: BondWorkspace, period: int, rule_max: float | None) -> float | None:
