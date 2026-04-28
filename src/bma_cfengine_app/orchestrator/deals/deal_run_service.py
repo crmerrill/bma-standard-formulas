@@ -6,6 +6,7 @@ from typing import Any
 
 import pandas as pd
 
+from bma_standard_formulas.deals.carry_tieout import compute_carry_tieout
 from bma_standard_formulas.deals.runtime import run_deal
 from bma_standard_formulas.deals.risk import (
     compute_credit_enhancement,
@@ -60,6 +61,21 @@ def execute_deal_run(
                     result,
                     scenario_input.original_collateral_balance or 0.0,
                 )
+            # Engine-truth carry tie-out: per-tranche YTM, pool YTM,
+            # back-solved residual yield, status (OK/WARN/BLOCK). Surfaces
+            # the implied residual yield band as the canonical economic
+            # signal -- under-couponed bonds pull the residual high; over-
+            # couponed bonds pull it negative. Status drives the post-run
+            # banner in Structuring Studio's Structured Deal Analysis tab.
+            if result.carry_tieout is None:
+                try:
+                    result.carry_tieout = compute_carry_tieout(
+                        deal, scenario_input, result
+                    )
+                except Exception:
+                    # Carry tie-out is informational; failure should not
+                    # break the deal run. Trace will still be persisted.
+                    result.carry_tieout = None
             all_scenarios.append(result)
             artifact_keys.extend(_persist_scenario_artifacts(run_id, scenario_name, result))
 
@@ -160,6 +176,7 @@ def _persist_scenario_artifacts(
     _persist_model_rows(run_id, f"{prefix}_credit_enhancement", result.credit_enhancement, artifact_keys)
     _persist_model_rows(run_id, f"{prefix}_pac_tac_diagnostics", result.pac_tac_diagnostics, artifact_keys)
     _persist_model_rows(run_id, f"{prefix}_structure_composition", result.structure_composition, artifact_keys)
+    _persist_carry_tieout(run_id, prefix, result.carry_tieout, artifact_keys)
     stress_df = _build_stress_matrix(
         scenario_name=scenario_name,
         bond_cashflows=result.bond_cashflows,
@@ -184,6 +201,35 @@ def _persist_model_rows(
     run_store.save_artifact(run_id, artifact_name, df)
     run_store.save_artifact_csv(run_id, artifact_name, df)
     artifact_keys.append(artifact_name)
+
+
+def _persist_carry_tieout(
+    run_id: str,
+    prefix: str,
+    summary: Any,
+    artifact_keys: list[str],
+) -> None:
+    """Persist the carry tie-out artifact as two parquet/CSV files:
+
+    1. ``{prefix}_carry_tieout`` -- one-row summary with pool/residual
+       totals, stack-weighted yield, status, and reason.
+
+    2. ``{prefix}_carry_tieout_tranches`` -- per-tranche detail rows
+       (YTM, modified duration, WAL).
+    """
+    if summary is None:
+        return
+    payload = summary.model_dump()
+    tranche_rows = payload.pop("tranches", []) or []
+    summary_df = pd.DataFrame([payload])
+    run_store.save_artifact(run_id, f"{prefix}_carry_tieout", summary_df)
+    run_store.save_artifact_csv(run_id, f"{prefix}_carry_tieout", summary_df)
+    artifact_keys.append(f"{prefix}_carry_tieout")
+    if tranche_rows:
+        tranche_df = pd.DataFrame(tranche_rows)
+        run_store.save_artifact(run_id, f"{prefix}_carry_tieout_tranches", tranche_df)
+        run_store.save_artifact_csv(run_id, f"{prefix}_carry_tieout_tranches", tranche_df)
+        artifact_keys.append(f"{prefix}_carry_tieout_tranches")
 
 
 def _build_decrement_table(
