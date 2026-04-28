@@ -33,6 +33,8 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
             bond.setdefault("pay_mode", "CASH_PAY")
             bond.setdefault("tranche_behavior", "SEQUENTIAL")
             bond.setdefault("schedule_model_type", None)
+            bond.setdefault("schedule_priority_tier", None)
+            bond.setdefault("schedule_depends_on", None)
             bond.setdefault("schedule_speed_low", None)
             bond.setdefault("schedule_speed_high", None)
             bond.setdefault("schedule_speed_target", None)

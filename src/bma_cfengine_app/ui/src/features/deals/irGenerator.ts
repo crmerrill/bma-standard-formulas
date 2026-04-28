@@ -19,6 +19,8 @@ interface BondDefIR {
   pay_mode: "CASH_PAY" | "PIK";
   tranche_behavior: "SEQUENTIAL" | "PAC" | "TAC" | "Z" | "ACCRETION_DIRECTED";
   schedule_model_type: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR" | null;
+  schedule_priority_tier: number | null;
+  schedule_depends_on: string | null;
   schedule_speed_low: number | null;
   schedule_speed_high: number | null;
   schedule_speed_target: number | null;
@@ -160,6 +162,8 @@ interface TargetInfo {
   payMode?: "CASH_PAY" | "PIK";
   trancheBehavior?: "SEQUENTIAL" | "PAC" | "TAC" | "Z" | "ACCRETION_DIRECTED";
   scheduleModelType?: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR";
+  schedulePriorityTier?: number | null;
+  scheduleDependsOn?: string | null;
   scheduleSpeedLow?: number | null;
   scheduleSpeedHigh?: number | null;
   scheduleSpeedTarget?: number | null;
@@ -174,9 +178,9 @@ interface TargetInfo {
   initialAmt?: number;
 }
 
-function extractTargets(ruleBlock: any): TargetInfo[] {
+function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
   const targets: TargetInfo[] = [];
-  for (const t of getStatementChain(ruleBlock, "TARGETS")) {
+  for (const t of getStatementChain(ruleBlock, inputName)) {
     if (t.type === "bond_target") {
       const bondType = t.getFieldValue("BOND_TYPE") || "FIXED";
       const payMode = (t.getFieldValue("PAY_MODE") || "CASH_PAY") as "CASH_PAY" | "PIK";
@@ -217,6 +221,14 @@ function extractTargets(ruleBlock: any): TargetInfo[] {
     }
   }
   return targets;
+}
+
+function extractSupportBondNames(ruleBlock: any): string[] {
+  const names = extractTargets(ruleBlock, "SUPPORT_BONDS")
+    .filter((target) => target.isBond)
+    .map((target) => target.name)
+    .filter(Boolean);
+  return Array.from(new Set(names));
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +350,8 @@ function applyPacTacSemantics(
     speedHigh,
     speedTarget,
     customVector,
+    priorityTier,
+    dependsOn,
     supportsRaw,
   }: {
     behavior: "PAC" | "TAC";
@@ -346,6 +360,8 @@ function applyPacTacSemantics(
     speedHigh: number | null;
     speedTarget: number | null;
     customVector: string;
+    priorityTier: number | null;
+    dependsOn: string | null;
     supportsRaw: string;
   },
 ): TargetInfo[] {
@@ -367,6 +383,8 @@ function applyPacTacSemantics(
       ...target,
       trancheBehavior: behavior,
       scheduleModelType: modelType,
+      schedulePriorityTier: priorityTier,
+      scheduleDependsOn: dependsOn,
       scheduleSpeedLow: speedLow,
       scheduleSpeedHigh: speedHigh,
       scheduleSpeedTarget: speedTarget,
@@ -382,7 +400,7 @@ function emitSequential(block: any, ctx: Ctx): void {
   const payType = block.getFieldValue("PAY_TYPE") || "INTEREST";
   const source = normalizeRuleSource(block.getFieldValue("SOURCE"));
   const ruleType = PAY_TYPE_MAP[payType] || "PAY_INTEREST";
-  const targets = extractTargets(block);
+  const targets = extractTargets(block, "TARGETS");
   registerTargets(targets, ctx);
   const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
 
@@ -406,7 +424,7 @@ function emitProRata(block: any, ctx: Ctx): void {
   const payType = block.getFieldValue("PAY_TYPE") || "PRINCIPAL";
   const source = normalizeRuleSource(block.getFieldValue("SOURCE"));
   const ruleType = PAY_TYPE_MAP[payType] || "PAY_PRINCIPAL";
-  const targets = extractTargets(block);
+  const targets = extractTargets(block, "TARGETS");
   registerTargets(targets, ctx);
 
   if (targets.length === 0) return;
@@ -437,17 +455,24 @@ function emitPacTacSchedule(block: any, ctx: Ctx, behavior: "PAC" | "TAC"): void
   const speedHigh = Number.isFinite(speedHighRaw) ? speedHighRaw : null;
   const speedTarget = Number.isFinite(speedTargetRaw) ? speedTargetRaw : null;
   const customVector = String(block.getFieldValue("CUSTOM_VECTOR") || "");
-  const supports = String(block.getFieldValue("SUPPORTS") || "");
-  const targets = applyPacTacSemantics(extractTargets(block), {
+  const priorityTierRaw = Number(block.getFieldValue("PRIORITY_TIER"));
+  const priorityTier = Number.isFinite(priorityTierRaw) ? priorityTierRaw : null;
+  const dependsOnRaw = String(block.getFieldValue("DEPENDS_ON") || "").trim();
+  const dependsOn = dependsOnRaw.length > 0 ? dependsOnRaw : null;
+  const supportTargets = extractTargets(block, "SUPPORT_BONDS");
+  const supports = extractSupportBondNames(block).join(",");
+  const targets = applyPacTacSemantics(extractTargets(block, "TARGETS"), {
     behavior,
     modelType,
     speedLow,
     speedHigh,
     speedTarget,
     customVector,
+    priorityTier,
+    dependsOn,
     supportsRaw: supports,
   });
-  registerTargets(targets, ctx);
+  registerTargets([...targets, ...supportTargets], ctx);
 
   targets.forEach((target) => {
     ctx.rules.push({
@@ -468,7 +493,7 @@ function emitPacTacSchedule(block: any, ctx: Ctx, behavior: "PAC" | "TAC"): void
 function emitAccretionRedirect(block: any, ctx: Ctx): void {
   const source = normalizeRuleSource(block.getFieldValue("SOURCE"));
   const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
-  const targets = extractTargets(block);
+  const targets = extractTargets(block, "TARGETS");
   registerTargets(targets, ctx);
   targets.forEach((target, idx) => {
     ctx.rules.push({
@@ -607,6 +632,8 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       pay_mode: info.payMode || "CASH_PAY",
       tranche_behavior: info.trancheBehavior || (info.payMode === "PIK" ? "Z" : "SEQUENTIAL"),
       schedule_model_type: info.scheduleModelType ?? null,
+      schedule_priority_tier: info.schedulePriorityTier ?? null,
+      schedule_depends_on: info.scheduleDependsOn ?? null,
       schedule_speed_low: info.scheduleSpeedLow ?? null,
       schedule_speed_high: info.scheduleSpeedHigh ?? null,
       schedule_speed_target: info.scheduleSpeedTarget ?? null,
@@ -630,7 +657,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
       pay_mode: "CASH_PAY",
       tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
-      schedule_model_type: null, schedule_speed_low: null, schedule_speed_high: null, schedule_speed_target: null, schedule_custom_vector: null,
+      schedule_model_type: null, schedule_priority_tier: null, schedule_depends_on: null, schedule_speed_low: null, schedule_speed_high: null, schedule_speed_target: null, schedule_custom_vector: null,
       support_tranches: [], supported_by_tranches: [], z_accrual_enabled: false, z_release_trigger: null,
     });
   }
@@ -659,7 +686,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
         is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
         pay_mode: "CASH_PAY",
         tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
-        schedule_model_type: null, schedule_speed_low: null, schedule_speed_high: null, schedule_speed_target: null, schedule_custom_vector: null,
+        schedule_model_type: null, schedule_priority_tier: null, schedule_depends_on: null, schedule_speed_low: null, schedule_speed_high: null, schedule_speed_target: null, schedule_custom_vector: null,
         support_tranches: [], supported_by_tranches: [], z_accrual_enabled: false, z_release_trigger: null,
       });
       bondNames.add(fee.name);

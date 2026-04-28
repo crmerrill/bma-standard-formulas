@@ -65,6 +65,21 @@ interface SplitProps {
   blockIds: string[];
 }
 
+const FEE_SOURCE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "COLLECTION", label: "Collection" },
+  { value: "PRIN_COLLECTION", label: "Principal Collection" },
+  { value: "INT_COLLECTION", label: "Interest Collection" },
+  { value: "DISTRIBUTION", label: "Distribution" },
+  { value: "RESERVE", label: "Reserve" },
+  { value: "PREFUNDING", label: "Prefunding" },
+  { value: "CAP_INTEREST", label: "Capitalized Interest" },
+  { value: "EXPENSE", label: "Expense" },
+  { value: "REINVESTMENT", label: "Reinvestment" },
+  { value: "SWAP_HEDGE", label: "Swap / Hedge" },
+  { value: "ESCROW", label: "Escrow" },
+  { value: "YIELD_SUPPLEMENT", label: "Yield Supplement" },
+];
+
 interface PropertyPanelProps {
   workspace: any;
   collateralRiskSettings: CollateralRiskSettings;
@@ -663,7 +678,27 @@ export default function PropertyPanel({
                   className="grid grid-cols-[108px_108px_124px_108px_92px_32px] gap-2 items-center px-2 py-1.5 border-b border-border/70"
                 >
                   <span className="text-foreground" style={MONO}>{f.payee}</span>
-                  <span className="text-muted-foreground" style={MONO}>{f.source}</span>
+                  <FormSelect
+                    value={f.source}
+                    onChange={(e) => {
+                      syncBlockField(
+                        workspace,
+                        "pay_fee",
+                        (block) =>
+                          (block.getFieldValue("PAYEE") || "SERVICER") === f.payee
+                          && (block.getFieldValue("SOURCE") || "COLLECTION") === f.source,
+                        "SOURCE",
+                        e.target.value,
+                      );
+                      refresh();
+                    }}
+                  >
+                    {FEE_SOURCE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </FormSelect>
                   <FormSelect
                     value={f.basis}
                     onChange={(e) => {

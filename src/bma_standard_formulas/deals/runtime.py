@@ -63,6 +63,15 @@ class BondWorkspace:
     xs_spread_cpn: np.ndarray
     tracks_bonds: dict[str, list[str]] | None = None
 
+    # Tranche behavior fields (PAC/TAC schedule-first enforcement and Z accrual).
+    tranche_behavior: str = "SEQUENTIAL"
+    schedule_cap: np.ndarray | None = None  # length cf_len when PAC/TAC, else None.
+    support_tranches: tuple[str, ...] = ()
+    supported_by_tranches: tuple[str, ...] = ()
+    z_accrual_enabled: bool = False
+    z_released: bool = False
+    z_release_trigger: str | None = None
+
 
 @dataclass
 class AccountWorkspace:
@@ -115,6 +124,33 @@ class ExecutionContext:
     trigger_rows: list[TriggerStateRow] = field(default_factory=list)
 
 
+def _build_schedule_cap(bond_def: Any, cf_len: int) -> np.ndarray | None:
+    """Build a per-period principal cap vector from schedule_contract entries.
+
+    Schedule-first PAC/TAC enforcement: each entry `{period, target_principal}` is
+    placed at the indexed period; periods without explicit entries default to 0
+    (no scheduled principal). When `target_principal` is missing or non-numeric
+    the entry is skipped.
+
+    Returns None when the bond does not carry a schedule_contract.
+    """
+    contract = getattr(bond_def, "schedule_contract", None) or []
+    if not contract:
+        return None
+    cap = np.zeros(cf_len)
+    for entry in contract:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            period = int(entry.get("period", 0) or 0)
+            target = float(entry.get("target_principal", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= period < cf_len and target > 0.0:
+            cap[period] = target
+    return cap
+
+
 def _allocate_bond_workspace(
     bond_def: Any,
     cf_len: int,
@@ -147,6 +183,9 @@ def _allocate_bond_workspace(
         if bond_def.coupon_type.value == "FIXED" and bond_def.coupon is not None:
             opt_coupons[:] = bond_def.coupon
 
+    behavior = getattr(getattr(bond_def, "tranche_behavior", None), "value", "SEQUENTIAL")
+    schedule_cap = _build_schedule_cap(bond_def, cf_len) if behavior in ("PAC", "TAC") else None
+
     return BondWorkspace(
         name=bond_def.name,
         is_bond=bond_def.is_bond and not bond_def.is_pseudo,
@@ -167,6 +206,13 @@ def _allocate_bond_workspace(
         xs_spread=np.zeros(cf_len),
         xs_spread_cpn=np.zeros(cf_len),
         tracks_bonds=bond_def.tracks_bonds,
+        tranche_behavior=behavior,
+        schedule_cap=schedule_cap,
+        support_tranches=tuple(getattr(bond_def, "support_tranches", []) or []),
+        supported_by_tranches=tuple(getattr(bond_def, "supported_by_tranches", []) or []),
+        z_accrual_enabled=bool(getattr(bond_def, "z_accrual_enabled", False)),
+        z_released=False,
+        z_release_trigger=getattr(bond_def, "z_release_trigger", None),
     )
 
 
@@ -551,6 +597,123 @@ def _resolve_rule_max_amount(rule: CompiledRulePlan, expr_ctx: dict[str, float],
     return rule.max_amount_fixed
 
 
+def _schedule_remaining(ws: BondWorkspace, period: int) -> float | None:
+    """Return remaining principal cap for a PAC/TAC bond at this period.
+
+    Schedule-first contract: the bond can absorb at most `schedule_cap[period]`
+    of principal during this period across all PAY_PRINCIPAL rules. We track
+    cumulative principal already paid this period via `ws.principal[period]`
+    and subtract it from the schedule cap.
+
+    Returns None for non-scheduled bonds (no cap applied).
+    """
+    if ws.schedule_cap is None:
+        return None
+    cap = float(ws.schedule_cap[period])
+    if cap <= 0.0:
+        return 0.0
+    already_paid = float(ws.principal[period])
+    remaining = cap - already_paid
+    return max(0.0, remaining)
+
+
+def _effective_principal_cap(ws: BondWorkspace, period: int, rule_max: float | None) -> float | None:
+    """Combine balance, schedule, and rule-level caps into an effective max.
+
+    Returns None when no caps apply (i.e. balance-limited only and no rule cap),
+    so the existing `pay_principal` semantics keep working unchanged for
+    SEQUENTIAL bonds.
+    """
+    sched = _schedule_remaining(ws, period)
+    if sched is None and rule_max is None:
+        return None
+    candidates: list[float] = []
+    if rule_max is not None:
+        candidates.append(float(rule_max))
+    if sched is not None:
+        candidates.append(sched)
+    return min(candidates) if candidates else None
+
+
+def _apply_z_accrual(ctx: ExecutionContext, period: int) -> None:
+    """Pre-waterfall Z-bond accrual: PIK interest into balance, paid as support principal.
+
+    Industry-standard Z mechanic: while supports are outstanding, Z does not
+    receive cash interest; instead its accrued coupon is capitalized into Z
+    balance and an equivalent amount is paid as principal to the support
+    stack. Once supports are exhausted, Z transitions to cash-pay (released).
+
+    Order of operations per period:
+      1. **Pre-flight release**: if all `supported_by_tranches` are already at
+         zero balance entering the period, mark Z as released and skip accrual.
+         This ensures Z receives cash interest/principal via the regular
+         waterfall in the same period the support was exhausted.
+      2. **Apply accrual**: capitalize `opt_interest` into Z balance.
+      3. **Pay support principal**: walk supports in declared order, paying
+         principal up to each support's balance until accrual is exhausted.
+      4. **Zero Z interest**: clear `opt_interest` and `int_shortfall` so the
+         regular waterfall does not also pay Z in cash.
+      5. **Post-accrual release**: if supports were just paid down to zero,
+         mark Z as released for next period.
+    """
+    for ws in ctx.bonds.values():
+        if ws.tranche_behavior != "Z":
+            continue
+        if not ws.z_accrual_enabled or ws.pay_mode != "PIK":
+            continue
+        if ws.z_released:
+            continue
+
+        # Pre-flight release: supports already exhausted -> Z is released this period.
+        if ws.supported_by_tranches:
+            all_supports_zero = all(
+                (ctx.bonds.get(name) is None) or (float(ctx.bonds[name].balance[period]) <= 1e-9)
+                for name in ws.supported_by_tranches
+            )
+            if all_supports_zero:
+                ws.z_released = True
+                continue
+
+        accrual = float(ws.opt_interest[period])
+        if accrual <= 0.0:
+            continue
+
+        # Apply accrual to Z balance and pay support principal subject to each
+        # support's schedule cap (industry standard: Z accrual flows to support
+        # planned balance, not outstanding balance). Excess accrual capitalizes
+        # into Z (already added to Z balance above).
+        ws.balance[period] += accrual
+        remaining = accrual
+        for support_name in ws.supported_by_tranches:
+            if remaining <= 0.0:
+                break
+            support = ctx.bonds.get(support_name)
+            if support is None or support.balance[period] <= 0.0:
+                continue
+            cap = float(support.balance[period])
+            sched_remaining = _schedule_remaining(support, period)
+            if sched_remaining is not None:
+                cap = min(cap, sched_remaining)
+            pmt = min(remaining, cap)
+            if pmt <= 0.0:
+                continue
+            support.principal[period] += pmt
+            support.balance[period] -= pmt
+            remaining -= pmt
+
+        # Z's interest does not pay in cash this period; clear after accrual posted.
+        ws.opt_interest[period] = 0.0
+        ws.int_shortfall[period] = 0.0
+
+        # Post-accrual release check: supports just paid down to zero?
+        post_supports_zero = bool(ws.supported_by_tranches) and all(
+            (ctx.bonds.get(name) is None) or (float(ctx.bonds[name].balance[period]) <= 1e-9)
+            for name in ws.supported_by_tranches
+        )
+        if post_supports_zero:
+            ws.z_released = True
+
+
 def _evaluate_triggers(
     deal: DealDefinition,
     ctx: ExecutionContext,
@@ -659,6 +822,12 @@ def run_deal(
             acct.balance[i] = acct.balance[i - 1]
         cash_avail[i] = collateral["cashflow"][i]
 
+        # Z-bond accrual pre-waterfall step: capitalize unpaid coupon into Z balance
+        # and pay an equal amount as principal to the support tranche stack. This
+        # implements industry-standard Z behavior where the support burns down from
+        # accruing Z interest until the support is exhausted.
+        _apply_z_accrual(ctx, i)
+
         expr_ctx = _build_expr_context(
             deal,
             run_input,
@@ -723,7 +892,16 @@ def run_deal(
                 avail_cash = float(min(src[i] for src in sources)) if sources else 0.0
                 if max_amt is not None:
                     avail_cash = min(avail_cash, float(max_amt))
-                due_by_target = [(name, max(0.0, float(tgt.balance[i]))) for name, tgt in active_targets]
+                # Schedule-first cap: PAC/TAC bonds limit themselves to their
+                # remaining schedule for this period; non-scheduled bonds keep
+                # their balance as the natural cap.
+                due_by_target: list[tuple[str, float]] = []
+                for name, tgt in active_targets:
+                    natural = max(0.0, float(tgt.balance[i]))
+                    sched_remaining = _schedule_remaining(tgt, i)
+                    if sched_remaining is not None:
+                        natural = min(natural, sched_remaining)
+                    due_by_target.append((name, natural))
                 total_due = float(sum(d for _, d in due_by_target))
                 remaining = max(0.0, avail_cash)
                 paid_by_target: dict[str, float] = {name: 0.0 for name, _ in active_targets}
@@ -806,12 +984,15 @@ def run_deal(
                             allow_negative=allow_negative_cash_math,
                         )
                     elif rule.tag == _OP_PRINCIPAL:
+                        # Schedule-first cap composes with rule-level cap so PAC/TAC bonds
+                        # never exceed their published principal contract for this period.
+                        effective_max = _effective_principal_cap(tgt, i, max_amt)
                         pmt = pay_principal(
                             sources,
                             tgt.principal,
                             tgt.balance,
                             i,
-                            max_amount=max_amt,
+                            max_amount=effective_max,
                             allow_negative=allow_negative_cash_math,
                         )
                     elif rule.tag == _OP_WRITEDOWN:
@@ -911,8 +1092,14 @@ def run_deal(
                     )
 
         # PIK bonds capitalize unpaid coupon accrual into balance during accrual windows.
+        # Z-behavior bonds were already processed in `_apply_z_accrual` pre-waterfall
+        # (interest accrued AND used to pay support principal). For non-Z PIK bonds,
+        # opt_interest still carries the accrual amount and is capitalized here.
         for ws in bonds.values():
             if ws.pay_mode != "PIK":
+                continue
+            if ws.tranche_behavior == "Z" and ws.z_accrual_enabled and not ws.z_released:
+                # Already handled pre-waterfall; opt_interest was zeroed.
                 continue
             pik_accrual = max(0.0, float(ws.opt_interest[i]))
             if pik_accrual <= 0.0:

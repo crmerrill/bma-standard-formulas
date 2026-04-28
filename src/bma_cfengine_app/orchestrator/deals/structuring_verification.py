@@ -58,6 +58,14 @@ def verify_structure(
                 suggestions.append(
                     f"{bond.name}: model-driven schedule selected; confirm PAC/TAC priority and excess-principal routing in waterfall order."
                 )
+            if bond.schedule_priority_tier is None:
+                warnings.append(
+                    f"{bond.name}: schedule priority tier not set; PAC/TAC precedence should be explicit."
+                )
+            if bond.schedule_depends_on:
+                suggestions.append(
+                    f"{bond.name}: depends_on={bond.schedule_depends_on}. Verify referenced schedule tier is paid earlier in waterfall."
+                )
         if bond.tranche_behavior == TrancheBehavior.Z:
             if not bond.z_accrual_enabled:
                 errors.append(f"{bond.name}: Z behavior requires accrual enabled.")

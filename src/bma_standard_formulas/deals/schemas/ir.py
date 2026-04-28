@@ -62,6 +62,8 @@ class BondDef(BaseModel):
     # PAC/TAC schedule parameters
     schedule_type: ScheduleType | None = None
     schedule_model_type: PrepayModelType | None = None
+    schedule_priority_tier: int | None = None
+    schedule_depends_on: str | None = None
     schedule_speed_low: float | None = None
     schedule_speed_high: float | None = None
     schedule_speed_target: float | None = None
