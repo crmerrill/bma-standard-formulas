@@ -207,10 +207,26 @@ def build_fnr_2006_018_group_1_deal(
     for name in pac_ii_targets:
         add(f"r_prin_{name}", RuleType.PAY_PRINCIPAL, ["CASH"], [name])
     add("r_prin_Z", RuleType.PAY_PRINCIPAL, ["CASH"], ["Z"])
-    # Support split: 95.65% sequential WA-WG, 4.35% to PO. Approximate as priority-ordered
-    # rules with explicit max_amount_expr for the PO share.
-    add("r_prin_sup_seq", RuleType.PAY_PRINCIPAL, ["CASH"], sup_targets_seq)
-    add("r_prin_PO", RuleType.PAY_PRINCIPAL, ["CASH"], ["PO"])
+    # Support cash split (face-weighted pro-rata):
+    #   95.6521694276% to WA -> WG sequentially within the share
+    #    4.3478305724% to PO
+    # Both rules anchor to the cash level at the start of `r_supp_split_anchor`
+    # (the first support rule), so PO's allocation is 4.35% of the SAME cash
+    # pool that WA-WG draw 95.65% from -- not 4.35% of leftover.
+    add(
+        "r_supp_split_anchor",
+        RuleType.PAY_PRINCIPAL,
+        ["CASH"],
+        sup_targets_seq,
+        max_amount_expr="cash_at_r_supp_split_anchor * 0.956521694276",
+    )
+    add(
+        "r_prin_PO",
+        RuleType.PAY_PRINCIPAL,
+        ["CASH"],
+        ["PO"],
+        max_amount_expr="cash_at_r_supp_split_anchor * 0.043478305724",
+    )
     # 6 + 7. Aggregate Group II / Group I "to zero" cleanup rules. These run
     # AFTER supports and pay PAC bonds beyond their published planned-balance
     # schedule, so we set `ignore_schedule_cap=True` to bypass the cap.

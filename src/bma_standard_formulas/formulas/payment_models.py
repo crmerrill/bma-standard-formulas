@@ -3,9 +3,21 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.optimize import brentq
 
 from . import scheduled_payments as bma_schpmt
+
+
+def _brentq(*args, **kwargs):
+    """Lazy-imported root finder.
+
+    Defers the scipy.optimize import until first use so that downstream
+    consumers (deal runtime, portfolio aggregation, simple PSA/SMM curve
+    generation) can import this module even in environments where the
+    scipy/numpy binary stack is misaligned. Only the functions that actually
+    solve for a PSA multiplier or yield touch scipy.
+    """
+    from scipy.optimize import brentq  # local import keeps module load light
+    return brentq(*args, **kwargs)
 
 # =============================================================================
 # BMA Section B.2: Mortgage Prepayment Models (CPR, SMM, PSA): SF-5 to SF-10
@@ -901,7 +913,7 @@ def historical_psa(
 
     # Use Brent's method for robust, fast root finding
     try:
-        return brentq(
+        return _brentq(
             objective,
             0.0, 2000.0,
             args=(window_months, act_beg_factor, act_end_factor, coupon, original_term, beginning_age),
@@ -1141,7 +1153,7 @@ def historical_psa_pool(
 
     # Use Brent's method for robust, fast root finding
     try:
-        return brentq(objective, 0.0, 2000.0, xtol=tolerance, maxiter=max_iterations)
+        return _brentq(objective, 0.0, 2000.0, xtol=tolerance, maxiter=max_iterations)
     except ValueError as e:
         raise ValueError(
             f"Could not find PSA speed for combined pool. "

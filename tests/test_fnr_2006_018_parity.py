@@ -32,11 +32,17 @@ from bma_standard_formulas.deals.schemas.input import (
     DealRunInput,
     PooledCollateralInput,
 )
+from bma_standard_formulas.formulas import (
+    generate_smm_curve_from_psa,
+    run_bma_actual_cashflow,
+    run_bma_scheduled_cashflow,
+)
 
 from tests.fixtures.fnr_2006_018 import (
     POOL_ASSUMPTIONS,
     PUBLISHED_WAL_GROUP_1,
     PUBLISHED_WAL_PSA_COLUMNS,
+    ZERO_PSA_PRICING_OVERRIDE,
     GROUP_1_CLASSES,
     expand_to_monthly_balance_vector,
     load_planned_balance_schedule,
@@ -45,96 +51,86 @@ from tests.fixtures.fnr_2006_018.deal_definition import build_fnr_2006_018_group
 
 
 # ---------------------------------------------------------------------------
-# PSA amortization (inline pure-numpy to avoid scipy import path)
+# Repline -> BMA cashflow engine -> deal engine pipeline
+#
+# We treat the Group 1 MBS aggregate as a single repline (132,653,061 UPB
+# at 5.94% gross / 5.50% net pass-through, 360-month original term, 348-month
+# WAM). The repline goes through the BMA scheduled cashflow runner and then
+# the actual cashflow runner with prospectus-published prepayment assumptions
+# (PSA speeds 0%, 100%, 147%, 180%, 227%, 250%, 375%, 500%). The resulting
+# pool cashflow becomes the deal engine's collateral input.
 # ---------------------------------------------------------------------------
 
 
-def _psa_smm_curve(psa_speed: float, term: int) -> np.ndarray:
-    """Generate SMM curve from PSA speed using BMA standard PSA model.
+def _repline_for_psa(psa_speed: float):
+    """Return repline scheduled cashflow + actual cashflow for a given PSA speed.
 
-    PSA ramps CPR linearly from 0.2% to 6.0% over months 1-30, then plateau.
-    SMM = 1 - (1 - CPR/100)^(1/12).
+    Uses the published Pricing Assumptions: 5.94% gross WAC / 5.50% net
+    pass-through / 360-month original term / 348-month WAM for non-zero PSA
+    speeds, and the special 0% PSA override (8.00% / 360 / 360) when
+    `psa_speed == 0`.
     """
-    months = np.arange(term + 1)
-    cpr_pct = np.minimum(psa_speed / 100.0 * 0.2 * np.minimum(months, 30), 100.0)
-    cpr_pct[0] = 0.0
-    cpr_dec = cpr_pct / 100.0
-    smm = 1.0 - np.power(1.0 - cpr_dec, 1.0 / 12.0)
-    return smm
-
-
-def _amortize_pool_at_psa(
-    initial_balance: float,
-    annual_coupon_pct: float,
-    term: int,
-    remaining_term: int,
-    psa_speed: float,
-    n_periods: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Project pool balance, scheduled principal, and prepayment at constant PSA.
-
-    Returns (balance, sched_principal, vol_prepay) arrays of length n_periods+1.
-    Index 0 is the as-of snapshot (initial balance, zero flows).
-    """
-    horizon = n_periods + 1
-    bal = np.zeros(horizon)
-    sched_prin = np.zeros(horizon)
-    vol_prepay = np.zeros(horizon)
-    interest = np.zeros(horizon)
-    bal[0] = initial_balance
-    smm = _psa_smm_curve(psa_speed, term)
-    monthly_rate = annual_coupon_pct / 1200.0
-    for i in range(1, horizon):
-        prev_bal = bal[i - 1]
-        if prev_bal <= 0.0:
-            break
-        # Standard amortizing payment for remaining term.
-        n_left = max(1, remaining_term - (i - 1))
-        if monthly_rate > 0:
-            pmt = prev_bal * monthly_rate / (1.0 - np.power(1.0 + monthly_rate, -n_left))
-        else:
-            pmt = prev_bal / n_left
-        interest[i] = prev_bal * monthly_rate
-        sched_prin[i] = max(0.0, pmt - interest[i])
-        # Voluntary prepayment on the remaining balance after scheduled principal.
-        residual_balance = max(0.0, prev_bal - sched_prin[i])
-        smm_i = float(smm[min(i, len(smm) - 1)])
-        vol_prepay[i] = residual_balance * smm_i
-        bal[i] = max(0.0, residual_balance - vol_prepay[i])
-    return bal, sched_prin, vol_prepay
-
-
-def _collateral_at_psa(psa_speed: float, n_periods: int) -> DealRunInput:
-    """Build pool cashflows at a constant PSA speed using published assumptions."""
+    if psa_speed <= 0.0:
+        wac_pct = float(ZERO_PSA_PRICING_OVERRIDE["weighted_average_coupon_pct"])
+        term = int(ZERO_PSA_PRICING_OVERRIDE["original_term_months"])
+        remaining = int(ZERO_PSA_PRICING_OVERRIDE["weighted_average_remaining_term_months"])
+    else:
+        wac_pct = float(POOL_ASSUMPTIONS["weighted_average_coupon_pct"])
+        term = int(POOL_ASSUMPTIONS["original_term_months"])
+        remaining = int(POOL_ASSUMPTIONS["weighted_average_remaining_term_months"])
     initial_balance = float(POOL_ASSUMPTIONS["aggregate_upb_dollars"])
-    wac_pct = float(POOL_ASSUMPTIONS["weighted_average_coupon_pct"])
-    net_pct = float(POOL_ASSUMPTIONS["mbs_pass_through_rate_pct"])
-    term = int(POOL_ASSUMPTIONS["original_term_months"])
-    remaining = int(POOL_ASSUMPTIONS["weighted_average_remaining_term_months"])
-    bal, sched_prin, vol_prepay = _amortize_pool_at_psa(
-        initial_balance, wac_pct, term, remaining, psa_speed, n_periods
+
+    sched = run_bma_scheduled_cashflow(
+        original_balance=initial_balance,
+        current_balance=initial_balance,
+        coupon_vector=wac_pct,
+        original_term=term,
+        remaining_term=remaining,
     )
-    horizon = len(bal)
-    principal = sched_prin + vol_prepay
-    # Net interest paid to certificateholders is at the pass-through rate (5.50%),
-    # not the gross WAC; compute on prior-period balance.
+    smm = generate_smm_curve_from_psa(float(psa_speed), term)
+    mdr = np.zeros(term + 1)  # 0% default for prospectus decrement assumption.
+    sev = np.zeros(term + 1)  # 0% severity for prospectus decrement assumption.
+    actual = run_bma_actual_cashflow(
+        scheduled_cf=sched,
+        smm_curve=smm,
+        mdr_curve=mdr,
+        severity_curve=sev,
+        coupon_vector=wac_pct,
+    )
+    return sched, actual, wac_pct
+
+
+def _deal_input_from_repline(psa_speed: float, n_periods: int) -> DealRunInput:
+    """Convert BMA repline cashflows into a `DealRunInput` for the deal engine."""
+    sched, actual, wac_pct = _repline_for_psa(psa_speed)
+    net_pct = float(POOL_ASSUMPTIONS["mbs_pass_through_rate_pct"])
+    initial_balance = float(POOL_ASSUMPTIONS["aggregate_upb_dollars"])
+
+    # The BMA actual cashflow runner returns period-indexed arrays where
+    # index 0 is the snapshot. Pool principal each period = scheduled
+    # amortization + voluntary prepayments. Defaults are zero in the
+    # prospectus decrement assumption.
+    horizon = min(n_periods + 1, len(actual.act_am))
+    principal = (actual.act_am[:horizon] + actual.vol_prepay[:horizon])
+    bal = actual.perf_bal[:horizon].copy()
+    # Net interest distributed to certificateholders at the 5.50% pass-through.
     net_monthly_rate = net_pct / 1200.0
     interest_net = np.zeros(horizon)
     for i in range(1, horizon):
         interest_net[i] = bal[i - 1] * net_monthly_rate
-    cashflow = principal + interest_net
+
     cf = CollateralCashflows(
         cfdate=list(range(horizon)),
         balance=bal.tolist(),
         principal=principal.tolist(),
         interest=interest_net.tolist(),
-        cashflow=cashflow.tolist(),
+        cashflow=(principal + interest_net).tolist(),
         loss=[0.0] * horizon,
         prepbal=[0.0] * horizon,
         defbal=[0.0] * horizon,
         recovery=[0.0] * horizon,
-        principal_sched=sched_prin.tolist(),
-        principal_unsched=vol_prepay.tolist(),
+        principal_sched=actual.act_am[:horizon].tolist(),
+        principal_unsched=actual.vol_prepay[:horizon].tolist(),
         cpr=[0.0] * horizon,
         cdr=[0.0] * horizon,
         sev=[0.0] * horizon,
@@ -152,6 +148,44 @@ def _collateral_at_psa(psa_speed: float, n_periods: int) -> DealRunInput:
         original_collateral_balance=initial_balance,
         loan_count=int(initial_balance / 200_000.0),
     )
+
+
+# Backward-compatible alias used by other tests + the seed script.
+def _collateral_at_psa(psa_speed: float, n_periods: int) -> DealRunInput:
+    return _deal_input_from_repline(psa_speed, n_periods)
+
+
+def _amortize_pool_at_psa(
+    initial_balance: float,
+    annual_coupon_pct: float,
+    term: int,
+    remaining_term: int,
+    psa_speed: float,
+    n_periods: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compatibility wrapper: route the seed script through the BMA cashflow engine."""
+    sched = run_bma_scheduled_cashflow(
+        original_balance=initial_balance,
+        current_balance=initial_balance,
+        coupon_vector=annual_coupon_pct,
+        original_term=term,
+        remaining_term=remaining_term,
+    )
+    smm = generate_smm_curve_from_psa(float(psa_speed), term)
+    mdr = np.zeros(term + 1)
+    sev = np.zeros(term + 1)
+    actual = run_bma_actual_cashflow(
+        scheduled_cf=sched,
+        smm_curve=smm,
+        mdr_curve=mdr,
+        severity_curve=sev,
+        coupon_vector=annual_coupon_pct,
+    )
+    horizon = min(n_periods + 1, len(actual.act_am))
+    bal = actual.perf_bal[:horizon].copy()
+    sched_prin = actual.act_am[:horizon].copy()
+    vol_prepay = actual.vol_prepay[:horizon].copy()
+    return bal, sched_prin, vol_prepay
 
 
 def _aggregate_group_balance(result, group_class_names: list[str], period: int) -> float:

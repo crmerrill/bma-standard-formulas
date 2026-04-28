@@ -99,9 +99,14 @@ from typing import Any, Literal, Mapping
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import brentq
 
 from bma_standard_formulas.formulas.cashflows import BMAActualCashflow, BMAScheduledCashflow
+
+
+def _brentq(*args, **kwargs):
+    """Lazy scipy.optimize.brentq import (see payment_models for rationale)."""
+    from scipy.optimize import brentq
+    return brentq(*args, **kwargs)
 
 
 PriceYieldKind = Literal["price", "yield"]
@@ -570,7 +575,7 @@ def yield_pct_from_price(
         )
     # Brent is robust for monotone price-yield functions and does not require
     # a derivative (unlike Newton methods).
-    return float(brentq(f, lower_bound_pct, upper_bound_pct))
+    return float(_brentq(f, lower_bound_pct, upper_bound_pct))
 
 
 # =============================================================================

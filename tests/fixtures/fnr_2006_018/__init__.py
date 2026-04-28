@@ -150,5 +150,21 @@ PUBLISHED_WAL_GROUP_1 = {
     "TA": [23.2, 10.7, 4.7, 4.7, 4.7, 2.8, 1.6, 1.3],
     "TB": [28.3, 28.3, 28.3, 28.3, 28.3, 8.0, 2.8, 2.0],
     "Z":  [28.0, 18.3, 9.8, 0.7, 0.3, 0.3, 0.2, 0.1],
+    "PO": [29.2, 24.0, 19.1, 11.8, 2.8, 2.1, 1.1, 0.8],
+    "WA": [28.7, 20.6, 13.3, 2.5, 1.2, 1.0, 0.5, 0.4],
+    "WB": [29.0, 22.3, 16.2, 5.2, 1.9, 1.5, 0.8, 0.6],
+    "WC": [29.2, 23.8, 18.5, 11.2, 2.5, 2.0, 1.1, 0.8],
+    "WD": [29.5, 25.4, 21.3, 15.9, 3.3, 2.5, 1.3, 0.9],
+    "WE": [29.7, 26.6, 23.5, 19.1, 4.0, 2.9, 1.4, 1.0],
+    "WG": [29.9, 28.1, 26.7, 24.3, 5.4, 3.5, 1.6, 1.2],
 }
 PUBLISHED_WAL_PSA_COLUMNS = [0, 100, 147, 180, 227, 250, 375, 500]
+
+# Pricing assumption applied for the **0% PSA** column only. The prospectus
+# uses a worst-case 8.00% gross / 360 month full term assumption when no
+# prepayment occurs. Other PSA speeds use the actual pool characteristics.
+ZERO_PSA_PRICING_OVERRIDE = {
+    "weighted_average_coupon_pct": 8.00,
+    "weighted_average_remaining_term_months": 360,
+    "original_term_months": 360,
+}

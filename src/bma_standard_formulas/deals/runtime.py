@@ -123,6 +123,11 @@ class ExecutionContext:
     cash_avail: np.ndarray | None = None
     trace_buf: list[tuple] | None = None
     trigger_rows: list[TriggerStateRow] = field(default_factory=list)
+    # Per-period dictionary of `cash_at_<rule_id>` snapshots so a later rule
+    # can anchor its `max_amount_expr` to the cash level at an earlier rule
+    # boundary (used to model face-weighted percentage splits like the FNR
+    # 2006-018 95.65 / 4.35 support cash distribution).
+    rule_cash_snapshots: dict[str, float] = field(default_factory=dict)
 
 
 def _build_schedule_cap(bond_def: Any, cf_len: int) -> np.ndarray | None:
@@ -861,8 +866,18 @@ def run_deal(
             orig_collat_bal,
         )
         allow_negative_cash_math = bool(deal.deal_knobs.get("allow_negative_cashflow_math", False))
+        # Reset per-period cash snapshots so each rule sees the cash state as
+        # of its own start, anchored to a deterministic point in the waterfall.
+        ctx.rule_cash_snapshots.clear()
 
         for rule in compiled:
+            # Capture the cash level immediately before this rule executes so
+            # later rules can reference it as `cash_at_<rule_id>` in their
+            # `max_amount_expr`. This is the mechanism for face-weighted
+            # percentage splits (e.g., FNR 2006-018 supports 95.65 / 4.35).
+            ctx.rule_cash_snapshots[rule.rule_id] = (
+                float(ctx.cash_avail[i]) if ctx.cash_avail is not None else 0.0
+            )
             rule_expr_ctx = _build_expr_context(
                 deal,
                 run_input,
@@ -876,6 +891,10 @@ def run_deal(
                 i,
                 orig_collat_bal,
             )
+            for snap_rule_id, snap_value in ctx.rule_cash_snapshots.items():
+                key = f"cash_at_{snap_rule_id}"
+                if key.isidentifier():
+                    rule_expr_ctx[key] = snap_value
             if rule.condition_trigger:
                 trig_active = ctx.trigger_states.get(rule.condition_trigger, False)
                 if rule.condition_invert:
