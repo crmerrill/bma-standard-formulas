@@ -189,6 +189,12 @@ class RuleNode(BaseModel):
     condition_expr: str | None = None
     allow_negative_source: bool = False
 
+    # When True the rule bypasses the per-bond `schedule_contract` cap on
+    # PAY_PRINCIPAL allocations (e.g., the "to Aggregate Group I to zero"
+    # cleanup rules in PAC deals that pay PAC bonds beyond their published
+    # planned-balance schedule once support tranches are exhausted).
+    ignore_schedule_cap: bool = False
+
     description: str = ""
 
 

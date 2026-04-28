@@ -171,7 +171,15 @@ def build_fnr_2006_018_group_1_deal(
     rules: list[RuleNode] = []
     order = 0
 
-    def add(rule_id: str, rule_type: RuleType, sources: list[str], targets: list[str], style: PaymentStyle = PaymentStyle.SEQUENTIAL, max_amount_expr: str | None = None) -> None:
+    def add(
+        rule_id: str,
+        rule_type: RuleType,
+        sources: list[str],
+        targets: list[str],
+        style: PaymentStyle = PaymentStyle.SEQUENTIAL,
+        max_amount_expr: str | None = None,
+        ignore_schedule_cap: bool = False,
+    ) -> None:
         nonlocal order
         rules.append(RuleNode(
             rule_id=rule_id,
@@ -181,6 +189,7 @@ def build_fnr_2006_018_group_1_deal(
             to_targets=targets,
             payment_style=style,
             max_amount_expr=max_amount_expr,
+            ignore_schedule_cap=ignore_schedule_cap,
         ))
         order += 1
 
@@ -202,9 +211,25 @@ def build_fnr_2006_018_group_1_deal(
     # rules with explicit max_amount_expr for the PO share.
     add("r_prin_sup_seq", RuleType.PAY_PRINCIPAL, ["CASH"], sup_targets_seq)
     add("r_prin_PO", RuleType.PAY_PRINCIPAL, ["CASH"], ["PO"])
-    # 6 + 7. Aggregate Group II / Group I to zero (no schedule cap)
-    add("r_prin_pac_ii_uncapped", RuleType.PAY_PRINCIPAL, ["CASH"], pac_ii_targets)
-    add("r_prin_pac_i_uncapped", RuleType.PAY_PRINCIPAL, ["CASH"], pac_i_targets)
+    # 6 + 7. Aggregate Group II / Group I "to zero" cleanup rules. These run
+    # AFTER supports and pay PAC bonds beyond their published planned-balance
+    # schedule, so we set `ignore_schedule_cap=True` to bypass the cap.
+    for name in pac_ii_targets:
+        add(
+            f"r_prin_{name}_uncapped",
+            RuleType.PAY_PRINCIPAL,
+            ["CASH"],
+            [name],
+            ignore_schedule_cap=True,
+        )
+    for name in pac_i_targets:
+        add(
+            f"r_prin_{name}_uncapped",
+            RuleType.PAY_PRINCIPAL,
+            ["CASH"],
+            [name],
+            ignore_schedule_cap=True,
+        )
     # Residual sweep
     add("r_resid", RuleType.PAY_RESIDUAL, ["CASH"], ["R"])
 

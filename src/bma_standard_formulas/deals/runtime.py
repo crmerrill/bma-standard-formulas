@@ -104,6 +104,7 @@ class CompiledRulePlan:
     order: int
     rule_type_str: str
     payment_style: str
+    ignore_schedule_cap: bool = False
 
 
 @dataclass
@@ -289,6 +290,7 @@ def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
                 order=rule.order,
                 rule_type_str=rule.rule_type.value,
                 payment_style=rule.payment_style.value,
+                ignore_schedule_cap=getattr(rule, "ignore_schedule_cap", False),
             )
         )
     return compiled
@@ -894,13 +896,17 @@ def run_deal(
                     avail_cash = min(avail_cash, float(max_amt))
                 # Schedule-first cap: PAC/TAC bonds limit themselves to their
                 # remaining schedule for this period; non-scheduled bonds keep
-                # their balance as the natural cap.
+                # their balance as the natural cap. The `ignore_schedule_cap`
+                # rule flag bypasses this cap so cleanup rules ("to Aggregate
+                # Group X to zero") can pay PAC bonds beyond the published
+                # schedule once supports are exhausted.
                 due_by_target: list[tuple[str, float]] = []
                 for name, tgt in active_targets:
                     natural = max(0.0, float(tgt.balance[i]))
-                    sched_remaining = _schedule_remaining(tgt, i)
-                    if sched_remaining is not None:
-                        natural = min(natural, sched_remaining)
+                    if not rule.ignore_schedule_cap:
+                        sched_remaining = _schedule_remaining(tgt, i)
+                        if sched_remaining is not None:
+                            natural = min(natural, sched_remaining)
                     due_by_target.append((name, natural))
                 total_due = float(sum(d for _, d in due_by_target))
                 remaining = max(0.0, avail_cash)
@@ -985,8 +991,12 @@ def run_deal(
                         )
                     elif rule.tag == _OP_PRINCIPAL:
                         # Schedule-first cap composes with rule-level cap so PAC/TAC bonds
-                        # never exceed their published principal contract for this period.
-                        effective_max = _effective_principal_cap(tgt, i, max_amt)
+                        # never exceed their published principal contract for this period,
+                        # unless the rule sets `ignore_schedule_cap` (cleanup-rule pattern).
+                        if rule.ignore_schedule_cap:
+                            effective_max = max_amt
+                        else:
+                            effective_max = _effective_principal_cap(tgt, i, max_amt)
                         pmt = pay_principal(
                             sources,
                             tgt.principal,

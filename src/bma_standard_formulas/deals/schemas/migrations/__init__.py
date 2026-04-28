@@ -35,6 +35,11 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
             bond.setdefault("schedule_model_type", None)
             bond.setdefault("schedule_priority_tier", None)
             bond.setdefault("schedule_depends_on", None)
+    rules = payload.get("waterfall_rules", []) or []
+    if isinstance(rules, list):
+        for rule in rules:
+            if isinstance(rule, dict):
+                rule.setdefault("ignore_schedule_cap", False)
             bond.setdefault("schedule_speed_low", None)
             bond.setdefault("schedule_speed_high", None)
             bond.setdefault("schedule_speed_target", None)
