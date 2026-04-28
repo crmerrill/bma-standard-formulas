@@ -135,6 +135,8 @@ def _group_2_collateral_input(psa_speed: float, n_periods: int) -> DealRunInput:
         horizon=n_periods + 1,
         loan_count=int(GROUP_2_FACE / 200_000.0),
         initial_balance=GROUP_2_FACE,
+        # FNR Group 2: net of MBS-layer servicing wedge (see adapter docs).
+        net_of_servicing=True,
     )
 
 

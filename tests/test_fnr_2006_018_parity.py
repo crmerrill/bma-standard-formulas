@@ -199,11 +199,12 @@ def _repline_for_psa(psa_speed: float):
 
     # Sum extensive fields across sub-replines into a single aggregated
     # actual-cashflow that quacks like a BMAActualCashflow as far as the
-    # `from_actual_cashflow` adapter is concerned.
+    # `from_actual_cashflow` adapter is concerned. `svc_billed` is summed
+    # so net-of-servicing routing in the adapter has the right wedge.
     class _AggregatedActual:
         pass
     agg_actual = _AggregatedActual()
-    for fname in ("act_am", "vol_prepay", "act_int", "exp_int",
+    for fname in ("act_am", "vol_prepay", "act_int", "exp_int", "svc_billed",
                   "prin_loss", "prin_recov", "new_def", "perf_bal"):
         agg_actual.__dict__[fname] = sum(
             getattr(a, fname)[:horizon] for a in sub_actuals
@@ -244,6 +245,13 @@ def _deal_input_from_repline(psa_speed: float, n_periods: int) -> DealRunInput:
         horizon=n_periods + 1,
         loan_count=int(initial_balance / 200_000.0),
         initial_balance=initial_balance,
+        # FNR is a Fannie Mae REMIC: each underlying MBS delivers only the
+        # 5.50% pass-through rate to the trust, with the gross-vs-net
+        # wedge netted at the MBS layer (Fannie Mae guaranty fee). The
+        # adapter subtracts svc_billed so the deal engine receives net
+        # pass-through interest -- modeling the wedge as a trust-level
+        # FeeDef would double-count it.
+        net_of_servicing=True,
     )
 
 

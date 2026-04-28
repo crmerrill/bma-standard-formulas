@@ -1,9 +1,12 @@
 """Scenario-scoped and run-scoped output bundles with artifact manifests."""
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 from .common import PrecisionPolicy, SchemaMetadata
 from .output_bond import (
     BondCashflowRow,
+    CarryTieoutSummary,
     CreditEnhancementRow,
     TrancheRiskSummaryRow,
 )
@@ -31,6 +34,13 @@ class ScenarioOutputBundle(BaseModel):
     credit_enhancement: list[CreditEnhancementRow] = Field(default_factory=list)
     pac_tac_diagnostics: list[PacTacDiagnosticsRow] = Field(default_factory=list)
     structure_composition: list[StructureCompositionRow] = Field(default_factory=list)
+
+    # Engine-truth carry tie-out (per-tranche YTM/duration, pool YTM,
+    # back-solved residual yield, status). Populated by
+    # `bma_cfengine_app.orchestrator.deals.carry_tieout_service` after
+    # the bond cashflows are materialized. Optional so older runs and
+    # collateral-only scenarios remain backwards-compatible.
+    carry_tieout: Optional[CarryTieoutSummary] = None
 
 
 class DealRunOutput(BaseModel):

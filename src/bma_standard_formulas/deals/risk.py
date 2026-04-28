@@ -2,7 +2,20 @@
 
 Computes per-tranche: price, yield, duration, convexity, WAL, z-spread,
 loss-adjusted yield, extension/contraction risk scores, and credit enhancement.
+
+Two yield conventions are supported:
+
+  - **Annualized monthly rate (APR-style)**: ``monthly_rate * 1200``. This is
+    how the legacy `compute_yield_from_cashflows` returns its value.
+
+  - **Corporate-bond-equivalent (CBE) yield**: ``2 * ((1 + r_m) ** 6 - 1) * 100``.
+    This is the prospectus convention (Fannie Mae S-19, Bloomberg, BMA SF
+    pricing tables) and is used for tie-outs against published yield tables.
+    Computed by ``bond_ytm_cbe`` and routed through ``solve_monthly_irr`` /
+    ``monthly_to_cbe``.
 """
+from collections.abc import Sequence
+
 import numpy as np
 
 from .schemas.output_bond import (
@@ -11,6 +24,110 @@ from .schemas.output_bond import (
     TrancheRiskSummaryRow,
 )
 from .schemas.output_bundle import ScenarioOutputBundle
+
+
+# ---------------------------------------------------------------------------
+# Yield primitives -- robust brentq IRR + CBE conversion
+# ---------------------------------------------------------------------------
+
+
+def solve_monthly_irr(
+    cashflows: Sequence[float],
+    initial_outflow: float,
+    *,
+    rate_lo: float = -0.05,
+    rate_hi: float = 0.50,
+) -> float:
+    """Solve for the monthly rate ``r_m`` such that
+    ``sum(cashflows[i] / (1 + r_m)**i) == initial_outflow``.
+
+    ``cashflows[0]`` is conventionally zero (no payment at settlement);
+    period i = 1, 2, ... are positive payments. ``initial_outflow`` is
+    the upfront price the buyer pays (for a bond: ``price * face``).
+
+    Uses scipy's brentq on the standard NPV-vs-rate root. If the root is
+    not bracketed by ``[rate_lo, rate_hi]`` the bracket is widened
+    automatically until it brackets a sign change or fails. Bracket
+    failure typically means the cashflow stream is degenerate (all-zero
+    or sums to less than ``initial_outflow``).
+    """
+    from scipy.optimize import brentq
+
+    cf = np.asarray(cashflows, dtype=float)
+    periods = np.arange(len(cf), dtype=float)
+
+    def _npv(r_m: float) -> float:
+        if r_m <= -1.0 + 1e-9:
+            return float("inf")
+        df = (1.0 + r_m) ** -periods
+        return float((cf * df).sum() - initial_outflow)
+
+    lo, hi = rate_lo, rate_hi
+    for _ in range(8):
+        try:
+            return float(brentq(_npv, lo, hi, maxiter=200, xtol=1e-10))
+        except ValueError:
+            lo = max(-0.999, lo * 2 - 0.01)
+            hi = min(10.0, hi * 2 + 0.01)
+            continue
+    raise ValueError(
+        f"Cashflow IRR not bracketed in [{lo:.6f}, {hi:.6f}]; "
+        f"sum_cashflows={float(cf.sum()):.4f} vs initial_outflow={initial_outflow:.4f}"
+    )
+
+
+def monthly_to_cbe(monthly_rate: float) -> float:
+    """Convert a monthly rate to corporate-bond-equivalent annualized yield (percent).
+
+    CBE: ``y = 2 * ((1 + r_m) ** 6 - 1)`` -- twice the semi-annual yield
+    derived by compounding the monthly rate up by 6 months. This is the
+    Fannie Mae yield-table convention.
+    """
+    return 2.0 * ((1.0 + monthly_rate) ** 6 - 1.0) * 100.0
+
+
+def monthly_to_apr(monthly_rate: float) -> float:
+    """Convert a monthly rate to annualized monthly rate (APR-style, percent)."""
+    return monthly_rate * 1200.0
+
+
+def bond_ytm_cbe(
+    cashflows: Sequence[float],
+    price: float,
+    face: float,
+) -> float:
+    """Solve for CBE yield-to-maturity given a cashflow stream and price * face.
+
+    ``cashflows[i]`` is the dollar payment at period i (i = 0 is conventionally
+    zero). Returns YTM in percent under the corporate-bond-equivalent
+    convention used by the prospectus.
+    """
+    r_m = solve_monthly_irr(cashflows, price * face)
+    return monthly_to_cbe(r_m)
+
+
+def io_cashflows_from_underlying_balance(
+    underlying_rows: Sequence[BondCashflowRow],
+    coupon_pct: float,
+) -> np.ndarray:
+    """Build a notional-IO cashflow array from an underlying bond's balance trace.
+
+    Each period's IO coupon = ``begin_balance[period] * coupon_pct / 1200``.
+    Used for IO classes (e.g., FNR EI, DI) whose notional balance is
+    defined to track a sister bond's outstanding balance and whose only
+    cashflows are interest on that notional. The underlying class is
+    assumed to be sorted by period; missing periods are zero-filled.
+    """
+    if not underlying_rows:
+        return np.zeros(0)
+    sorted_rows = sorted(underlying_rows, key=lambda r: r.period)
+    n_periods = sorted_rows[-1].period + 1
+    out = np.zeros(n_periods)
+    monthly_rate = coupon_pct / 1200.0
+    for r in sorted_rows:
+        if r.period > 0:
+            out[r.period] = float(r.begin_balance) * monthly_rate
+    return out
 
 
 def _group_by_tranche(

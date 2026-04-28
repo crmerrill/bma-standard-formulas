@@ -195,6 +195,7 @@ def from_actual_cashflow(
     market_date: str | None = None,
     initial_balance: float | None = None,
     discount_factors: Any = None,
+    net_of_servicing: bool = False,
 ) -> DealRunInput:
     """Convert a BMA `actual_cashflow_from_loan` output to ``DealRunInput``.
 
@@ -213,25 +214,38 @@ def from_actual_cashflow(
     ``act_am``                   ``principal_sched``
     ``vol_prepay``               ``principal_unsched``, ``prepbal``
     ``act_am + vol_prepay``      ``principal``
-    ``act_int``                  ``interest``  (net of svc fee on the Loan)
+    ``act_int`` or               ``interest``  (gross, or net per
+      ``act_int - svc_billed``               ``net_of_servicing``)
     ``new_def``                  ``defbal``
     ``prin_recov``               ``recovery``
     ``prin_loss``                ``loss``
     ===========================  ================================
 
-    The interest stream uses the ``act_int`` BMA computes after subtracting
-    the loan's ``servicing_fee`` (the 3-tier perf/default/foreclosure model)
-    from the gross coupon. If the deal IR is going to model the GSE
-    guaranty/servicing wedge as its own ``FeeDef``, build the source Loan
-    objects with ``servicing_fee=0`` (gross) and let the deal waterfall
-    deduct the wedge; otherwise, set ``servicing_fee=gross-net`` on the
-    Loan and the wedge is netted before this adapter ever sees the
-    cashflow.
+    Servicing convention:
+
+    BMA's ``act_int`` is the GROSS interest the loan delivers to whoever
+    holds it (servicing fees are tracked separately as ``svc_billed``).
+    Two architectural options for routing this into a deal:
+
+    1. **Trust-layer fee**: pass ``net_of_servicing=False`` (default).
+       The deal engine receives gross interest, and the deal IR models
+       the servicing wedge as a `FeeDef` + `PAY_FEE` rule that deducts
+       it before bond interest. Right for private-label deals where
+       master servicer / trustee fees deduct at the trust waterfall.
+
+    2. **MBS-layer netting** (e.g., Fannie Mae REMIC): pass
+       ``net_of_servicing=True``. The adapter computes
+       ``interest = act_int - svc_billed`` so the deal engine receives
+       net pass-through interest directly, mirroring how each MBS pool
+       delivers only the MBS pass-through rate to the REMIC trust
+       (the Fannie Mae guaranty fee never enters the trust). The deal
+       IR then has no wedge fee.
 
     Args:
         actual: ``BMAActualCashflow`` (or any object with the standard field
             names: ``perf_bal``, ``act_am``, ``vol_prepay``, ``act_int``,
-            ``new_def``, ``prin_recov``, ``prin_loss``).
+            ``svc_billed`` (when ``net_of_servicing=True``), ``new_def``,
+            ``prin_recov``, ``prin_loss``).
         horizon: Optional truncation length. If ``None``, uses the full
             length of the actual-cashflow arrays.
         loan_count: Number of loans in the underlying pool.
@@ -240,6 +254,9 @@ def from_actual_cashflow(
             ``original_collateral_balance``. Defaults to ``perf_bal[0]``.
         discount_factors: Optional sequence of per-period discount factors
             (length matches horizon). Defaults to ones.
+        net_of_servicing: When True, deduct ``svc_billed`` from ``act_int``
+            so the deal engine receives net pass-through interest. Use for
+            MBS-backed REMICs where the wedge is netted at the MBS layer.
 
     Returns:
         DealRunInput with PooledCollateralInput populated.
@@ -256,7 +273,12 @@ def from_actual_cashflow(
     n = full_len if horizon is None else min(int(horizon), full_len)
 
     principal = (act_am[:n] + vol_prepay[:n]).astype(float)
-    interest = act_int[:n].astype(float)
+    if net_of_servicing:
+        svc_billed = np.asarray(getattr(actual, "svc_billed", np.zeros(full_len)),
+                                dtype=float)
+        interest = (act_int[:n] - svc_billed[:n]).astype(float)
+    else:
+        interest = act_int[:n].astype(float)
     balance = perf_bal[:n].astype(float)
 
     if discount_factors is None:

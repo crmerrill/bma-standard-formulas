@@ -26,8 +26,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from scipy.optimize import brentq
 
+from bma_standard_formulas.deals.risk import (
+    bond_ytm_cbe,
+    io_cashflows_from_underlying_balance,
+    monthly_to_cbe,
+    solve_monthly_irr,
+)
 from bma_standard_formulas.deals.runtime import run_deal
 
 from tests.fixtures.fnr_2006_018 import GROUP_1_CLASSES, GROUP_2_CLASSES
@@ -112,55 +117,26 @@ def _interest_cashflows(result, tranche_id: str) -> np.ndarray:
     return out
 
 
-def _io_cashflows_from_underlying_balance(result, underlying_id: str, coupon_pct: float) -> np.ndarray:
-    """Compute notional-IO cashflows: each period's coupon = prior balance * c/12.
+def _io_cashflows_from_result(result, underlying_id: str, coupon_pct: float) -> np.ndarray:
+    """Notional-IO cashflows for `underlying_id` on the result bundle.
 
-    Used for EI (notional 5.50% on EO) -- EI is not directly modeled in
-    the Group 1 deal because it's an RCR exchangeable; its cashflows are
-    derived from the underlying EO balance trajectory.
+    Thin wrapper around the canonical
+    `bma_standard_formulas.deals.risk.io_cashflows_from_underlying_balance`
+    that pulls the underlying bond's rows out of a ScenarioOutputBundle.
     """
-    rows = sorted(
-        (r for r in result.bond_cashflows if r.tranche_id == underlying_id),
-        key=lambda r: r.period,
-    )
-    n = (rows[-1].period if rows else 0) + 1
-    cf = np.zeros(n)
-    monthly_rate = coupon_pct / 1200.0
-    for r in rows:
-        if r.period == 0:
-            continue
-        # Coupon for period i is on the begin-of-period balance.
-        cf[r.period] = float(r.begin_balance) * monthly_rate
-    return cf
+    underlying_rows = [
+        r for r in result.bond_cashflows if r.tranche_id == underlying_id
+    ]
+    return io_cashflows_from_underlying_balance(underlying_rows, coupon_pct)
 
 
-def _solve_monthly_irr(cashflows: np.ndarray, initial_outflow: float) -> float:
-    """Solve for the monthly rate r_m such that NPV(cashflows) = initial_outflow.
-
-    Cashflow at period 0 is the negative of `initial_outflow` (the
-    upfront cost); subsequent cashflows are positive. Returns the monthly
-    rate as a decimal.
-    """
-    def _npv(r_m: float) -> float:
-        if r_m <= -1.0 + 1e-9:
-            return float("inf")
-        periods = np.arange(len(cashflows), dtype=float)
-        df = (1.0 + r_m) ** -periods
-        return float(np.sum(cashflows * df) - initial_outflow)
-    # Bracket: yields from -0.5%/mo (-6%/yr) up to 50%/mo (extreme stress).
-    return float(brentq(_npv, -0.05, 0.50, maxiter=200, xtol=1e-10))
-
-
-def _monthly_to_cbe(r_m: float) -> float:
-    """Convert monthly rate to corporate-bond-equivalent annual rate (percent)."""
-    return 2.0 * ((1.0 + r_m) ** 6 - 1.0) * 100.0
-
-
-def _bond_ytm(cashflows: np.ndarray, price: float, face: float) -> float:
-    """Solve for CBE YTM (in percent) given cashflows and price * face."""
-    initial_outflow = price * face
-    r_m = _solve_monthly_irr(cashflows, initial_outflow)
-    return _monthly_to_cbe(r_m)
+# Backwards-compat names used by the YTM summary helper at the bottom of
+# this module (and by other tests that import from here). All thin
+# wrappers around the canonical primitives in `deals.risk`.
+_solve_monthly_irr = solve_monthly_irr
+_monthly_to_cbe = monthly_to_cbe
+_bond_ytm = bond_ytm_cbe
+_io_cashflows_from_underlying_balance = _io_cashflows_from_result
 
 
 # ---------------------------------------------------------------------------
