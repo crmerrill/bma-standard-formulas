@@ -349,6 +349,13 @@ class TapeSchema:
         # ── Delinquency / performance status ──────────────────────────────
         FieldSpec("days_past_due",        "int",   default=0),
         FieldSpec("loan_status",          "str",   default="current"),
+        # ── WALA seasoning override (nullable) ─────────────────────────────
+        # Defaults to None so `loan.age` falls back to the standard
+        # `original_term - remaining_term`. Pools whose Reference Sheet
+        # publishes WALA separately from WAM (e.g. Fannie Mae REMICs)
+        # populate this field so age-indexed prepay/default curves are
+        # seasoned to the published WALA.
+        FieldSpec("wala_override",        "int"),
     )
 
     # ------------------------------------------------------------------

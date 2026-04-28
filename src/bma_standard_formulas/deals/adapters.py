@@ -187,6 +187,122 @@ def from_portfolio_cashflow(
     )
 
 
+def from_actual_cashflow(
+    actual: Any,
+    *,
+    horizon: int | None = None,
+    loan_count: int | None = None,
+    market_date: str | None = None,
+    initial_balance: float | None = None,
+    discount_factors: Any = None,
+) -> DealRunInput:
+    """Convert a BMA `actual_cashflow_from_loan` output to ``DealRunInput``.
+
+    Mirrors :func:`from_portfolio_cashflow` (the production adapter that
+    accepts a portfolio DataFrame artifact) but takes the typed
+    ``BMAActualCashflow`` namedtuple-like object directly so callers that
+    already have a result in memory (e.g. notebooks, parity harnesses, the
+    FNR test fixture) avoid a DataFrame round-trip.
+
+    Field mapping:
+
+    ===========================  ================================
+    BMA actual cashflow field    CollateralCashflows field
+    ===========================  ================================
+    ``perf_bal``                 ``balance``, ``sched_balance``
+    ``act_am``                   ``principal_sched``
+    ``vol_prepay``               ``principal_unsched``, ``prepbal``
+    ``act_am + vol_prepay``      ``principal``
+    ``act_int``                  ``interest``  (net of svc fee on the Loan)
+    ``new_def``                  ``defbal``
+    ``prin_recov``               ``recovery``
+    ``prin_loss``                ``loss``
+    ===========================  ================================
+
+    The interest stream uses the ``act_int`` BMA computes after subtracting
+    the loan's ``servicing_fee`` (the 3-tier perf/default/foreclosure model)
+    from the gross coupon. If the deal IR is going to model the GSE
+    guaranty/servicing wedge as its own ``FeeDef``, build the source Loan
+    objects with ``servicing_fee=0`` (gross) and let the deal waterfall
+    deduct the wedge; otherwise, set ``servicing_fee=gross-net`` on the
+    Loan and the wedge is netted before this adapter ever sees the
+    cashflow.
+
+    Args:
+        actual: ``BMAActualCashflow`` (or any object with the standard field
+            names: ``perf_bal``, ``act_am``, ``vol_prepay``, ``act_int``,
+            ``new_def``, ``prin_recov``, ``prin_loss``).
+        horizon: Optional truncation length. If ``None``, uses the full
+            length of the actual-cashflow arrays.
+        loan_count: Number of loans in the underlying pool.
+        market_date: Market/settlement date string.
+        initial_balance: Optional override for the deal's
+            ``original_collateral_balance``. Defaults to ``perf_bal[0]``.
+        discount_factors: Optional sequence of per-period discount factors
+            (length matches horizon). Defaults to ones.
+
+    Returns:
+        DealRunInput with PooledCollateralInput populated.
+    """
+    perf_bal = np.asarray(actual.perf_bal, dtype=float)
+    act_am = np.asarray(actual.act_am, dtype=float)
+    vol_prepay = np.asarray(actual.vol_prepay, dtype=float)
+    act_int = np.asarray(actual.act_int, dtype=float)
+    new_def = np.asarray(actual.new_def, dtype=float)
+    prin_recov = np.asarray(actual.prin_recov, dtype=float)
+    prin_loss = np.asarray(actual.prin_loss, dtype=float)
+
+    full_len = len(perf_bal)
+    n = full_len if horizon is None else min(int(horizon), full_len)
+
+    principal = (act_am[:n] + vol_prepay[:n]).astype(float)
+    interest = act_int[:n].astype(float)
+    balance = perf_bal[:n].astype(float)
+
+    if discount_factors is None:
+        df_arr = [1.0] * n
+    else:
+        df_arr = [float(x) for x in discount_factors[:n]]
+
+    cf = CollateralCashflows(
+        cfdate=list(range(n)),
+        balance=balance.tolist(),
+        principal=principal.tolist(),
+        interest=interest.tolist(),
+        cashflow=(principal + interest).tolist(),
+        loss=prin_loss[:n].tolist(),
+        prepbal=vol_prepay[:n].tolist(),
+        defbal=new_def[:n].tolist(),
+        recovery=prin_recov[:n].tolist(),
+        principal_sched=act_am[:n].tolist(),
+        principal_unsched=vol_prepay[:n].tolist(),
+        cpr=[0.0] * n,
+        cdr=[0.0] * n,
+        sev=[0.0] * n,
+        dq=[0.0] * n,
+        surv_fac=[1.0] * n,
+        sched_coupon=[0.0] * n,
+        sched_netcoupon=[0.0] * n,
+        coupon=[0.0] * n,
+        effcoupon=[0.0] * n,
+        sched_balance=balance.tolist(),
+        discount_factor=df_arr,
+    )
+
+    orig_bal = (
+        float(initial_balance)
+        if initial_balance is not None
+        else (float(balance[0]) if n > 0 else 0.0)
+    )
+
+    return DealRunInput(
+        collateral=PooledCollateralInput(collateral=cf),
+        loan_count=loan_count,
+        original_collateral_balance=orig_bal,
+        market_date=market_date,
+    )
+
+
 def from_pi_strips(
     principal_arrays: dict[str, Any],
     interest_arrays: dict[str, Any],

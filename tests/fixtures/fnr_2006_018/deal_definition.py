@@ -15,10 +15,35 @@ Mirrors the prospectus Group 1 waterfall:
     5. To Aggregate Group II to zero (no schedule)
     6. To Aggregate Group I to zero (no schedule)
 
-For runtime IR, schedules become per-bond `schedule_contract` derived from the
-published Aggregate Group I / Group II planned balance vectors. The Z bond is
-modeled with `tranche_behavior=Z`, `pay_mode=PIK`, `supported_by_tranches`
-pointing at TA then TB.
+IR translation:
+
+  - Per-bond `schedule_contract` is derived from the published Aggregate
+    Group I / Group II planned balance vectors via
+    ``_per_bond_planned_balance_schedule`` (sequential apportionment).
+  - Z is modeled with ``tranche_behavior=Z``, ``pay_mode=PIK``,
+    ``supported_by_tranches=["TA", "TB"]``.
+  - Step 4 face-weighted split is expressed with the IR's ``SPLIT_CASH``
+    primitive: PRIN_CASH -> WAWG_BUCKET / PO_BUCKET (95.65 / 4.35), each
+    bucket feeds its own PAY_PRINCIPAL cascade, leftover sweeps back to
+    PRIN_CASH via N->1 merge for the cleanup phase.
+
+GSE guaranty wedge:
+
+  The 0.44% wedge between gross WAC (5.94%) and the MBS pass-through rate
+  (5.50%) is **not** modeled as a trust-level FeeDef. Each underlying
+  Fannie Mae MBS pool delivers ONLY the 5.50% pass-through rate to the
+  REMIC trust; the wedge is netted at the MBS layer by Fannie Mae as the
+  guarantor and never enters the REMIC waterfall. The fixture therefore
+  configures each sub-repline ``Loan`` with
+  ``servicing_fee = wac_gross - net_pass_through``, which makes BMA's
+  ``act_int`` already net of the wedge by the time it reaches
+  ``from_actual_cashflow`` and the deal engine. Modeling the wedge as a
+  trust-level fee would double-count it.
+
+  The IR's ``FeeDef`` + ``PAY_FEE`` primitives remain the right
+  abstraction for deals where fees ARE deducted at the trust waterfall
+  (e.g., private-label master servicer, trustee, third-party servicing
+  fees, OC test pre-fund deposits, etc.).
 """
 from __future__ import annotations
 
@@ -188,6 +213,7 @@ def build_fnr_2006_018_group_1_deal(
         style: PaymentStyle = PaymentStyle.SEQUENTIAL,
         max_amount_expr: str | None = None,
         cap_mode: CapMode | None = None,
+        target_weights: list[float] | None = None,
     ) -> None:
         nonlocal order
         rules.append(RuleNode(
@@ -199,53 +225,87 @@ def build_fnr_2006_018_group_1_deal(
             payment_style=style,
             max_amount_expr=max_amount_expr,
             cap_mode=cap_mode,
+            target_weights=target_weights,
         ))
         order += 1
 
-    # 1. Pay interest on each fixed-coupon bond first (PAC then PAC/AD then SUP);
-    #    Z is PIK, gets accrual via runtime _apply_z_accrual instead of cash interest.
+    # 1. Interest cascade: PAY_INTEREST rules draw from the dedicated
+    #    `INT_CASH` stream (pool interest cash). Z is PIK -- its accrued
+    #    coupon is capitalized into Z balance and re-routed to TA principal
+    #    by the Z-accrual mechanic, with the matching pool interest deducted
+    #    from INT_CASH so the principal cascade sees only true pool principal.
     for name in pac_i_targets + pac_ii_targets + sup_targets_seq:
         if name == "EO" or name == "PO":  # zero-coupon bonds, no interest payment.
             continue
-        add(f"r_int_{name}", RuleType.PAY_INTEREST, ["CASH"], [name])
+        add(f"r_int_{name}", RuleType.PAY_INTEREST, ["INT_CASH"], [name])
 
-    # 2. Principal cascade as published: Group I PAC schedule -> Group II PAC schedule
-    #    -> Z -> WA-WG sequential / PO split -> Group II to zero -> Group I to zero.
+    # 2. Principal cascade: PAY_PRINCIPAL rules draw from the dedicated
+    #    `PRIN_CASH` stream (pool principal cash + Z accrual amount routed
+    #    here via the Z mechanic). This is the prospectus's "Group 1 Cash
+    #    Flow Distribution Amount" priority of payments verbatim.
     for name in pac_i_targets:
-        add(f"r_prin_{name}", RuleType.PAY_PRINCIPAL, ["CASH"], [name])
+        add(f"r_prin_{name}", RuleType.PAY_PRINCIPAL, ["PRIN_CASH"], [name])
     for name in pac_ii_targets:
-        add(f"r_prin_{name}", RuleType.PAY_PRINCIPAL, ["CASH"], [name])
-    add("r_prin_Z", RuleType.PAY_PRINCIPAL, ["CASH"], ["Z"])
-    # Support cash split (face-weighted pro-rata):
-    #   95.6521694276% to WA -> WG sequentially within the share
-    #    4.3478305724% to PO
-    # Both rules anchor to the cash level at the start of `r_supp_split_anchor`
-    # (the first support rule), so PO's allocation is 4.35% of the SAME cash
-    # pool that WA-WG draw 95.65% from -- not 4.35% of leftover.
+        add(f"r_prin_{name}", RuleType.PAY_PRINCIPAL, ["PRIN_CASH"], [name])
+    add("r_prin_Z", RuleType.PAY_PRINCIPAL, ["PRIN_CASH"], ["Z"])
+
+    # Step 4 -- Support cash split using the SPLIT_CASH IR primitive.
+    # The prospectus directs 95.6521694276% of remaining principal cash to
+    # WA-WG sequentially and 4.3478305724% to PO; the ratio is exactly the
+    # face-weighted split of (WA+WB+...+WG) vs PO, so both buckets retire
+    # at the same time when the support stack is fully funded.
+    #
+    # SPLIT_CASH drains PRIN_CASH and writes the two buckets:
+    #   PRIN_CASH -> WAWG_BUCKET (95.65%)
+    #              -> PO_BUCKET   (4.35%)
+    # Then PAY_PRINCIPAL rules pull from each bucket independently. Any
+    # cash left in either bucket after the support bonds retire flows back
+    # to PRIN_CASH via a sweep-back SPLIT_CASH (N -> 1 merge) so the
+    # cleanup cascade can drain it.
     add(
-        "r_supp_split_anchor",
+        "r_supp_split",
+        RuleType.SPLIT_CASH,
+        ["PRIN_CASH"],
+        ["WAWG_BUCKET", "PO_BUCKET"],
+        target_weights=[0.956521694276, 0.043478305724],
+    )
+    add(
+        "r_pay_wawg",
         RuleType.PAY_PRINCIPAL,
-        ["CASH"],
+        ["WAWG_BUCKET"],
         sup_targets_seq,
-        max_amount_expr="cash_at_r_supp_split_anchor * 0.956521694276",
     )
     add(
         "r_prin_PO",
         RuleType.PAY_PRINCIPAL,
-        ["CASH"],
+        ["PO_BUCKET"],
         ["PO"],
-        max_amount_expr="cash_at_r_supp_split_anchor * 0.043478305724",
     )
-    # 6 + 7. Aggregate Group II / Group I "to zero" cleanup rules. The
-    # prospectus phrase "without regard to its Planned Balance ... to zero"
-    # maps directly to `cap_mode=NONE`. These run AFTER supports so that pool
-    # cash drains PAC bonds beyond their published planned-balance schedule
-    # only when supports are exhausted (the standard cleanup pattern).
+    # Sweep both support buckets back into PRIN_CASH so the cleanup cascade
+    # below can drain any residual to remaining PAC bonds.
+    add(
+        "r_supp_sweep_back",
+        RuleType.SPLIT_CASH,
+        ["WAWG_BUCKET", "PO_BUCKET"],
+        ["PRIN_CASH"],
+        target_weights=[1.0],
+    )
+    # 6 + 7 + cleanup-all. Modular cleanup pattern: every outstanding bond
+    # gets a "to zero" rule with `cap_mode=NONE` after the support cascade
+    # so leftover principal cash drains to whoever still has balance. This
+    # is the prospectus's "without regard to Planned Balance" pattern
+    # (steps v + vi), generalized to cover the support PO as well so PO
+    # is not stranded when WA-WG retire ahead of schedule.
+    #
+    # Order: PAC II first, then PAC I, then supports + PO. This matches
+    # the prospectus's steps (v) and (vi) for PAC, and ensures the
+    # support PO drains last (after PAC cleanup) so we do not accidentally
+    # steal cash that the published priority sends to PAC II/I cleanup.
     for name in pac_ii_targets:
         add(
             f"r_prin_{name}_uncapped",
             RuleType.PAY_PRINCIPAL,
-            ["CASH"],
+            ["PRIN_CASH"],
             [name],
             cap_mode=CapMode.NONE,
         )
@@ -253,16 +313,148 @@ def build_fnr_2006_018_group_1_deal(
         add(
             f"r_prin_{name}_uncapped",
             RuleType.PAY_PRINCIPAL,
-            ["CASH"],
+            ["PRIN_CASH"],
             [name],
             cap_mode=CapMode.NONE,
         )
-    # Residual sweep
-    add("r_resid", RuleType.PAY_RESIDUAL, ["CASH"], ["R"])
+    # Support cleanup -- supports + PO each get a final "to zero" rule so
+    # tail-period residual principal that survives the face-weighted split
+    # (e.g., when WA-WG retire one period before PO does) drains to whoever
+    # still has balance.
+    for name in sup_targets_seq + ["PO"]:
+        add(
+            f"r_prin_{name}_uncapped",
+            RuleType.PAY_PRINCIPAL,
+            ["PRIN_CASH"],
+            [name],
+            cap_mode=CapMode.NONE,
+        )
+    # Residual sweeps both streams: leftover pool interest (after bond cash
+    # interest and Z accrual) plus leftover pool principal (e.g., after
+    # cleanup rules retire all bonds) flow to the residual class.
+    add("r_resid_int", RuleType.PAY_RESIDUAL, ["INT_CASH"], ["R"])
+    add("r_resid_prin", RuleType.PAY_RESIDUAL, ["PRIN_CASH"], ["R"])
 
     return DealDefinition(
         deal_name="FNR 2006-018 Group 1",
         bonds=bonds,
         waterfall_rules=rules,
-        deal_knobs={"allow_negative_cashflow_math": False},
+    )
+
+
+def build_fnr_2006_018_group_2_deal(n_periods: int = 240) -> DealDefinition:
+    """Construct the FNR 2006-018 Group 2 sub-deal DealDefinition.
+
+    Group 2 is a pure 4-class sequential cascade (BA -> BC -> BD -> DO)
+    plus a notional IO class (DI) whose balance tracks DO. The waterfall
+    is verbatim from prospectus S-18:
+
+        "On each Distribution Date, we will pay the Group 2 Principal
+        Distribution Amount, sequentially, as principal of the BA, BC,
+        BD and DO Classes, in that order, until their principal balances
+        are reduced to zero."
+
+    Parameters
+    ----------
+    n_periods:
+        Number of cashflow periods to model. The pool's natural maturity
+        is 240 (= original term) but at faster PSA the deal retires in
+        well under 240 periods.
+    """
+    from . import GROUP_2_CLASSES  # local import to avoid cycle
+
+    classes_by_type: dict[str, list[dict]] = {}
+    for spec in GROUP_2_CLASSES:
+        classes_by_type.setdefault(spec["type"], []).append(spec)
+
+    seq_specs = classes_by_type.get("SEQ", [])
+    seq_po = classes_by_type["SEQ_PO"][0]
+    ntl_io = classes_by_type["NTL_IO"][0]
+
+    bonds: list[BondDef] = []
+    # BA / BC / BD: sequential 5.50% bonds.
+    for spec in seq_specs:
+        bonds.append(BondDef(
+            name=spec["name"],
+            tranche_type=TrancheType.SEQUENTIAL,
+            tranche_behavior=TrancheBehavior.SEQUENTIAL,
+            coupon_type=CouponType.FIXED,
+            coupon=spec["coupon_pct"],
+            size_dollars=spec["size"],
+        ))
+    # DO: zero-coupon principal-only.
+    bonds.append(BondDef(
+        name=seq_po["name"],
+        tranche_type=TrancheType.PO,
+        tranche_behavior=TrancheBehavior.SEQUENTIAL,
+        coupon_type=CouponType.ZERO,
+        coupon=None,
+        size_dollars=seq_po["size"],
+    ))
+    # DI: notional interest-only that strips DO's interest. `tracks_bonds`
+    # syncs DI.balance to DO.balance post-waterfall each period; DI's
+    # opt_interest is then computed at next period start as
+    # DI.balance[i-1] * coupon / 1200, which equals DO.balance[i-1] *
+    # coupon / 1200 -- the IO accrues only on the unpaid DO balance.
+    bonds.append(BondDef(
+        name=ntl_io["name"],
+        tranche_type=TrancheType.IO,
+        tranche_behavior=TrancheBehavior.SEQUENTIAL,
+        coupon_type=CouponType.FIXED,
+        coupon=ntl_io["coupon_pct"],
+        size_dollars=ntl_io["size"],
+        tracks_bonds={"balance": [seq_po["name"]]},
+    ))
+    bonds.append(BondDef(
+        name="R",
+        tranche_type=TrancheType.RESIDUAL,
+        is_bond=False,
+        is_pseudo=True,
+    ))
+
+    rules: list[RuleNode] = []
+    order = 0
+
+    def add(rule_id, rule_type, sources, targets, cap_mode=None):
+        nonlocal order
+        rules.append(RuleNode(
+            rule_id=rule_id,
+            rule_type=rule_type,
+            order=order,
+            from_sources=sources,
+            to_targets=targets,
+            cap_mode=cap_mode,
+        ))
+        order += 1
+
+    interest_targets = [s["name"] for s in seq_specs] + [ntl_io["name"]]
+    principal_targets = [s["name"] for s in seq_specs] + [seq_po["name"]]
+
+    # 1. Pay interest on each cash-paying bond from INT_CASH.
+    for name in interest_targets:
+        add(f"r_int_{name}", RuleType.PAY_INTEREST, ["INT_CASH"], [name])
+
+    # 2. Sequential principal cascade BA -> BC -> BD -> DO from PRIN_CASH.
+    for name in principal_targets:
+        add(f"r_prin_{name}", RuleType.PAY_PRINCIPAL, ["PRIN_CASH"], [name])
+
+    # 3. Cleanup cascade: every bond gets a `cap_mode=NONE` rule so any
+    # leftover principal cash drains to whoever still has balance.
+    for name in principal_targets:
+        add(
+            f"r_prin_{name}_uncapped",
+            RuleType.PAY_PRINCIPAL,
+            ["PRIN_CASH"],
+            [name],
+            cap_mode=CapMode.NONE,
+        )
+
+    # 4. Residual sweeps both streams.
+    add("r_resid_int", RuleType.PAY_RESIDUAL, ["INT_CASH"], ["R"])
+    add("r_resid_prin", RuleType.PAY_RESIDUAL, ["PRIN_CASH"], ["R"])
+
+    return DealDefinition(
+        deal_name="FNR 2006-018 Group 2",
+        bonds=bonds,
+        waterfall_rules=rules,
     )

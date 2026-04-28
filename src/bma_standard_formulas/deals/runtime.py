@@ -112,6 +112,9 @@ class CompiledRulePlan:
     # Retained for legacy code paths and trace output; equivalent to
     # `cap_mode == "NONE"`.
     ignore_schedule_cap: bool = False
+    # Per-target weights for SPLIT_CASH rules; one entry per target_name,
+    # summing to <= 1.0. None for non-SPLIT_CASH rules.
+    target_weights: tuple[float, ...] | None = None
 
 
 @dataclass
@@ -128,6 +131,16 @@ class ExecutionContext:
     calculation_values: dict[str, float] = field(default_factory=dict)
     virtual_sources: dict[str, np.ndarray] = field(default_factory=dict)
     cash_avail: np.ndarray | None = None
+    # Independent pool-interest and pool-principal streams, populated each
+    # period from `collateral["interest"]` and `collateral["principal"]`.
+    # Rules that reference source key `INT_CASH` or `PRIN_CASH` draw from
+    # these instead of the combined `CASH` stream, so PAY_INTEREST and
+    # PAY_PRINCIPAL rules cannot accidentally cross-fund each other. Deals
+    # are responsible for picking one convention (combined `CASH` *or* split
+    # `INT_CASH` + `PRIN_CASH`) per scenario; mixing the two double-counts
+    # cash because the streams are independent decrementable arrays.
+    interest_avail: np.ndarray | None = None
+    principal_avail: np.ndarray | None = None
     trace_buf: list[tuple] | None = None
     trigger_rows: list[TriggerStateRow] = field(default_factory=list)
     # Per-period dictionary of `cash_at_<rule_id>` snapshots so a later rule
@@ -316,6 +329,7 @@ _OP_FROM_RESERVE_PRIN = 9
 _OP_FROM_RESERVE = 10
 _OP_RECOURSE_INT = 11
 _OP_RECOURSE_PRIN = 12
+_OP_SPLIT_CASH = 13
 
 _RULE_TYPE_TO_TAG: dict[RuleType, int] = {
     _RT.PAY_INTEREST: _OP_INTEREST,
@@ -330,6 +344,7 @@ _RULE_TYPE_TO_TAG: dict[RuleType, int] = {
     _RT.PAY_FROM_RESERVE: _OP_FROM_RESERVE,
     _RT.PAY_RECOURSE_INTEREST: _OP_RECOURSE_INT,
     _RT.PAY_RECOURSE_PRINCIPAL: _OP_RECOURSE_PRIN,
+    _RT.SPLIT_CASH: _OP_SPLIT_CASH,
 }
 
 
@@ -349,6 +364,11 @@ def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
         else:
             cap_mode_str = "PLANNED"
         ignore_flag = (cap_mode_str == "NONE")
+        weights = (
+            tuple(float(w) for w in rule.target_weights)
+            if rule.target_weights is not None
+            else None
+        )
         compiled.append(
             CompiledRulePlan(
                 tag=_RULE_TYPE_TO_TAG.get(rule.rule_type, 0),
@@ -367,6 +387,7 @@ def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
                 payment_style=rule.payment_style.value,
                 cap_mode=cap_mode_str,
                 ignore_schedule_cap=ignore_flag,
+                target_weights=weights,
             )
         )
     return compiled
@@ -523,6 +544,16 @@ def _evaluate_calculations(deal: DealDefinition, base_ctx: dict[str, float]) -> 
 def _resolve_source_arrays(ctx: ExecutionContext, source_keys: tuple[str, ...]) -> list[np.ndarray]:
     arrays: list[np.ndarray] = []
     for key in source_keys:
+        # Split-stream sources: INT_CASH = pool interest, PRIN_CASH = pool
+        # principal. Independent arrays, so rules that draw from these do not
+        # interfere with the combined `CASH` stream (which still carries
+        # principal + interest combined). A deal should pick one convention.
+        if key == "INT_CASH" and ctx.interest_avail is not None:
+            arrays.append(ctx.interest_avail)
+            continue
+        if key == "PRIN_CASH" and ctx.principal_avail is not None:
+            arrays.append(ctx.principal_avail)
+            continue
         if key in ("CASH", "COLLATERAL") and ctx.cash_avail is not None:
             arrays.append(ctx.cash_avail)
             continue
@@ -766,6 +797,7 @@ def _apply_z_accrual(ctx: ExecutionContext, period: int) -> None:
         # into Z (already added to Z balance above).
         ws.balance[period] += accrual
         remaining = accrual
+        accrual_paid_to_supports = 0.0
         for support_name in ws.supported_by_tranches:
             if remaining <= 0.0:
                 break
@@ -782,6 +814,18 @@ def _apply_z_accrual(ctx: ExecutionContext, period: int) -> None:
             support.principal[period] += pmt
             support.balance[period] -= pmt
             remaining -= pmt
+            accrual_paid_to_supports += pmt
+
+        # Z accrual is pool interest re-routed to support principal. Decrement
+        # the explicit `INT_CASH` stream so a deal that runs interest rules
+        # against `INT_CASH` does not double-fund the accrual amount. The
+        # combined `CASH` stream is left alone because deals using it have
+        # opted into combined-stream semantics by their rule definitions.
+        if accrual_paid_to_supports > 0.0 and ctx.interest_avail is not None:
+            ctx.interest_avail[period] = max(
+                0.0,
+                float(ctx.interest_avail[period]) - accrual_paid_to_supports,
+            )
 
         # Z's interest does not pay in cash this period; clear after accrual posted.
         ws.opt_interest[period] = 0.0
@@ -887,6 +931,13 @@ def run_deal(
     cum_loss_cache = np.cumsum(collateral["loss"]) if deal.triggers else None
     trace_buf: list[tuple] | None = [] if collect_trace else None
     cash_avail = np.zeros(cf_len)
+    # First-class split-stream sources: always populated so deal definitions
+    # can choose between the combined `CASH` stream (legacy) or the explicit
+    # `INT_CASH` + `PRIN_CASH` streams. The streams are independent
+    # decrementable arrays; deals should pick one convention per rule chain
+    # (mixing CASH and INT/PRIN double-counts cash).
+    interest_avail = np.zeros(cf_len)
+    principal_avail = np.zeros(cf_len)
     ctx = ExecutionContext(
         scenario_name=scenario_name,
         collateral=collateral,
@@ -895,14 +946,38 @@ def run_deal(
         fee_defs_by_name=fee_defs_by_name,
         compiled_rules=compiled,
         cash_avail=cash_avail,
+        interest_avail=interest_avail,
+        principal_avail=principal_avail,
         trace_buf=trace_buf,
     )
+    # Pre-allocate any virtual streams declared by SPLIT_CASH targets that are
+    # not already bonds/accounts/fees/built-ins/source_formulas. These streams
+    # are decrementable per-period arrays just like the built-in cash streams.
+    _builtin_stream_names = {
+        "CASH", "COLLATERAL", "LOSS", "INT_CASH", "PRIN_CASH",
+    }
+    _known_account_or_bond_or_fee = (
+        set(bonds.keys()) | set(accounts.keys()) | set(fee_defs_by_name.keys())
+    )
+    for rule in compiled:
+        if rule.tag != _OP_SPLIT_CASH:
+            continue
+        for name in rule.target_names:
+            if (
+                name in _builtin_stream_names
+                or name in _known_account_or_bond_or_fee
+                or name in ctx.virtual_sources
+            ):
+                continue
+            ctx.virtual_sources[name] = np.zeros(cf_len)
 
     for i in range(1, cf_len):
         update_bonds_pre_ws(bonds, i)
         for acct in accounts.values():
             acct.balance[i] = acct.balance[i - 1]
         cash_avail[i] = collateral["cashflow"][i]
+        interest_avail[i] = collateral["interest"][i]
+        principal_avail[i] = collateral["principal"][i]
 
         # Z-bond accrual pre-waterfall step: capitalize unpaid coupon into Z balance
         # and pay an equal amount as principal to the support tranche stack. This
@@ -946,13 +1021,27 @@ def run_deal(
         ctx.rule_cash_snapshots.clear()
 
         for rule in compiled:
-            # Capture the cash level immediately before this rule executes so
-            # later rules can reference it as `cash_at_<rule_id>` in their
-            # `max_amount_expr`. This is the mechanism for face-weighted
-            # percentage splits (e.g., FNR 2006-018 supports 95.65 / 4.35).
+            # Capture the cash level on each stream immediately before this
+            # rule executes so later rules can reference it in their
+            # `max_amount_expr`. The exposed identifiers are:
+            #   `cash_at_<rule_id>`       - combined CASH stream
+            #   `prin_cash_at_<rule_id>`  - PRIN_CASH stream (pool principal)
+            #   `int_cash_at_<rule_id>`   - INT_CASH stream (pool interest)
+            # Face-weighted percentage splits (e.g., FNR 2006-018 supports
+            # 95.65 / 4.35) anchor against the same stream they actually
+            # draw from so the cap proportions and the consumed cash refer
+            # to the same dollar pool.
             ctx.rule_cash_snapshots[rule.rule_id] = (
                 float(ctx.cash_avail[i]) if ctx.cash_avail is not None else 0.0
             )
+            if ctx.principal_avail is not None:
+                ctx.rule_cash_snapshots[f"__prin__:{rule.rule_id}"] = float(
+                    ctx.principal_avail[i]
+                )
+            if ctx.interest_avail is not None:
+                ctx.rule_cash_snapshots[f"__int__:{rule.rule_id}"] = float(
+                    ctx.interest_avail[i]
+                )
             rule_expr_ctx = _build_expr_context(
                 deal,
                 run_input,
@@ -967,7 +1056,16 @@ def run_deal(
                 orig_collat_bal,
             )
             for snap_rule_id, snap_value in ctx.rule_cash_snapshots.items():
-                key = f"cash_at_{snap_rule_id}"
+                # Snapshot identifiers are namespaced: bare rule_id → CASH,
+                # `__prin__:<rule_id>` → PRIN_CASH, `__int__:<rule_id>` → INT_CASH.
+                if snap_rule_id.startswith("__prin__:"):
+                    base = snap_rule_id[len("__prin__:"):]
+                    key = f"prin_cash_at_{base}"
+                elif snap_rule_id.startswith("__int__:"):
+                    base = snap_rule_id[len("__int__:"):]
+                    key = f"int_cash_at_{base}"
+                else:
+                    key = f"cash_at_{snap_rule_id}"
                 if key.isidentifier():
                     rule_expr_ctx[key] = snap_value
             if rule.condition_trigger:
@@ -982,6 +1080,96 @@ def run_deal(
 
             max_amt = _resolve_rule_max_amount(rule, rule_expr_ctx, ctx.calculation_values)
             sources = _resolve_source_arrays(ctx, rule.source_keys)
+
+            if rule.tag == _OP_SPLIT_CASH:
+                # Cash plumbing: drain the input streams (sum across `sources`),
+                # then load each target stream with `weight_i * total_in`.
+                # Supports both 1->N (split) and N->1 (merge) shapes:
+                #
+                #   1->N split:  sources=[parent], targets=[a, b, ...],
+                #                weights=[wa, wb, ...]; each target gets
+                #                wi * parent_value, parent loses sum(wi)*pv.
+                #   N->1 merge:  sources=[a, b, ...], targets=[combined],
+                #                weights=[1.0]; combined gets sum(sources).
+                #
+                # When max_amount is set, that value caps the total amount
+                # drained from the input streams this period (use cases:
+                # transfer up to X dollars; throttle a dynamic split).
+                weights = rule.target_weights or tuple(
+                    1.0 / len(rule.target_names) for _ in rule.target_names
+                )
+                # Total cash currently available across all input sources.
+                total_in = float(sum(float(src[i]) for src in sources))
+                if max_amt is not None:
+                    total_in = min(total_in, float(max_amt))
+                if total_in <= 0.0:
+                    if trace_buf is not None:
+                        for tgt_name, w in zip(rule.target_names, weights):
+                            trace_buf.append(
+                                (
+                                    scenario_name, i, rule.rule_id, rule.order,
+                                    rule.rule_type_str,
+                                    ",".join(rule.source_keys), tgt_name,
+                                    float(w * total_in), 0.0, 0.0, 0.0,
+                                    rule.condition_trigger,
+                                    ctx.trigger_states.get(rule.condition_trigger)
+                                    if rule.condition_trigger else None,
+                                )
+                            )
+                    continue
+                # Drain each input proportionally to its current contribution
+                # so input streams empty in lockstep (avoids one source going
+                # negative when others are still positive).
+                source_totals = [float(src[i]) for src in sources]
+                grand_total = float(sum(source_totals))
+                if grand_total > 0.0:
+                    for src, src_total in zip(sources, source_totals):
+                        share = total_in * (src_total / grand_total)
+                        src[i] = float(src[i]) - share
+                # Allocate to targets by weight. Targets are virtual streams
+                # (already pre-allocated in ctx.virtual_sources for SPLIT_CASH
+                # outputs). For convenience also support targets that are
+                # built-in streams (CASH/INT_CASH/PRIN_CASH) so a sweep-back
+                # can return cash to a built-in source.
+                for tgt_name, w in zip(rule.target_names, weights):
+                    out = float(w * total_in)
+                    target_arr: np.ndarray | None
+                    if tgt_name == "CASH" or tgt_name == "COLLATERAL":
+                        target_arr = ctx.cash_avail
+                    elif tgt_name == "INT_CASH":
+                        target_arr = ctx.interest_avail
+                    elif tgt_name == "PRIN_CASH":
+                        target_arr = ctx.principal_avail
+                    elif tgt_name in ctx.virtual_sources:
+                        target_arr = ctx.virtual_sources[tgt_name]
+                    elif tgt_name in bonds:
+                        # Direct deposit to a bond's principal output (rare
+                        # but useful for "transfer X to bond Y" plumbing).
+                        target_arr = None
+                        bonds[tgt_name].principal[i] += out
+                        bonds[tgt_name].balance[i] = max(
+                            0.0, float(bonds[tgt_name].balance[i]) - out
+                        )
+                    elif tgt_name in accounts:
+                        target_arr = accounts[tgt_name].balance
+                        accounts[tgt_name].deposit[i] += out
+                    else:
+                        target_arr = None
+                    if target_arr is not None:
+                        target_arr[i] = float(target_arr[i]) + out
+                    if trace_buf is not None:
+                        trace_buf.append(
+                            (
+                                scenario_name, i, rule.rule_id, rule.order,
+                                rule.rule_type_str,
+                                ",".join(rule.source_keys), tgt_name,
+                                float(w * total_in), out, 0.0, 0.0,
+                                rule.condition_trigger,
+                                ctx.trigger_states.get(rule.condition_trigger)
+                                if rule.condition_trigger else None,
+                            )
+                        )
+                continue
 
             if rule.payment_style == "PRO_RATA" and rule.tag == _OP_PRINCIPAL and len(rule.target_names) > 1:
                 active_targets = [(name, bonds[name]) for name in rule.target_names if name in bonds]
@@ -1050,15 +1238,31 @@ def run_deal(
                         )
                 continue
 
+            # `max_amt` is a SHARED cap across all targets in this rule, not a
+            # per-target cap. We track cumulative consumption so a multi-target
+            # SEQUENTIAL rule (e.g. "95.65% of cash sequentially to WA->WG")
+            # cannot exceed the rule's overall budget when the source happens
+            # to be smaller than the cap. Without this, a small source gets
+            # fully drained by the first targets of a sequential cascade and
+            # later parallel rules (the 4.35% bucket to PO) see an empty
+            # source even though the prospectus intends a face-weighted split.
+            shared_cap_remaining = max_amt
             for tgt_name in rule.target_names:
                 tgt = bonds.get(tgt_name)
                 acct_tgt = accounts.get(tgt_name)
                 if tgt is None and acct_tgt is None:
                     continue
+                # When a shared cap is active, derive the per-target ceiling
+                # from what's left of it; otherwise pass `max_amt` through
+                # unchanged so single-target rules and rules without a cap
+                # behave as before.
+                target_max_amt = (
+                    shared_cap_remaining if max_amt is not None else None
+                )
 
                 pmt = 0.0
                 if tgt is None and acct_tgt is not None and rule.tag == _OP_TO_RESERVE:
-                    pmt = pay_to_reserve(sources, acct_tgt.balance, acct_tgt.withdrawal, i, max_amount=max_amt if max_amt is not None else 0.0)
+                    pmt = pay_to_reserve(sources, acct_tgt.balance, acct_tgt.withdrawal, i, max_amount=target_max_amt if target_max_amt is not None else 0.0)
                     acct_tgt.deposit[i] += pmt
                     acct_tgt.withdrawal[i] = max(0.0, acct_tgt.withdrawal[i] - pmt)
                 elif tgt is not None:
@@ -1069,7 +1273,7 @@ def run_deal(
                             tgt.opt_interest,
                             tgt.int_shortfall,
                             i,
-                            max_amount=max_amt,
+                            max_amount=target_max_amt,
                             allow_negative=allow_negative_cash_math,
                         )
                     elif rule.tag == _OP_INTEREST_SF:
@@ -1079,7 +1283,7 @@ def run_deal(
                             tgt.opt_interest,
                             tgt.int_shortfall,
                             i,
-                            max_amount=max_amt,
+                            max_amount=target_max_amt,
                             shortfall=True,
                             allow_negative=allow_negative_cash_math,
                         )
@@ -1088,9 +1292,9 @@ def run_deal(
                         # never exceed their published principal contract for this period,
                         # unless the rule sets `ignore_schedule_cap` (cleanup-rule pattern).
                         if rule.ignore_schedule_cap:
-                            effective_max = max_amt
+                            effective_max = target_max_amt
                         else:
-                            effective_max = _effective_principal_cap(tgt, i, max_amt)
+                            effective_max = _effective_principal_cap(tgt, i, target_max_amt)
                         pmt = pay_principal(
                             sources,
                             tgt.principal,
@@ -1105,7 +1309,7 @@ def run_deal(
                             tgt.writedown,
                             tgt.balance,
                             i,
-                            max_amount=max_amt,
+                            max_amount=target_max_amt,
                             allow_negative=allow_negative_cash_math,
                         )
                     elif rule.tag == _OP_FEE:
@@ -1117,10 +1321,10 @@ def run_deal(
                             i,
                             {**rule_expr_ctx, **ctx.calculation_values},
                         )
-                        if max_amt is not None and fee_due > 0.0:
-                            fee_due = min(fee_due, max_amt)
-                        elif max_amt is not None and fee_due <= 0.0:
-                            fee_due = max_amt
+                        if target_max_amt is not None and fee_due > 0.0:
+                            fee_due = min(fee_due, target_max_amt)
+                        elif target_max_amt is not None and fee_due <= 0.0:
+                            fee_due = target_max_amt
                         if rule.allow_negative_source:
                             pmt = max(0.0, fee_due)
                             tgt.interest[i] += pmt
@@ -1139,34 +1343,34 @@ def run_deal(
                             sources,
                             tgt.interest,
                             i,
-                            max_amt,
+                            target_max_amt,
                             allow_negative=allow_negative_cash_math,
                         )
                     elif rule.tag == _OP_TO_RESERVE:
-                        pmt = pay_to_reserve(sources, tgt.balance, tgt.principal, i, max_amount=max_amt if max_amt is not None else 0.0)
+                        pmt = pay_to_reserve(sources, tgt.balance, tgt.principal, i, max_amount=target_max_amt if target_max_amt is not None else 0.0)
                     elif rule.tag == _OP_FROM_RESERVE_INT:
                         if rule.reserve_name and rule.reserve_name in bonds:
                             rsv = bonds[rule.reserve_name]
-                            pmt = pay_interest_from_reserve([], tgt.interest, tgt.opt_interest, tgt.int_shortfall, rsv.balance, rsv.principal, i, max_amount=max_amt)
+                            pmt = pay_interest_from_reserve([], tgt.interest, tgt.opt_interest, tgt.int_shortfall, rsv.balance, rsv.principal, i, max_amount=target_max_amt)
                         elif rule.reserve_name and rule.reserve_name in accounts:
                             rsv_a = accounts[rule.reserve_name]
-                            pmt = pay_interest_from_reserve([], tgt.interest, tgt.opt_interest, tgt.int_shortfall, rsv_a.balance, rsv_a.withdrawal, i, max_amount=max_amt)
+                            pmt = pay_interest_from_reserve([], tgt.interest, tgt.opt_interest, tgt.int_shortfall, rsv_a.balance, rsv_a.withdrawal, i, max_amount=target_max_amt)
                             rsv_a.withdrawal[i] += pmt
                     elif rule.tag == _OP_FROM_RESERVE_PRIN:
                         if rule.reserve_name and rule.reserve_name in bonds:
                             rsv = bonds[rule.reserve_name]
-                            pmt = pay_principal_from_reserve([], tgt.principal, tgt.balance, rsv.balance, rsv.principal, i, max_amount=max_amt)
+                            pmt = pay_principal_from_reserve([], tgt.principal, tgt.balance, rsv.balance, rsv.principal, i, max_amount=target_max_amt)
                         elif rule.reserve_name and rule.reserve_name in accounts:
                             rsv_a = accounts[rule.reserve_name]
-                            pmt = pay_principal_from_reserve([], tgt.principal, tgt.balance, rsv_a.balance, rsv_a.withdrawal, i, max_amount=max_amt)
+                            pmt = pay_principal_from_reserve([], tgt.principal, tgt.balance, rsv_a.balance, rsv_a.withdrawal, i, max_amount=target_max_amt)
                             rsv_a.withdrawal[i] += pmt
                     elif rule.tag == _OP_FROM_RESERVE:
                         if rule.reserve_name and rule.reserve_name in bonds:
                             rsv = bonds[rule.reserve_name]
-                            pmt = pay_from_reserve([], tgt.interest, rsv.balance, rsv.principal, i, max_amt)
+                            pmt = pay_from_reserve([], tgt.interest, rsv.balance, rsv.principal, i, target_max_amt)
                         elif rule.reserve_name and rule.reserve_name in accounts:
                             rsv_a = accounts[rule.reserve_name]
-                            pmt = pay_from_reserve([], tgt.interest, rsv_a.balance, rsv_a.withdrawal, i, max_amt)
+                            pmt = pay_from_reserve([], tgt.interest, rsv_a.balance, rsv_a.withdrawal, i, target_max_amt)
                             rsv_a.withdrawal[i] += pmt
                     elif rule.tag == _OP_RECOURSE_INT and len(rule.source_keys) == 1 and rule.source_keys[0] in bonds:
                         src_bond = bonds[rule.source_keys[0]]
@@ -1194,6 +1398,11 @@ def run_deal(
                             ctx.trigger_states.get(rule.condition_trigger) if rule.condition_trigger else None,
                         )
                     )
+
+                # Decrement the rule's shared cap so subsequent targets in
+                # this loop iteration see only the remaining budget.
+                if shared_cap_remaining is not None and pmt > 0.0:
+                    shared_cap_remaining = max(0.0, shared_cap_remaining - float(pmt))
 
         # PIK bonds capitalize unpaid coupon accrual into balance during accrual windows.
         # Z-behavior bonds were already processed in `_apply_z_accrual` pre-waterfall

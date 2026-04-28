@@ -159,6 +159,13 @@ class RuleType(str, Enum):
     PAY_RECOURSE_INTEREST = "PAY_RECOURSE_INTEREST"
     PAY_RECOURSE_PRINCIPAL = "PAY_RECOURSE_PRINCIPAL"
     PAY_RESIDUAL = "PAY_RESIDUAL"
+    # Cash-flow plumbing: split one stream into N target streams (or merge N
+    # streams into one) using explicit per-target weights. The targets are
+    # named virtual streams that subsequent rules draw from via `from_sources`.
+    # This is the IR primitive for face-weighted cash splits (e.g., FNR
+    # 2006-018 supports 95.65 / 4.35) and stream-of-streams plumbing
+    # (interest-vs-principal sub-cascades, sweep-back paths, etc.).
+    SPLIT_CASH = "SPLIT_CASH"
 
 
 class TriggerMetricType(str, Enum):

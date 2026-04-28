@@ -28,6 +28,7 @@ from datetime import date
 import numpy as np
 import pytest
 
+from bma_standard_formulas.deals.adapters import from_actual_cashflow
 from bma_standard_formulas.deals.runtime import run_deal
 from bma_standard_formulas.deals.schemas.input import (
     CollateralCashflows,
@@ -84,22 +85,35 @@ def _build_sub_repline_loan(repline_spec: dict, psa_speed: float) -> Loan:
 
     At 0% PSA the prospectus override (360/360/8.00%) replaces the actual
     sub-repline characteristics with a single full-term assumption.
+
+    For non-zero PSA we honor the published Reference Sheet's WALA via
+    `Loan.wala_override`. The Reference Sheet quotes WAM (remaining term)
+    and WALA separately, and they don't necessarily satisfy
+    ``WAM + WALA == original_term``: the FNR 2006-018 sub-replines have
+    WAM 348/349 and WALA 9/10, which would imply original terms of 357
+    or 359, not the canonical 360. Without the override the runtime
+    seasons the SMM curve to age = ``original - remaining`` (= 11/12)
+    instead of WALA (= 9/10), inflating year-1 prepay by ~0.4% CPR and
+    shortening downstream tranche WALs by ~0.4 years.
     """
     if psa_speed <= 0.0:
-        # Single override repline used by the 0% PSA decrement column.
         wac_pct = float(ZERO_PSA_PRICING_OVERRIDE["weighted_average_coupon_pct"])
         original_term = int(ZERO_PSA_PRICING_OVERRIDE["original_term_months"])
         remaining_term = int(ZERO_PSA_PRICING_OVERRIDE["weighted_average_remaining_term_months"])
         balance = float(repline_spec["current_balance"])
-        # Age 0 at issuance for 0% PSA case: align origination = asof.
         origination = _ASOF_DATE
+        wala_override: int | None = None  # 0% PSA: no prepay so seasoning irrelevant.
     else:
         wac_pct = float(repline_spec["wac_pct"])
         original_term = int(repline_spec["original_term_months"])
         remaining_term = int(repline_spec["remaining_term_months"])
         balance = float(repline_spec["current_balance"])
-        # Compute origination so loan.age == original_term - remaining_term.
-        age_months = max(0, original_term - remaining_term)
+        wala_override = int(repline_spec.get("wala_months", original_term - remaining_term))
+        # Origination is set to asof - WALA months so date-based fields
+        # (first_payment_date, etc.) line up with the published WALA. The
+        # `wala_override` then ensures the age-indexed curves use the
+        # Reference Sheet WALA exactly.
+        age_months = max(0, wala_override)
         origination = date(
             _ASOF_DATE.year - (age_months // 12),
             _ASOF_DATE.month - (age_months % 12) if (_ASOF_DATE.month - (age_months % 12)) > 0
@@ -120,6 +134,7 @@ def _build_sub_repline_loan(repline_spec: dict, psa_speed: float) -> Loan:
         servicing_fee=servicing_pct,
         original_term=original_term,
         remaining_term=remaining_term,
+        wala_override=wala_override,
     )
 
 
@@ -141,17 +156,24 @@ def _run_sub_repline_cashflow(repline_spec: dict, psa_speed: float):
 
 
 def _repline_for_psa(psa_speed: float):
-    """Aggregate Group 1 cashflow from all sub-replines at a given PSA speed.
+    """Aggregate Group 1 cashflow across all sub-replines at a given PSA speed.
 
-    Returns `(aggregate_balance, aggregate_sched_principal,
-    aggregate_vol_prepay, gross_wac_pct)` arrays of length `max_horizon + 1`,
-    plus the aggregate gross WAC for documentation purposes.
+    Each sub-repline is run through the BMA scheduled + actual cashflow
+    engines; their outputs are summed (extensive fields like `act_am`,
+    `vol_prepay`, `act_int`, `perf_bal`, `prin_loss`) into a single
+    aggregated `BMAActualCashflow`-shaped object. This is the same
+    aggregation the production portfolio runner performs internally; we
+    do it inline so the FNR fixture exercises the same downstream
+    `from_actual_cashflow` adapter the production app uses, with no
+    manual interest reconstruction.
+
+    Returns `(scheduled_balance_summary, aggregated_actual_cashflow,
+    weighted_wac_pct)`.
     """
     if psa_speed <= 0.0:
         # 0% PSA override: single repline at 360/360/8.00%.
         repline_specs = [{
             **GROUP_1_SUB_REPLINES[0],
-            # Override balance to full Group 1 aggregate to preserve total UPB.
             "current_balance": float(POOL_ASSUMPTIONS["aggregate_upb_dollars"]),
             "original_balance": float(POOL_ASSUMPTIONS["aggregate_upb_dollars"]),
             "label": "Group 1 0% PSA override",
@@ -160,102 +182,68 @@ def _repline_for_psa(psa_speed: float):
         repline_specs = list(GROUP_1_SUB_REPLINES)
 
     horizon: int | None = None
-    sub_balances: list[np.ndarray] = []
-    sub_sched: list[np.ndarray] = []
-    sub_vol: list[np.ndarray] = []
-    sub_gross_int: list[np.ndarray] = []
+    sub_actuals = []
     waccs: list[float] = []
     bal_weights: list[float] = []
     for spec in repline_specs:
-        _loan, sched, actual = _run_sub_repline_cashflow(spec, psa_speed)
+        _loan, _sched, actual = _run_sub_repline_cashflow(spec, psa_speed)
         n = len(actual.perf_bal)
         if horizon is None or n < horizon:
             horizon = n
-        sub_balances.append(actual.perf_bal)
-        sub_sched.append(actual.act_am)
-        sub_vol.append(actual.vol_prepay)
-        sub_gross_int.append(actual.exp_int)
+        sub_actuals.append(actual)
         waccs.append(float(spec["wac_pct"]))
         bal_weights.append(float(spec["current_balance"]))
 
     horizon = horizon or 0
-    bal = np.zeros(horizon)
-    sched_prin = np.zeros(horizon)
-    vol = np.zeros(horizon)
-    gross_int = np.zeros(horizon)
-    for arr in sub_balances:
-        bal += arr[:horizon]
-    for arr in sub_sched:
-        sched_prin += arr[:horizon]
-    for arr in sub_vol:
-        vol += arr[:horizon]
-    for arr in sub_gross_int:
-        gross_int += arr[:horizon]
     weighted_wac = sum(w * b for w, b in zip(waccs, bal_weights)) / sum(bal_weights)
 
-    # Build a SimpleNamespace-like object compatible with downstream code that
-    # expects `actual.act_am`, `actual.vol_prepay`, `actual.perf_bal`, etc.
-    class _Aggregated:
+    # Sum extensive fields across sub-replines into a single aggregated
+    # actual-cashflow that quacks like a BMAActualCashflow as far as the
+    # `from_actual_cashflow` adapter is concerned.
+    class _AggregatedActual:
         pass
-    agg_actual = _Aggregated()
-    agg_actual.act_am = sched_prin
-    agg_actual.vol_prepay = vol
-    agg_actual.perf_bal = bal
-    agg_actual.exp_int = gross_int
-    agg_actual.prin_loss = np.zeros(horizon)
-    agg_actual.new_def = np.zeros(horizon)
+    agg_actual = _AggregatedActual()
+    for fname in ("act_am", "vol_prepay", "act_int", "exp_int",
+                  "prin_loss", "prin_recov", "new_def", "perf_bal"):
+        agg_actual.__dict__[fname] = sum(
+            getattr(a, fname)[:horizon] for a in sub_actuals
+        )
 
-    # Aggregate scheduled-only balance for Stage 1 (zero PSA / zero default)
-    # tie-out: every period's scheduled principal sums across sub-replines and
-    # the aggregated end-of-period balance reflects pure amortization.
-    agg_sched = _Aggregated()
+    # Aggregate scheduled-balance summary used by Stage 1 of the staged
+    # tie-out (which only checks balance termination and total scheduled
+    # principal, not WAC dynamics).
+    class _AggregatedScheduled:
+        pass
+    agg_sched = _AggregatedScheduled()
     agg_sched.amortized_balance_fraction = (
-        bal / float(sum(bal_weights)) if sum(bal_weights) > 0 else bal
+        agg_actual.perf_bal / float(sum(bal_weights))
+        if sum(bal_weights) > 0
+        else agg_actual.perf_bal
     )
     return agg_sched, agg_actual, weighted_wac
 
 
 def _deal_input_from_repline(psa_speed: float, n_periods: int) -> DealRunInput:
-    """Convert aggregated repline cashflows into a `DealRunInput`."""
-    _sched, actual, wac_pct = _repline_for_psa(psa_speed)
-    net_pct = float(POOL_ASSUMPTIONS["mbs_pass_through_rate_pct"])
-    initial_balance = float(POOL_ASSUMPTIONS["aggregate_upb_dollars"])
-    horizon = min(n_periods + 1, len(actual.act_am))
-    principal = (actual.act_am[:horizon] + actual.vol_prepay[:horizon])
-    bal = actual.perf_bal[:horizon].copy()
-    net_monthly_rate = net_pct / 1200.0
-    interest_net = np.zeros(horizon)
-    for i in range(1, horizon):
-        interest_net[i] = bal[i - 1] * net_monthly_rate
+    """Build a DealRunInput by routing the BMA actual cashflow through the
+    canonical ``from_actual_cashflow`` adapter (production code path).
 
-    cf = CollateralCashflows(
-        cfdate=list(range(horizon)),
-        balance=bal.tolist(),
-        principal=principal.tolist(),
-        interest=interest_net.tolist(),
-        cashflow=(principal + interest_net).tolist(),
-        loss=[0.0] * horizon,
-        prepbal=[0.0] * horizon,
-        defbal=[0.0] * horizon,
-        recovery=[0.0] * horizon,
-        principal_sched=actual.act_am[:horizon].tolist(),
-        principal_unsched=actual.vol_prepay[:horizon].tolist(),
-        cpr=[0.0] * horizon,
-        cdr=[0.0] * horizon,
-        sev=[0.0] * horizon,
-        dq=[0.0] * horizon,
-        surv_fac=[1.0] * horizon,
-        sched_coupon=[wac_pct] * horizon,
-        sched_netcoupon=[net_pct] * horizon,
-        coupon=[wac_pct] * horizon,
-        effcoupon=[net_pct] * horizon,
-        sched_balance=bal.tolist(),
-        discount_factor=[1.0] * horizon,
-    )
-    return DealRunInput(
-        collateral=PooledCollateralInput(collateral=cf),
-        original_collateral_balance=initial_balance,
+    The adapter copies BMA's `act_int` directly into the deal's `interest`
+    stream; because each sub-repline ``Loan`` is constructed with
+    ``servicing_fee = wac - net_pct`` (or 0 in the 0% PSA override where
+    gross == net == 8.00%), `act_int` is already net of the GSE guaranty
+    wedge and ready to drive the bond cash-interest rules. The deal IR
+    therefore does not need a separate wedge ``FeeDef`` for this fixture
+    -- the wedge is netted upstream at the loan level, so what reaches
+    the waterfall is exactly the pass-through interest the trust
+    distributes.
+    """
+    _sched, actual, _wac_pct = _repline_for_psa(psa_speed)
+    initial_balance = float(POOL_ASSUMPTIONS["aggregate_upb_dollars"])
+    return from_actual_cashflow(
+        actual,
+        horizon=n_periods + 1,
         loan_count=int(initial_balance / 200_000.0),
+        initial_balance=initial_balance,
     )
 
 

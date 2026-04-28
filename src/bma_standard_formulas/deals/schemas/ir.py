@@ -185,6 +185,12 @@ class RuleNode(BaseModel):
     max_amount_expr: str | None = None
     max_amount_fixed: Dollars | None = None
 
+    # Per-target weights for `RuleType.SPLIT_CASH`. One entry per
+    # `to_targets`, summing to <= 1.0 (the residual stays in `from_sources`).
+    # Combined with `from_sources` of length 1 this models a 1->N split; with
+    # `to_targets` of length 1 it models a weighted N->1 merge.
+    target_weights: list[float] | None = None
+
     condition_trigger: str | None = None
     condition_invert: bool = False
     condition_expr: str | None = None
@@ -240,8 +246,43 @@ class DealDefinition(BaseModel):
         raw_source_formulas = self.deal_knobs.get("source_formulas")
         if isinstance(raw_source_formulas, dict):
             source_formula_names = {str(k) for k in raw_source_formulas.keys()}
+        # Virtual streams declared via SPLIT_CASH targets become valid
+        # sources/targets for any subsequent rule. The validator walks the
+        # waterfall in declared `order` and accumulates declared streams as
+        # it goes, so a SPLIT_CASH at position N can supply downstream rules
+        # at positions > N.
+        split_streams: set[str] = set()
+        for rule in sorted(self.waterfall_rules, key=lambda r: r.order):
+            if rule.rule_type == RuleType.SPLIT_CASH:
+                for tgt in rule.to_targets:
+                    if (
+                        tgt not in bond_names
+                        and tgt not in account_names
+                        and tgt not in fee_names
+                        and tgt not in {"CASH", "COLLATERAL", "LOSS",
+                                        "INT_CASH", "PRIN_CASH"}
+                        and tgt not in source_formula_names
+                    ):
+                        split_streams.add(tgt)
+
         all_targets = bond_names | account_names | fee_names | {"CASH"}
-        valid_sources = all_targets | {"COLLATERAL", "LOSS"} | source_formula_names
+        # Built-in source keys: CASH/COLLATERAL = combined pool cashflow,
+        # INT_CASH = pool interest only, PRIN_CASH = pool principal only,
+        # LOSS = pool loss stream. INT_CASH/PRIN_CASH let MBS structures
+        # express the standard "interest waterfall + principal waterfall"
+        # split without conflating bond cash interest with the principal
+        # cascade. Streams declared by SPLIT_CASH `to_targets` are added to
+        # both the source and target sets so downstream rules can route
+        # cash through them.
+        valid_sources = (
+            all_targets
+            | {"COLLATERAL", "LOSS", "INT_CASH", "PRIN_CASH"}
+            | source_formula_names
+            | split_streams
+        )
+        valid_targets = all_targets | split_streams | {
+            "INT_CASH", "PRIN_CASH", "COLLATERAL"
+        }
 
         errors: list[str] = []
         for rule in self.waterfall_rules:
@@ -249,13 +290,36 @@ class DealDefinition(BaseModel):
                 if src not in valid_sources:
                     errors.append(
                         f"Rule {rule.rule_id!r}: from_source {src!r} not found "
-                        f"in bonds/accounts/fees/source_formulas"
+                        f"in bonds/accounts/fees/source_formulas/split_streams"
                     )
             for tgt in rule.to_targets:
-                if tgt not in all_targets:
+                if tgt not in valid_targets:
                     errors.append(
                         f"Rule {rule.rule_id!r}: to_target {tgt!r} not found "
-                        f"in bonds/accounts/fees"
+                        f"in bonds/accounts/fees/split_streams"
+                    )
+            if rule.rule_type == RuleType.SPLIT_CASH:
+                if rule.target_weights is None:
+                    errors.append(
+                        f"Rule {rule.rule_id!r}: SPLIT_CASH requires "
+                        f"`target_weights`"
+                    )
+                elif len(rule.target_weights) != len(rule.to_targets):
+                    errors.append(
+                        f"Rule {rule.rule_id!r}: SPLIT_CASH target_weights "
+                        f"length {len(rule.target_weights)} != to_targets "
+                        f"length {len(rule.to_targets)}"
+                    )
+                elif any(w < 0.0 for w in rule.target_weights):
+                    errors.append(
+                        f"Rule {rule.rule_id!r}: SPLIT_CASH target_weights "
+                        f"must all be non-negative"
+                    )
+                elif sum(rule.target_weights) > 1.0 + 1e-9:
+                    errors.append(
+                        f"Rule {rule.rule_id!r}: SPLIT_CASH target_weights "
+                        f"sum {sum(rule.target_weights):.6f} exceeds 1.0; "
+                        f"residual must stay in source streams"
                     )
             if rule.condition_trigger and rule.condition_trigger not in trigger_names:
                 errors.append(

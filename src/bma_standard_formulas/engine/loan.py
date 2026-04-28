@@ -126,6 +126,18 @@ class Loan:
     days_past_due: int = 0              # 0, 30, 60, 90, 120, 150, 180+
     loan_status: str = "current"        # "current", "30_dpd", "60_dpd", ..., "fc", "reo"
 
+    # ── WALA (Weighted Average Loan Age) override ─────────────────────────
+    # When ``None``, ``loan.age`` falls back to ``original_term -
+    # remaining_term`` (the pre-existing default behavior). Set explicitly
+    # when the pool's WALA differs from ``original - remaining`` -- a
+    # common case for agency MBS prospectuses where the published Reference
+    # Sheet quotes WALA, WAM (= remaining_term), and an "average original
+    # term" that may not satisfy ``WALA + WAM == original_term`` exactly.
+    # The age-indexed prepay/default curves are sliced using ``loan.age``
+    # so a 2-month seasoning offset can move year-1 voluntary prepay by
+    # ~0.4%/yr in CPR space and shift downstream tranche WALs measurably.
+    wala_override: int | None = None
+
     def __post_init__(self) -> None:
         """Validate loan data per BMA requirements.
 
@@ -187,7 +199,21 @@ class Loan:
 
     @property
     def age(self) -> int:
-        """Months since origination (original_term - remaining_term)."""
+        """Loan age in months used to index age-indexed curves.
+
+        When `wala_override` is set, returns that value (the canonical WALA
+        from the pool's Reference Sheet); otherwise falls back to
+        ``original_term - remaining_term``. The two are equal for "clean"
+        loans where origination + age = asof and remaining = original - age,
+        but agency MBS prospectuses often quote a published WALA that
+        differs from `original_term - remaining_term` by 1-2 periods (the
+        published WAM and original term are reported on different rounding
+        conventions). In those cases the deal's PSA seasoning expects the
+        published WALA, so callers should set `wala_override` explicitly
+        from the Reference Sheet to avoid biasing year-1 prepayment.
+        """
+        if self.wala_override is not None:
+            return int(self.wala_override)
         return self.original_term - self.remaining_term
 
     def is_fixed_rate(self) -> bool:
