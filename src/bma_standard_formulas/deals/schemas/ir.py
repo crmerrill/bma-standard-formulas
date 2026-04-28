@@ -8,6 +8,7 @@ from .common import (
     SCHEMA_VERSION,
     AccountType,
     AccrualPeriod,
+    CapMode,
     CouponType,
     DayCount,
     Dollars,
@@ -189,11 +190,17 @@ class RuleNode(BaseModel):
     condition_expr: str | None = None
     allow_negative_source: bool = False
 
-    # When True the rule bypasses the per-bond `schedule_contract` cap on
-    # PAY_PRINCIPAL allocations (e.g., the "to Aggregate Group I to zero"
-    # cleanup rules in PAC deals that pay PAC bonds beyond their published
-    # planned-balance schedule once support tranches are exhausted).
-    ignore_schedule_cap: bool = False
+    # `cap_mode` controls how the rule interprets the target bond's
+    # `schedule_contract`. See `CapMode` for the full enum semantics. Maps to
+    # prospectus phrasing: PLANNED ("to Planned Balance"), SCHEDULED
+    # ("to Scheduled Balance"), TARGETED ("to Targeted Balance"), or NONE
+    # ("without regard to ... balance" -> cleanup rule). When omitted, the
+    # runtime defaults to PLANNED if the targeted bond carries a schedule and
+    # NONE otherwise. Backward compatibility: the legacy `ignore_schedule_cap`
+    # field is honored on load -- a True value resolves to NONE during the
+    # migration step.
+    cap_mode: CapMode | None = None
+    ignore_schedule_cap: bool = False  # legacy; superseded by `cap_mode`.
 
     description: str = ""
 

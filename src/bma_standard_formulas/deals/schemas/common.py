@@ -120,6 +120,32 @@ class PaymentStyle(str, Enum):
     PRO_RATA = "PRO_RATA"
 
 
+class CapMode(str, Enum):
+    """How a PAY_PRINCIPAL rule interprets the target bond's `schedule_contract`.
+
+    Maps directly to prospectus language:
+        - `PLANNED`:    "to its Planned Balance" (PAC bond convention)
+        - `SCHEDULED`:  "to its Scheduled Balance" (SCH/Scheduled bond)
+        - `TARGETED`:   "to its Targeted Balance" (TAC bond)
+        - `NONE`:       "without regard to its [...] Balance" (cleanup rule)
+
+    PLANNED, SCHEDULED, and TARGETED are runtime-equivalent (all enforce the
+    bond's `schedule_contract` end-of-period balance target). They differ only
+    in naming and structuring intent: PAC vs SCH/Scheduled vs TAC. The
+    documentation and UI render them differently to mirror the prospectus
+    vocabulary, but the math is identical.
+
+    NONE bypasses the schedule cap entirely so the rule can pay the bond
+    beyond its planned balance until the bond's outstanding balance reaches
+    zero. This is the standard cleanup-rule pattern at the bottom of every
+    PAC priority-of-payments waterfall.
+    """
+    PLANNED = "PLANNED"
+    SCHEDULED = "SCHEDULED"
+    TARGETED = "TARGETED"
+    NONE = "NONE"
+
+
 class RuleType(str, Enum):
     PAY_INTEREST = "PAY_INTEREST"
     PAY_INTEREST_SHORTFALL = "PAY_INTEREST_SHORTFALL"

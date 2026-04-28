@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Any
 
 from bma_standard_formulas.deals.schemas.common import (
+    CapMode,
     CouponType,
     PayMode,
     PaymentStyle,
@@ -186,7 +187,7 @@ def build_fnr_2006_018_group_1_deal(
         targets: list[str],
         style: PaymentStyle = PaymentStyle.SEQUENTIAL,
         max_amount_expr: str | None = None,
-        ignore_schedule_cap: bool = False,
+        cap_mode: CapMode | None = None,
     ) -> None:
         nonlocal order
         rules.append(RuleNode(
@@ -197,7 +198,7 @@ def build_fnr_2006_018_group_1_deal(
             to_targets=targets,
             payment_style=style,
             max_amount_expr=max_amount_expr,
-            ignore_schedule_cap=ignore_schedule_cap,
+            cap_mode=cap_mode,
         ))
         order += 1
 
@@ -235,16 +236,18 @@ def build_fnr_2006_018_group_1_deal(
         ["PO"],
         max_amount_expr="cash_at_r_supp_split_anchor * 0.043478305724",
     )
-    # 6 + 7. Aggregate Group II / Group I "to zero" cleanup rules. These run
-    # AFTER supports and pay PAC bonds beyond their published planned-balance
-    # schedule, so we set `ignore_schedule_cap=True` to bypass the cap.
+    # 6 + 7. Aggregate Group II / Group I "to zero" cleanup rules. The
+    # prospectus phrase "without regard to its Planned Balance ... to zero"
+    # maps directly to `cap_mode=NONE`. These run AFTER supports so that pool
+    # cash drains PAC bonds beyond their published planned-balance schedule
+    # only when supports are exhausted (the standard cleanup pattern).
     for name in pac_ii_targets:
         add(
             f"r_prin_{name}_uncapped",
             RuleType.PAY_PRINCIPAL,
             ["CASH"],
             [name],
-            ignore_schedule_cap=True,
+            cap_mode=CapMode.NONE,
         )
     for name in pac_i_targets:
         add(
@@ -252,7 +255,7 @@ def build_fnr_2006_018_group_1_deal(
             RuleType.PAY_PRINCIPAL,
             ["CASH"],
             [name],
-            ignore_schedule_cap=True,
+            cap_mode=CapMode.NONE,
         )
     # Residual sweep
     add("r_resid", RuleType.PAY_RESIDUAL, ["CASH"], ["R"])

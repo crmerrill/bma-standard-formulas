@@ -35,11 +35,6 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
             bond.setdefault("schedule_model_type", None)
             bond.setdefault("schedule_priority_tier", None)
             bond.setdefault("schedule_depends_on", None)
-    rules = payload.get("waterfall_rules", []) or []
-    if isinstance(rules, list):
-        for rule in rules:
-            if isinstance(rule, dict):
-                rule.setdefault("ignore_schedule_cap", False)
             bond.setdefault("schedule_speed_low", None)
             bond.setdefault("schedule_speed_high", None)
             bond.setdefault("schedule_speed_target", None)
@@ -50,4 +45,15 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
             bond.setdefault("supported_by_tranches", [])
             bond.setdefault("z_accrual_enabled", False)
             bond.setdefault("z_release_trigger", None)
+    # cap_mode generalization: if the legacy `ignore_schedule_cap=True` flag
+    # is set and no explicit cap_mode is provided, infer the cleanup
+    # interpretation. If neither is set, leave cap_mode as None so the
+    # runtime can pick the default based on whether the target bond carries
+    # a schedule. Walk the migrated copy so the result is consistent.
+    for rule in migrated.get("waterfall_rules", []) or []:
+        if not isinstance(rule, dict):
+            continue
+        rule.setdefault("ignore_schedule_cap", False)
+        if "cap_mode" not in rule:
+            rule["cap_mode"] = "NONE" if rule.get("ignore_schedule_cap") else None
     return migrated

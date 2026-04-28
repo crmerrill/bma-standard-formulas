@@ -104,6 +104,13 @@ class CompiledRulePlan:
     order: int
     rule_type_str: str
     payment_style: str
+    # `cap_mode` is the canonical schedule-cap interpretation. PLANNED,
+    # SCHEDULED, and TARGETED all enforce the bond's `schedule_contract`
+    # end-of-period balance target (mathematically identical, names mirror
+    # prospectus vocabulary). NONE bypasses the cap (cleanup pattern).
+    cap_mode: str = "PLANNED"
+    # Retained for legacy code paths and trace output; equivalent to
+    # `cap_mode == "NONE"`.
     ignore_schedule_cap: bool = False
 
 
@@ -330,6 +337,18 @@ def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
     sorted_rules = sorted(deal.waterfall_rules, key=lambda r: r.order)
     compiled: list[CompiledRulePlan] = []
     for rule in sorted_rules:
+        # Resolve cap_mode: explicit IR field wins; otherwise honor legacy
+        # ignore_schedule_cap=True; otherwise default to PLANNED (the standard
+        # PAC interpretation when a schedule is present on the target bond).
+        explicit_cap_mode = getattr(rule, "cap_mode", None)
+        legacy_ignore = bool(getattr(rule, "ignore_schedule_cap", False))
+        if explicit_cap_mode is not None:
+            cap_mode_str = explicit_cap_mode.value if hasattr(explicit_cap_mode, "value") else str(explicit_cap_mode)
+        elif legacy_ignore:
+            cap_mode_str = "NONE"
+        else:
+            cap_mode_str = "PLANNED"
+        ignore_flag = (cap_mode_str == "NONE")
         compiled.append(
             CompiledRulePlan(
                 tag=_RULE_TYPE_TO_TAG.get(rule.rule_type, 0),
@@ -346,7 +365,8 @@ def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
                 order=rule.order,
                 rule_type_str=rule.rule_type.value,
                 payment_style=rule.payment_style.value,
-                ignore_schedule_cap=getattr(rule, "ignore_schedule_cap", False),
+                cap_mode=cap_mode_str,
+                ignore_schedule_cap=ignore_flag,
             )
         )
     return compiled

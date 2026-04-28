@@ -4,7 +4,13 @@ from __future__ import annotations
 from typing import Any
 
 from bma_standard_formulas.deals.schema import DealValidationError, validate_deal
-from bma_standard_formulas.deals.schemas.common import PayMode, TrancheBehavior
+from bma_standard_formulas.deals.schemas.common import (
+    CapMode,
+    PayMode,
+    RuleType,
+    TrancheBehavior,
+    TrancheType,
+)
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
 
 
@@ -91,6 +97,58 @@ def verify_structure(
     if scenario_context and scenario_context.get("mode") == "solve" and behavior_bonds:
         suggestions.append(
             "For solve runs, include PAC/TAC schedule deviation and support-burn constraints in the objective stack."
+        )
+
+    # Cleanup-rule placement and coverage diagnostics. The standard CMO
+    # waterfall has cleanup rules (`cap_mode = NONE`) at the END of the
+    # priority of payments -- after support classes are paid -- so that pool
+    # cash routes to PAC bonds beyond their planned balances only when
+    # supports are exhausted. Placing cleanup rules before supports causes
+    # premature PAC paydown; missing cleanup rules let pool excess get stuck.
+    sup_class_names = {
+        bond.name for bond in deal.bonds
+        if bond.tranche_type in {TrancheType.SUPPORT, TrancheType.PO, TrancheType.PSEUDO}
+    }
+    pac_classes_with_schedule = {
+        bond.name for bond in deal.bonds
+        if bond.tranche_behavior in {TrancheBehavior.PAC, TrancheBehavior.TAC}
+        and bond.schedule_contract
+    }
+    cleanup_targets: set[str] = set()
+    seen_support_rule = False
+    for rule in sorted(deal.waterfall_rules, key=lambda r: r.order):
+        if rule.rule_type != RuleType.PAY_PRINCIPAL:
+            continue
+        rule_cap_mode = getattr(rule, "cap_mode", None)
+        cap_value = (
+            rule_cap_mode.value if hasattr(rule_cap_mode, "value")
+            else (str(rule_cap_mode) if rule_cap_mode is not None else None)
+        )
+        is_cleanup = cap_value == CapMode.NONE.value or getattr(rule, "ignore_schedule_cap", False)
+        targets_support = bool(set(rule.to_targets) & sup_class_names)
+        if is_cleanup:
+            cleanup_targets.update(rule.to_targets)
+            if not seen_support_rule and sup_class_names:
+                warnings.append(
+                    f"Rule {rule.rule_id!r} is a cleanup rule (`cap_mode=NONE`) "
+                    f"but appears before any support-class principal rule. "
+                    f"Move it after support distribution to match the standard "
+                    f"CMO priority of payments."
+                )
+        if targets_support and not is_cleanup:
+            seen_support_rule = True
+
+    pac_without_cleanup = sorted(pac_classes_with_schedule - cleanup_targets)
+    for bond_name in pac_without_cleanup:
+        warnings.append(
+            f"{bond_name}: PAC/TAC bond has a schedule but no cleanup rule "
+            f"(`cap_mode=NONE`) targets it. Pool excess delivered after "
+            f"supports are exhausted may not flow back to {bond_name}, leaving "
+            f"residual balance unpaid at horizon."
+        )
+        suggestions.append(
+            f"Add a cleanup rule with `cap_mode=NONE` targeting {bond_name} at "
+            f"the end of the waterfall, after support classes."
         )
 
     return {

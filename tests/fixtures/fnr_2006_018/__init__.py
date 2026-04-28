@@ -103,6 +103,14 @@ def planned_balances_to_principal_schedule(
 
 
 # Pool assumptions (Group 1) per Reference Sheet & Pricing Assumptions.
+# The aggregate is a weighted blend of two sub-replines used by the
+# prospectus's pricing model (S-7 / S-14):
+#   - $ 37,414,966 at WAC 5.94%, original 360, remaining 349, WALA 9
+#   - $ 95,238,095 at WAC 5.94%, original 360, remaining 348, WALA 10
+# Both sub-replines have the same WAC and pass-through, so for many
+# computations a single aggregate repline is equivalent. The remaining-term
+# difference (349 vs 348) materially affects per-period principal at high
+# PSA and is why the prospectus models them separately.
 POOL_ASSUMPTIONS = {
     "aggregate_upb_dollars": 132_653_061.00,
     "mbs_pass_through_rate_pct": 5.50,
@@ -111,6 +119,37 @@ POOL_ASSUMPTIONS = {
     "original_term_months": 360,
     "settlement_date": "2006-02-28",
 }
+
+# Two sub-replines that compose Group 1, used at non-zero PSA per the
+# prospectus's Pricing Assumptions (matches the published Reference Sheet
+# verbatim). At 0% PSA the prospectus uses a single override repline
+# (see ZERO_PSA_PRICING_OVERRIDE).
+GROUP_1_SUB_REPLINES = [
+    {
+        "label": "Group 1 MBS A (37.4MM)",
+        "current_balance": 37_414_966.00,
+        "original_balance": 37_414_966.00,
+        "wac_pct": 5.94,
+        "net_pass_through_pct": 5.50,
+        "original_term_months": 360,
+        "remaining_term_months": 349,
+        "wala_months": 9,
+    },
+    {
+        "label": "Group 1 MBS B (95.2MM)",
+        "current_balance": 95_238_095.00,
+        "original_balance": 95_238_095.00,
+        "wac_pct": 5.94,
+        "net_pass_through_pct": 5.50,
+        "original_term_months": 360,
+        "remaining_term_months": 348,
+        "wala_months": 10,
+    },
+]
+GROUP_1_REPLINE_TOTAL = sum(r["current_balance"] for r in GROUP_1_SUB_REPLINES)
+assert abs(GROUP_1_REPLINE_TOTAL - 132_653_061.00) < 1.0, (
+    f"sub-repline total mismatch: {GROUP_1_REPLINE_TOTAL}"
+)
 
 # Group 1 class structure (verbatim from prospectus cover).
 GROUP_1_CLASSES = [
