@@ -154,7 +154,16 @@ export default function StructuredDealAnalysisPage({
     const byTab = {
       bond_cashflows: artifacts.filter((a) => a.endsWith("_bond_cashflows")),
       waterfall: artifacts.filter((a) => a.includes("waterfall_trace") || a.includes("trigger_state_history")),
-      bond_risk: artifacts.filter((a) => a.includes("tranche_risk_summary") || a.includes("credit_enhancement")),
+      bond_risk: artifacts.filter(
+        (a) =>
+          a.includes("tranche_risk_summary")
+          || a.includes("credit_enhancement")
+          // Engine-truth carry tie-out (Phase 4): per-tranche YTM,
+          // pool YTM, back-solved residual yield. The summary
+          // artifact holds the headline numbers; the _tranches
+          // variant is the per-tranche table.
+          || a.includes("carry_tieout"),
+      ),
       deal_risk: artifacts.filter(
         (a) =>
           a.includes("decrement_table")

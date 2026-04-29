@@ -117,6 +117,25 @@ export default function DealEditor({
   const [saveBusy, setSaveBusy] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
   const [solveBusy, setSolveBusy] = useState(false);
+  // Live carry tie-out status, lifted up from PropertyPanel. Drives
+  // the warn/block gate on Run/Solve actions per Phase 5 of the
+  // engine_completeness_and_carry_tieout plan.
+  const [carryStatus, setCarryStatus] = useState<{
+    status: "OK" | "WARN" | "BLOCK" | null;
+    reason: string;
+  }>({ status: null, reason: "" });
+  const [carryBlockOverridden, setCarryBlockOverridden] = useState(false);
+  const handleCarryStatusChange = useCallback(
+    (status: "OK" | "WARN" | "BLOCK" | null, reason: string) => {
+      setCarryStatus({ status, reason });
+      // Reset override whenever status improves so a freshly-OK deal
+      // doesn't carry a stale acknowledgement forward.
+      if (status !== "BLOCK") {
+        setCarryBlockOverridden(false);
+      }
+    },
+    [],
+  );
   const [availableRuns, setAvailableRuns] = useState<api.RunListItem[]>([]);
   const [uploadLibrary, setUploadLibrary] = useState<api.UploadLibraryItem[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
@@ -501,7 +520,38 @@ export default function DealEditor({
     [],
   );
 
+  /**
+   * Carry tie-out gate: blocks Run/Solve on BLOCK status until the
+   * user explicitly acknowledges. Returns true when the action may
+   * proceed, false to abort.
+   *
+   * The gate is intentionally lightweight (a confirm dialog, not a
+   * modal flow) per the design doc: "the user must either edit the
+   * structure or click an explicit 'Override and run anyway' action".
+   * After acknowledgement, we set `carryBlockOverridden` so subsequent
+   * runs in the same edit session don't re-prompt unless the status
+   * changes.
+   */
+  const passCarryTieOutGate = useCallback(
+    (actionLabel: string): boolean => {
+      if (carryStatus.status !== "BLOCK") return true;
+      if (carryBlockOverridden) return true;
+      const ok = window.confirm(
+        `Carry tie-out blocked: ${carryStatus.reason}\n\n` +
+          `${actionLabel} anyway?\n\n` +
+          `Tip: open the "Balance the deal" solver template under ` +
+          `the Solver tab to find coupons that satisfy the tie-out automatically.`,
+      );
+      if (ok) {
+        setCarryBlockOverridden(true);
+      }
+      return ok;
+    },
+    [carryStatus, carryBlockOverridden],
+  );
+
   const handleRunDeal = useCallback(async () => {
+    if (!passCarryTieOutGate("Run cashflows")) return;
     setRunBusy(true);
     try {
       const { dealId, dealVersion } = await persistDealForExecution();
@@ -539,6 +589,7 @@ export default function DealEditor({
       setRunBusy(false);
     }
   }, [
+    passCarryTieOutGate,
     persistDealForExecution,
     verifyStructure,
     solverSpecDraft.sourceMode,
@@ -551,6 +602,7 @@ export default function DealEditor({
 
 
   const handleSolveDeal = useCallback(async () => {
+    if (!passCarryTieOutGate("Solve")) return;
     setSolveBusy(true);
     if (progressPollRef.current != null) {
       window.clearInterval(progressPollRef.current);
@@ -653,6 +705,7 @@ export default function DealEditor({
       toast.error(e instanceof Error ? e.message : String(e));
     }
   }, [
+    passCarryTieOutGate,
     persistDealForExecution,
     verifyStructure,
     solverSpecDraft.sourceMode,
@@ -687,6 +740,14 @@ export default function DealEditor({
       templateId: string,
       request: api.TemplateInstantiationRequest,
     ): Promise<{ ok: boolean; message: string }> => {
+      // Auto-tieout is the recovery path -- always let it through
+      // even when carry is BLOCK. Any other template depends on a
+      // structure that already balances, so gate them on carry.
+      if (templateId !== "auto_tieout_carry") {
+        if (!passCarryTieOutGate(`Run "${templateId}"`)) {
+          return { ok: false, message: "Cancelled by carry tie-out gate." };
+        }
+      }
       setSolveBusy(true);
       if (progressPollRef.current != null) {
         window.clearInterval(progressPollRef.current);
@@ -797,6 +858,7 @@ export default function DealEditor({
       }
     },
     [
+      passCarryTieOutGate,
       persistDealForExecution,
       verifyStructure,
       solverSpecDraft.sourceMode,
@@ -1314,6 +1376,7 @@ export default function DealEditor({
                   availableRuns={availableRuns}
                   availableTapes={uploadLibrary}
                   poolSnapshots={poolSnapshots}
+                  onCarryTieOutStatusChange={handleCarryStatusChange}
                 />
               </div>
             </div>

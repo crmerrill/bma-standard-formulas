@@ -13,6 +13,8 @@ import type { PoolSnapshotSummary, RunListItem, UploadLibraryItem } from "../../
 import FormSelect from "../../components/FormSelect";
 import CollateralRiskSettingsEditor from "./shared/CollateralRiskSettingsEditor";
 import type { CollateralRiskSettings } from "./shared/riskSettings";
+import CarryTieOutBanner from "./shared/CarryTieOutBanner";
+import { computeStaticCarryTieOut } from "./shared/carryTieOut";
 
 interface BondProps {
   name: string;
@@ -91,6 +93,17 @@ interface PropertyPanelProps {
   availableRuns: RunListItem[];
   availableTapes?: UploadLibraryItem[];
   poolSnapshots?: PoolSnapshotSummary[];
+  /**
+   * Lifted callback: PropertyPanel reports the live carry tie-out
+   * status up to DealEditor so the Run/Solve buttons can gate on
+   * BLOCK status with an explicit override-and-acknowledge action.
+   * Receives `null` when the structure is degenerate (no bonds, zero
+   * pool balance, etc.) and the banner is hidden.
+   */
+  onCarryTieOutStatusChange?: (
+    status: "OK" | "WARN" | "BLOCK" | null,
+    reason: string,
+  ) => void;
 }
 
 function scanWorkspace(workspace: any): {
@@ -331,6 +344,7 @@ export default function PropertyPanel({
   availableRuns,
   availableTapes = [],
   poolSnapshots = [],
+  onCarryTieOutStatusChange,
 }: PropertyPanelProps) {
   const [bonds, setBonds] = useState<BondProps[]>([]);
   const [accounts, setAccounts] = useState<AccountProps[]>([]);
@@ -342,6 +356,11 @@ export default function PropertyPanel({
   const [ceInputByBond, setCeInputByBond] = useState<Record<string, string>>({});
   const [tapePoolNotional, setTapePoolNotional] = useState<number | null>(null);
   const [loadingTapePoolNotional, setLoadingTapePoolNotional] = useState(false);
+  /** Tape-derived collateral economics consumed by the live carry tie-out banner. */
+  const [tapeCollateralStats, setTapeCollateralStats] = useState<{
+    wac_pct: number;
+    wam_months: number;
+  } | null>(null);
   const [bondValidationError, setBondValidationError] = useState<string | null>(null);
   const [solveDriver, setSolveDriver] = useState<"ce" | "size_dollars" | "size_pct_pool">("ce");
 
@@ -382,11 +401,19 @@ export default function PropertyPanel({
         const totalBalance = Number(stats.total_balance) || 0;
         setTapePoolNotional(totalBalance > 0 ? totalBalance : null);
         setPoolNotional(totalBalance > 0 ? totalBalance : 0);
+        const wac = Number(stats.wac);
+        const wam = Number(stats.wam);
+        if (Number.isFinite(wac) && wac > 0 && Number.isFinite(wam) && wam > 0) {
+          setTapeCollateralStats({ wac_pct: wac, wam_months: wam });
+        } else {
+          setTapeCollateralStats(null);
+        }
       })
       .catch(() => {
         if (cancelled) return;
         setTapePoolNotional(null);
         setPoolNotional(0);
+        setTapeCollateralStats(null);
       })
       .finally(() => {
         if (!cancelled) setLoadingTapePoolNotional(false);
@@ -640,8 +667,65 @@ export default function PropertyPanel({
     }
   }, [poolNotional, orderedBonds, loadingTapePoolNotional]);
 
+  // ------------------------------------------------------------------
+  // Live static carry tie-out banner.
+  //
+  // Pure analytic projection: pool yield ~= WAC - servicing, constant
+  // CPR amortization, sequential principal allocation across cash
+  // bonds. Fast enough to recompute on every PropertyPanel render so
+  // the banner reflects the live structure without an engine
+  // round-trip. The post-run engine-truth tie-out (Phase 4, Python
+  // `carry_tieout.py`) is the authoritative number once a base run
+  // exists.
+  //
+  // Servicing default: 50bps (industry standard for agency MBS;
+  // typical for prime jumbo / Non-QM private-label too). Surfacing a
+  // user-configurable servicing input is a follow-up.
+  // ------------------------------------------------------------------
+  const carryTieOutResult = useMemo(() => {
+    if (!tapeCollateralStats || poolNotional <= 0 || bonds.length === 0) {
+      return null;
+    }
+    return computeStaticCarryTieOut({
+      pool: {
+        balance: poolNotional,
+        wac_pct: tapeCollateralStats.wac_pct,
+        servicing_pct: 0.5,
+        remaining_term_months: Math.max(
+          Math.round(tapeCollateralStats.wam_months),
+          12,
+        ),
+        cpr_pct: collateralRiskSettings.newRiskParams.cpr,
+      },
+      bonds: bonds.map((b) => ({
+        name: b.name,
+        notional: Math.max(b.sizeDollars, 0),
+        coupon_pct: b.coupon,
+        tranche_type: b.bondType,
+        pay_mode: b.payMode,
+      })),
+    });
+  }, [tapeCollateralStats, poolNotional, bonds, collateralRiskSettings.newRiskParams.cpr]);
+
+  // Bubble up the carry status to DealEditor so the Run/Solve buttons
+  // can gate on a BLOCK condition (Phase 5 of the carry tie-out plan).
+  useEffect(() => {
+    if (!onCarryTieOutStatusChange) return;
+    if (!carryTieOutResult || carryTieOutResult.is_degenerate) {
+      onCarryTieOutStatusChange(null, "");
+      return;
+    }
+    onCarryTieOutStatusChange(carryTieOutResult.status, carryTieOutResult.reason);
+  }, [carryTieOutResult, onCarryTieOutStatusChange]);
+
   return (
     <div className="flex flex-col gap-3 text-xs">
+      {carryTieOutResult && !carryTieOutResult.is_degenerate && (
+        <CarryTieOutBanner
+          result={carryTieOutResult}
+          contextLabel="Live carry tie-out"
+        />
+      )}
       <SectionCard title="Collateral & Risk">
         <CollateralRiskSettingsEditor
           value={collateralRiskSettings}
