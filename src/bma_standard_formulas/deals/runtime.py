@@ -141,6 +141,20 @@ class ExecutionContext:
     # cash because the streams are independent decrementable arrays.
     interest_avail: np.ndarray | None = None
     principal_avail: np.ndarray | None = None
+    # Per-group collateral and cash arrays for multi-pool deals. When the
+    # deal's `collateral_groups` is empty (single-pool deal), these are
+    # left empty and rules use the bare `cash_avail` / `interest_avail`
+    # / `principal_avail` arrays. When the deal declares multiple
+    # groups, each group_id maps to its own decrementable arrays so
+    # `GROUP_<id>_CASH` / `GROUP_<id>_INT_CASH` / `GROUP_<id>_PRIN_CASH`
+    # source tokens route to the right pool. The single-pool primary
+    # arrays are populated as the *aggregate* across groups (sum of all
+    # group cashflows) so trigger metrics and account-level computations
+    # see the deal-wide totals; rule routing uses the per-group arrays.
+    collateral_by_group: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
+    cash_avail_by_group: dict[str, np.ndarray] = field(default_factory=dict)
+    interest_avail_by_group: dict[str, np.ndarray] = field(default_factory=dict)
+    principal_avail_by_group: dict[str, np.ndarray] = field(default_factory=dict)
     trace_buf: list[tuple] | None = None
     trigger_rows: list[TriggerStateRow] = field(default_factory=list)
     # Per-period dictionary of `cash_at_<rule_id>` snapshots so a later rule
@@ -348,6 +362,31 @@ _RULE_TYPE_TO_TAG: dict[RuleType, int] = {
 }
 
 
+def _scope_sources_to_group(keys: tuple[str, ...], group_id: str | None) -> tuple[str, ...]:
+    """Rewrite bare cashflow tokens in a rule's source/target list to be
+    scoped to the rule's collateral group.
+
+    When a rule declares ``group_id="GROUP_1"``, the runtime treats its
+    bare ``CASH`` / ``INT_CASH`` / ``PRIN_CASH`` / ``COLLATERAL`` /
+    ``LOSS`` tokens as shorthand for ``GROUP_GROUP_1_CASH`` etc. This
+    keeps deal definitions readable: instead of typing the prefixed
+    form everywhere, the IR author tags the rule once with its group
+    and the bare tokens follow.
+
+    No-op when ``group_id`` is None or the key is already prefixed.
+    """
+    if not group_id:
+        return keys
+    SCOPED = {"CASH", "INT_CASH", "PRIN_CASH", "COLLATERAL", "LOSS"}
+    out: list[str] = []
+    for key in keys:
+        if key in SCOPED:
+            out.append(f"GROUP_{group_id}_{key}")
+        else:
+            out.append(key)
+    return tuple(out)
+
+
 def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
     sorted_rules = sorted(deal.waterfall_rules, key=lambda r: r.order)
     compiled: list[CompiledRulePlan] = []
@@ -372,8 +411,12 @@ def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
         compiled.append(
             CompiledRulePlan(
                 tag=_RULE_TYPE_TO_TAG.get(rule.rule_type, 0),
-                source_keys=tuple(rule.from_sources),
-                target_names=tuple(rule.to_targets),
+                source_keys=_scope_sources_to_group(
+                    tuple(rule.from_sources), rule.group_id,
+                ),
+                target_names=_scope_sources_to_group(
+                    tuple(rule.to_targets), rule.group_id,
+                ),
                 reserve_name=rule.reserve_account,
                 max_amount_fixed=rule.max_amount_fixed,
                 max_amount_expr=rule.max_amount_expr,
@@ -393,23 +436,72 @@ def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
     return compiled
 
 
-def _extract_collateral_arrays(run_input: DealRunInput) -> dict[str, np.ndarray]:
-    coll = run_input.collateral
-    if isinstance(coll, PooledCollateralInput):
-        cf = coll.collateral
-    elif isinstance(coll, GroupedCollateralInput):
-        # Keep current behavior (first group) for compatibility.
-        cf = next(iter(coll.groups.values()))
-    elif isinstance(coll, StripCollateralInput):
-        cf = coll.principal_strip
-    else:
-        raise TypeError(f"Unknown collateral input type: {type(coll)}")
-
+def _cashflow_arrays(cf: Any) -> dict[str, np.ndarray]:
+    """Convert a CollateralCashflows model into a dict of numpy arrays."""
     return {
         fname: np.array(getattr(cf, fname), dtype=float)
         for fname in cf.__class__.model_fields
         if fname != "cfdate" and isinstance(getattr(cf, fname), list)
     }
+
+
+def _extract_collateral_arrays(
+    run_input: DealRunInput,
+) -> tuple[dict[str, np.ndarray], dict[str, dict[str, np.ndarray]]]:
+    """Extract collateral arrays as (aggregate, per_group).
+
+    For single-pool inputs the aggregate is the only pool and per_group
+    is empty. For grouped inputs the aggregate is the period-wise sum
+    across all groups (used by triggers and pool-wide metrics) and
+    per_group maps each group_id to its own set of arrays (used by
+    rule routing for ``GROUP_<id>_CASH`` / ``INT_CASH`` / ``PRIN_CASH``
+    source tokens).
+    """
+    coll = run_input.collateral
+    if isinstance(coll, PooledCollateralInput):
+        return _cashflow_arrays(coll.collateral), {}
+    if isinstance(coll, GroupedCollateralInput):
+        per_group: dict[str, dict[str, np.ndarray]] = {
+            gid: _cashflow_arrays(cf) for gid, cf in coll.groups.items()
+        }
+        # Aggregate = period-wise sum across groups for the fields that
+        # are summable. Counts/rates (cpr, cdr, sev, dq, surv_fac,
+        # coupons, sched_balance, discount_factor) don't aggregate
+        # cleanly, so we copy them from the first group; downstream
+        # uses of those fields are only meaningful per-group anyway.
+        first_gid = next(iter(per_group))
+        first = per_group[first_gid]
+        n = len(first["balance"])
+        summable = {
+            "balance", "principal", "interest", "cashflow", "loss",
+            "prepbal", "defbal", "recovery", "principal_sched",
+            "principal_unsched",
+        }
+        agg: dict[str, np.ndarray] = {}
+        for fname, arr in first.items():
+            if fname in summable:
+                acc = np.zeros(n)
+                for g in per_group.values():
+                    acc = acc + g[fname][:n] if len(g[fname]) >= n else acc
+                # Rebuild with sums across all groups, period-aligned.
+                acc = np.zeros(n)
+                for g in per_group.values():
+                    aa = g[fname]
+                    if len(aa) < n:
+                        # Pad short groups with zeros so summation is well-defined.
+                        padded = np.zeros(n)
+                        padded[: len(aa)] = aa
+                        acc = acc + padded
+                    else:
+                        acc = acc + aa[:n]
+                agg[fname] = acc
+            else:
+                agg[fname] = np.array(arr, dtype=float)
+        return agg, per_group
+    if isinstance(coll, StripCollateralInput):
+        cf = coll.principal_strip
+        return _cashflow_arrays(cf), {}
+    raise TypeError(f"Unknown collateral input type: {type(coll)}")
 
 
 _SAFE_BIN_OPS = {
@@ -544,6 +636,31 @@ def _evaluate_calculations(deal: DealDefinition, base_ctx: dict[str, float]) -> 
 def _resolve_source_arrays(ctx: ExecutionContext, source_keys: tuple[str, ...]) -> list[np.ndarray]:
     arrays: list[np.ndarray] = []
     for key in source_keys:
+        # Per-group cash streams: GROUP_<id>_(CASH|INT_CASH|PRIN_CASH|
+        # COLLATERAL|LOSS). Multi-pool deals (e.g. Fannie Mae REMIC
+        # trusts with Group 1 + Group 2 separately-collateralized
+        # bonds) route every collateral-touching rule through these
+        # so cashflows stay segregated by group. Match longest group
+        # id first to avoid ambiguity if group ids share prefixes.
+        if key.startswith("GROUP_") and ctx.collateral_by_group:
+            matched = False
+            sorted_gids = sorted(ctx.collateral_by_group.keys(), key=len, reverse=True)
+            for gid in sorted_gids:
+                prefix = f"GROUP_{gid}_"
+                if key.startswith(prefix):
+                    suffix = key[len(prefix):]
+                    if suffix == "INT_CASH":
+                        arrays.append(ctx.interest_avail_by_group[gid])
+                    elif suffix == "PRIN_CASH":
+                        arrays.append(ctx.principal_avail_by_group[gid])
+                    elif suffix in ("CASH", "COLLATERAL"):
+                        arrays.append(ctx.cash_avail_by_group[gid])
+                    elif suffix == "LOSS":
+                        arrays.append(ctx.collateral_by_group[gid]["loss"])
+                    matched = True
+                    break
+            if matched:
+                continue
         # Split-stream sources: INT_CASH = pool interest, PRIN_CASH = pool
         # principal. Independent arrays, so rules that draw from these do not
         # interfere with the combined `CASH` stream (which still carries
@@ -892,9 +1009,22 @@ def run_deal(
     collect_trace: bool = True,
 ) -> ScenarioOutputBundle:
     """Execute a deal waterfall and return the full output bundle for one scenario."""
-    collateral = _extract_collateral_arrays(run_input)
+    collateral, collateral_by_group = _extract_collateral_arrays(run_input)
     cf_len = len(collateral["balance"])
     collat_bal_0 = float(collateral["balance"][0])
+    declared_groups = [g.group_id for g in deal.collateral_groups]
+    if declared_groups:
+        # Multi-pool deal: each declared group must appear in the
+        # GroupedCollateralInput.groups dict so per-group routing can
+        # populate its arrays.
+        missing = [gid for gid in declared_groups if gid not in collateral_by_group]
+        if missing:
+            raise ValueError(
+                f"DealDefinition declares collateral_groups {declared_groups!r} "
+                f"but DealRunInput.collateral is missing groups: {missing!r}. "
+                f"Provide a GroupedCollateralInput with one entry per declared "
+                f"group_id."
+            )
     orig_override = deal.deal_knobs.get("orig_collat_bal_override")
     orig_collat_bal = float(orig_override) if isinstance(orig_override, (int, float)) else float(run_input.original_collateral_balance or collat_bal_0)
 
@@ -938,6 +1068,19 @@ def run_deal(
     # (mixing CASH and INT/PRIN double-counts cash).
     interest_avail = np.zeros(cf_len)
     principal_avail = np.zeros(cf_len)
+    # Multi-pool deals: allocate parallel per-group cash arrays. Source
+    # tokens like ``GROUP_<id>_INT_CASH`` route to these so a Group-1
+    # interest waterfall draws only from Group 1's pool. The single-pool
+    # ``cash_avail``/``interest_avail``/``principal_avail`` arrays still
+    # carry the deal-wide aggregate so triggers and pool-level metrics
+    # see totals. Single-pool deals leave these dicts empty.
+    cash_avail_by_group: dict[str, np.ndarray] = {}
+    interest_avail_by_group: dict[str, np.ndarray] = {}
+    principal_avail_by_group: dict[str, np.ndarray] = {}
+    for gid in declared_groups:
+        cash_avail_by_group[gid] = np.zeros(cf_len)
+        interest_avail_by_group[gid] = np.zeros(cf_len)
+        principal_avail_by_group[gid] = np.zeros(cf_len)
     ctx = ExecutionContext(
         scenario_name=scenario_name,
         collateral=collateral,
@@ -948,6 +1091,10 @@ def run_deal(
         cash_avail=cash_avail,
         interest_avail=interest_avail,
         principal_avail=principal_avail,
+        collateral_by_group=collateral_by_group,
+        cash_avail_by_group=cash_avail_by_group,
+        interest_avail_by_group=interest_avail_by_group,
+        principal_avail_by_group=principal_avail_by_group,
         trace_buf=trace_buf,
     )
     # Pre-allocate any virtual streams declared by SPLIT_CASH targets that are
@@ -978,6 +1125,14 @@ def run_deal(
         cash_avail[i] = collateral["cashflow"][i]
         interest_avail[i] = collateral["interest"][i]
         principal_avail[i] = collateral["principal"][i]
+        # Per-group cash arrays mirror the same period-fill pattern so
+        # rules that route via ``GROUP_<id>_*`` source tokens see the
+        # right group's cashflow stream and never cross-feed each other.
+        for gid, gcoll in ctx.collateral_by_group.items():
+            if i < len(gcoll["cashflow"]):
+                ctx.cash_avail_by_group[gid][i] = gcoll["cashflow"][i]
+                ctx.interest_avail_by_group[gid][i] = gcoll["interest"][i]
+                ctx.principal_avail_by_group[gid][i] = gcoll["principal"][i]
 
         # Z-bond accrual pre-waterfall step: capitalize unpaid coupon into Z balance
         # and pay an equal amount as principal to the support tranche stack. This

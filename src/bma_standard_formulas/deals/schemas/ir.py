@@ -33,12 +33,44 @@ from .common import (
 # ---------------------------------------------------------------------------
 
 
+class CollateralGroupDef(BaseModel):
+    """A single collateral group within a multi-pool deal.
+
+    Multi-group deals (e.g., Fannie Mae REMIC structures with separate
+    REMIC trust groups) carry multiple collateral pools whose cashflows
+    are *segregated*: Group 1 collateral pays only Group-1-tagged bonds
+    via Group-1-tagged waterfall rules. Each group has its own
+    ``GROUP_<id>_CASH`` / ``GROUP_<id>_INT_CASH`` / ``GROUP_<id>_PRIN_CASH``
+    source tokens and a parallel ``GROUP_<id>_LOSS`` / ``GROUP_<id>_COLLATERAL``
+    pair. Bonds and rules tagged with a ``group_id`` are scoped to that
+    group.
+
+    Single-pool deals leave ``DealDefinition.collateral_groups`` empty;
+    the legacy ``CASH`` / ``INT_CASH`` / ``PRIN_CASH`` tokens then refer
+    to the single pool unchanged.
+    """
+
+    group_id: str = Field(
+        min_length=1,
+        description="Stable identifier, e.g. 'GROUP_1'. Used as the prefix "
+                    "in source tokens like 'GROUP_1_CASH'.",
+    )
+    label: str = ""
+    description: str = ""
+
+
 class BondDef(BaseModel):
     """Immutable definition of a single tranche in the deal structure."""
     name: str = Field(min_length=1)
     tranche_type: TrancheType = TrancheType.SEQUENTIAL
     is_bond: bool = True
     is_pseudo: bool = False
+    group_id: str | None = Field(
+        default=None,
+        description="Collateral group this bond is paid from. Required when "
+                    "``DealDefinition.collateral_groups`` is non-empty. "
+                    "Single-pool deals leave this null.",
+    )
 
     coupon_type: CouponType = CouponType.FIXED
     coupon: Rate | None = None
@@ -176,6 +208,15 @@ class RuleNode(BaseModel):
     rule_id: str = Field(min_length=1)
     rule_type: RuleType
     order: int = Field(ge=0)
+    group_id: str | None = Field(
+        default=None,
+        description="Collateral group this rule operates on. When set, the "
+                    "bare 'CASH'/'INT_CASH'/'PRIN_CASH' tokens in "
+                    "from_sources/to_targets are scoped to this group's "
+                    "cash streams; equivalent to writing "
+                    "'GROUP_<id>_CASH' explicitly. Single-pool deals leave "
+                    "this null.",
+    )
 
     from_sources: list[str] = Field(min_length=1)
     to_targets: list[str] = Field(min_length=1)
@@ -231,6 +272,15 @@ class DealDefinition(BaseModel):
     triggers: list[TriggerNode] = Field(default_factory=list)
     calculations: list[CalculationNode] = Field(default_factory=list)
     waterfall_rules: list[RuleNode] = Field(min_length=1)
+    collateral_groups: list[CollateralGroupDef] = Field(
+        default_factory=list,
+        description="Collateral groups for multi-pool deals. Empty list "
+                    "(default) means the deal has a single, unnamed pool "
+                    "and the bare 'CASH'/'INT_CASH'/'PRIN_CASH' tokens "
+                    "refer to it. When non-empty, every BondDef and "
+                    "RuleNode that touches collateral cash MUST be tagged "
+                    "with a `group_id` matching one of these entries.",
+    )
 
     # Deal-level solver knobs
     deal_knobs: dict[str, Any] = Field(default_factory=dict)
@@ -242,10 +292,24 @@ class DealDefinition(BaseModel):
         fee_names = {f.name for f in self.fees}
         trigger_names = {t.name for t in self.triggers}
         calc_names = {c.name for c in self.calculations}
+        group_ids = {g.group_id for g in self.collateral_groups}
         source_formula_names: set[str] = set()
         raw_source_formulas = self.deal_knobs.get("source_formulas")
         if isinstance(raw_source_formulas, dict):
             source_formula_names = {str(k) for k in raw_source_formulas.keys()}
+
+        # Per-group cashflow stream tokens. For each declared collateral
+        # group, the runtime exposes 5 well-known sources/targets:
+        #   GROUP_<id>_CASH       - combined principal + interest + recovery
+        #   GROUP_<id>_INT_CASH   - interest only
+        #   GROUP_<id>_PRIN_CASH  - principal only
+        #   GROUP_<id>_COLLATERAL - alias of CASH (forward compat)
+        #   GROUP_<id>_LOSS       - loss stream for writedowns
+        # Validator accepts any of these as a from_source or to_target.
+        group_stream_names: set[str] = set()
+        for gid in group_ids:
+            for suffix in ("CASH", "INT_CASH", "PRIN_CASH", "COLLATERAL", "LOSS"):
+                group_stream_names.add(f"GROUP_{gid}_{suffix}")
         # Virtual streams declared via SPLIT_CASH targets become valid
         # sources/targets for any subsequent rule. The validator walks the
         # waterfall in declared `order` and accumulates declared streams as
@@ -277,12 +341,16 @@ class DealDefinition(BaseModel):
         valid_sources = (
             all_targets
             | {"COLLATERAL", "LOSS", "INT_CASH", "PRIN_CASH"}
+            | group_stream_names
             | source_formula_names
             | split_streams
         )
-        valid_targets = all_targets | split_streams | {
-            "INT_CASH", "PRIN_CASH", "COLLATERAL"
-        }
+        valid_targets = (
+            all_targets
+            | split_streams
+            | {"INT_CASH", "PRIN_CASH", "COLLATERAL"}
+            | group_stream_names
+        )
 
         errors: list[str] = []
         for rule in self.waterfall_rules:
@@ -333,6 +401,50 @@ class DealDefinition(BaseModel):
                     f"Trigger {trigger.name!r}: calculation_ref "
                     f"{trigger.calculation_ref!r} not found in calculations"
                 )
+
+        # Multi-group consistency: when collateral_groups is set, every
+        # bond and rule that touches collateral cash must declare which
+        # group it belongs to. Pseudo bonds (fee-pay sinks) are
+        # collateral-agnostic and may leave group_id null.
+        if group_ids:
+            for bond in self.bonds:
+                if bond.is_pseudo:
+                    continue
+                if bond.group_id is None:
+                    errors.append(
+                        f"Bond {bond.name!r}: deal has collateral_groups "
+                        f"declared, so each non-pseudo bond must specify "
+                        f"group_id (one of: {sorted(group_ids)})"
+                    )
+                elif bond.group_id not in group_ids:
+                    errors.append(
+                        f"Bond {bond.name!r}: group_id {bond.group_id!r} "
+                        f"is not among declared collateral_groups "
+                        f"{sorted(group_ids)}"
+                    )
+            for rule in self.waterfall_rules:
+                if rule.group_id is not None and rule.group_id not in group_ids:
+                    errors.append(
+                        f"Rule {rule.rule_id!r}: group_id "
+                        f"{rule.group_id!r} is not among declared "
+                        f"collateral_groups {sorted(group_ids)}"
+                    )
+        else:
+            # Single-pool deal: group_id should not be set on bonds or rules.
+            for bond in self.bonds:
+                if bond.group_id is not None:
+                    errors.append(
+                        f"Bond {bond.name!r}: group_id "
+                        f"{bond.group_id!r} is set but deal has no "
+                        f"collateral_groups declared"
+                    )
+            for rule in self.waterfall_rules:
+                if rule.group_id is not None:
+                    errors.append(
+                        f"Rule {rule.rule_id!r}: group_id "
+                        f"{rule.group_id!r} is set but deal has no "
+                        f"collateral_groups declared"
+                    )
 
         for bond in self.bonds:
             if bond.tracks_bonds:
