@@ -22,6 +22,7 @@ import FormSelect from "../../components/FormSelect";
 import TabBar from "../../components/TabBar";
 import SolverStudioPanel from "./solver/SolverStudioPanel";
 import SolverTemplateCards from "./solver/templates/SolverTemplateCards";
+import { synthesizeWorkspaceState } from "./irToBlocklyState";
 import {
   getDefaultAdvancedJsonState,
   getDefaultSensitivitySweepConfig,
@@ -417,12 +418,19 @@ export default function DealEditor({
         onCollateralRiskSettingsChange(toCollateralRiskSettings(maybeRisk));
       }
       const workspaceState = (snapshot.ir?.studio_workspace_state as unknown) ?? null;
-      if (!workspaceState) {
-        // Deal has no saved Blockly layout (e.g., it was seeded
-        // outside the Studio). Clear the canvas so the previous
-        // deal's blocks don't visually mislead the user. The IR is
-        // still loaded and is visible on the IR tab; the Properties
-        // panel will populate as the user authors blocks.
+      if (workspaceState) {
+        setPendingWorkspaceState(workspaceState);
+        toast.success(`Loaded ${snapshot.deal_name} (${snapshot.deal_id})`);
+      } else {
+        // Deal has no saved Blockly layout (e.g., seeded via a Python
+        // script). Synthesize a layout from the IR so the canvas
+        // populates and the user can run/solve/edit. The synthesizer
+        // only handles the common rule types (PAY_FEE, PAY_INTEREST,
+        // PAY_PRINCIPAL, SPLIT_CASH, trigger wrappers); deals with
+        // PAC/TAC/Z schedule rules will get a partial layout (the
+        // simpler rules render; schedule-driven rules are skipped
+        // until the synthesizer is extended).
+        const synthesized = synthesizeWorkspaceState(snapshot.ir ?? {});
         if (workspace) {
           try {
             workspace.clear();
@@ -431,14 +439,18 @@ export default function DealEditor({
             // during navigation. Non-fatal.
           }
         }
-        setPendingWorkspaceState(null);
-        toast.info(
-          `Loaded ${snapshot.deal_name} — no Blockly layout saved. ` +
-            `Use the IR tab to inspect; rebuild blocks to edit visually.`,
-        );
-      } else {
-        setPendingWorkspaceState(workspaceState);
-        toast.success(`Loaded ${snapshot.deal_name} (${snapshot.deal_id})`);
+        setPendingWorkspaceState(synthesized);
+        if (synthesized) {
+          toast.success(
+            `Loaded ${snapshot.deal_name} — synthesized blocks from IR. ` +
+              `Adjust + save to lock the layout.`,
+          );
+        } else {
+          toast.info(
+            `Loaded ${snapshot.deal_name} — IR has no synthesizable rules yet. ` +
+              `Use the IR tab to inspect.`,
+          );
+        }
       }
       setPendingCleanMark(true);
     } catch (error) {
