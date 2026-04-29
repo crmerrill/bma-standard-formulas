@@ -21,6 +21,7 @@ import * as api from "../../services/api";
 import FormSelect from "../../components/FormSelect";
 import TabBar from "../../components/TabBar";
 import SolverStudioPanel from "./solver/SolverStudioPanel";
+import SolverTemplateCards from "./solver/templates/SolverTemplateCards";
 import {
   getDefaultAdvancedJsonState,
   getDefaultSensitivitySweepConfig,
@@ -663,6 +664,151 @@ export default function DealEditor({
     refreshRuns,
   ]);
 
+  /**
+   * Run a solver template end-to-end:
+   *
+   *   1. Persist the deal so we have a stable id/version.
+   *   2. Verify structure (same gate as the legacy solve flow).
+   *   3. Build the same `source` shape `handleSolveDeal` builds so
+   *      runsetup_ref / deal_native modes both work.
+   *   4. POST to `/deals/{id}/solver-templates/{tid}/instantiate` to
+   *      get the resolved SolverSpec.
+   *   5. POST that spec to `/deals/{id}/solve` -- same endpoint as the
+   *      legacy raw-spec flow, so progress polling, cancellation, and
+   *      run history all work unchanged.
+   *
+   * Returns the result the SolverTemplateCards container needs to
+   * render its per-card status (running -> ok / error). The global
+   * telemetry on SolverStudioPanel still reflects the same run via
+   * the existing polling loop.
+   */
+  const handleSolveFromTemplate = useCallback(
+    async (
+      templateId: string,
+      request: api.TemplateInstantiationRequest,
+    ): Promise<{ ok: boolean; message: string }> => {
+      setSolveBusy(true);
+      if (progressPollRef.current != null) {
+        window.clearInterval(progressPollRef.current);
+        progressPollRef.current = null;
+      }
+      setTelemetryState({
+        status: "running",
+        stage: `Instantiating template: ${templateId}`,
+        iteration: 0,
+        objectiveTrajectory: [],
+        cancelToken: savedDealId,
+        runId: null,
+      });
+      try {
+        const { dealId, dealVersion } = await persistDealForExecution();
+        const verification = await verifyStructure(dealId, dealVersion);
+        if (!verification.valid) {
+          throw new Error(
+            `Structuring verification failed: ${verification.errors[0] ?? "Resolve compatibility errors."}`,
+          );
+        }
+        const source =
+          solverSpecDraft.sourceMode === "runsetup_ref"
+            ? {
+                source_mode: "runsetup_ref" as const,
+                run_id: solverSpecDraft.sourceRunId ?? "",
+                scenario_names: scenarioNames,
+              }
+            : {
+                source_mode: "deal_native" as const,
+                scenario_name:
+                  solverSpecDraft.sourceScenarioName ?? scenarioNames[0] ?? "Base Case",
+                run_input: JSON.parse(solverSpecDraft.nativeRunInputJson || "{}"),
+              };
+        if (solverSpecDraft.sourceMode === "runsetup_ref" && !solverSpecDraft.sourceRunId) {
+          throw new Error("Run Setup ref mode requires selecting a base CF run.");
+        }
+        const instantiation = await api.instantiateSolverTemplate(
+          dealId,
+          templateId,
+          request,
+          dealVersion,
+        );
+        const scenarioName =
+          solverSpecDraft.sourceScenarioName ?? scenarioNames[0] ?? "Base Case";
+        const res = await api.solveDeal(dealId, {
+          deal_version: dealVersion,
+          source,
+          scenario_name: scenarioName,
+          solver_spec: instantiation.spec,
+        });
+        const runId = res.run_id ?? null;
+        setTelemetryState((prev) => ({
+          ...prev,
+          status: "running",
+          stage: "Solver running",
+          runId,
+        }));
+        if (runId) {
+          progressPollRef.current = window.setInterval(async () => {
+            try {
+              const progress = await api.getDealSolverProgress(dealId, runId);
+              setTelemetryState((prev) => ({
+                ...prev,
+                status: (progress.status as TelemetryState["status"]) ?? prev.status,
+                stage: progress.stage ?? prev.stage,
+                iteration: progress.iteration ?? prev.iteration,
+                runId,
+              }));
+              if (
+                progress.status === "completed"
+                || progress.status === "failed"
+                || progress.status === "cancelled"
+              ) {
+                if (progressPollRef.current != null) {
+                  window.clearInterval(progressPollRef.current);
+                  progressPollRef.current = null;
+                }
+                setSolveBusy(false);
+                refreshRuns();
+              }
+            } catch (error) {
+              if (progressPollRef.current != null) {
+                window.clearInterval(progressPollRef.current);
+                progressPollRef.current = null;
+              }
+              setSolveBusy(false);
+            }
+          }, 1000);
+        } else {
+          setSolveBusy(false);
+        }
+        toast.success(`Started: ${instantiation.summary}`);
+        return {
+          ok: true,
+          message: `Started — ${instantiation.summary}`,
+        };
+      } catch (e: unknown) {
+        setTelemetryState((prev) => ({
+          ...prev,
+          status: "failed",
+          stage: "Template solve failed",
+        }));
+        setSolveBusy(false);
+        const msg = e instanceof Error ? e.message : String(e);
+        toast.error(msg);
+        return { ok: false, message: msg };
+      }
+    },
+    [
+      persistDealForExecution,
+      verifyStructure,
+      solverSpecDraft.sourceMode,
+      solverSpecDraft.sourceRunId,
+      solverSpecDraft.sourceScenarioName,
+      solverSpecDraft.nativeRunInputJson,
+      scenarioNames,
+      savedDealId,
+      refreshRuns,
+    ],
+  );
+
   const handleCancelSolve = useCallback(async () => {
     if (!savedDealId || !telemetryState.runId) return;
     try {
@@ -1067,29 +1213,51 @@ export default function DealEditor({
       )}
 
       {studioTab === "solver" && (
-        <SolverStudioPanel
-          savedDealId={savedDealId}
-          productFamily={collateralRiskSettings.productFamily}
-          runBusy={runBusy}
-          solveBusy={solveBusy}
-          availableRuns={availableRuns}
-          runsLoading={runsLoading}
-          runsError={runsError}
-          refreshRuns={refreshRuns}
-          solverSpecDraft={solverSpecDraft}
-          setSolverSpecDraft={setSolverSpecDraft}
-          advancedJson={advancedJson}
-          setAdvancedJson={setAdvancedJson}
-          telemetryState={telemetryState}
-          setTelemetryState={setTelemetryState}
-          sensitivitySweepConfig={sensitivitySweepConfig}
-          setSensitivitySweepConfig={setSensitivitySweepConfig}
-          onRunDeal={handleRunDeal}
-          onSolveDeal={handleSolveDeal}
-          onCancelSolve={handleCancelSolve}
-          irJson={irJson}
-          irErrors={errors}
-        />
+        <div className="flex flex-col gap-4">
+          {/* Level-1 + level-2: outcome-led "Solve for X" cards. This is
+              the primary entry point per docs/architecture/solver_ux_design.md. */}
+          <SolverTemplateCards
+            dealId={savedDealId}
+            productFamily={collateralRiskSettings.productFamily}
+            busy={solveBusy}
+            onRunTemplate={handleSolveFromTemplate}
+          />
+
+          {/* Level-3 advanced fallback: the legacy raw-knob form. The
+              design doc keeps this for power users who want to edit
+              the SolverSpec directly. Hidden behind a chevron so it
+              doesn't compete with the level-1 cards. */}
+          <details className="rounded-lg border border-border">
+            <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors">
+              Edit raw spec (advanced)
+            </summary>
+            <div className="border-t border-border p-3">
+              <SolverStudioPanel
+                savedDealId={savedDealId}
+                productFamily={collateralRiskSettings.productFamily}
+                runBusy={runBusy}
+                solveBusy={solveBusy}
+                availableRuns={availableRuns}
+                runsLoading={runsLoading}
+                runsError={runsError}
+                refreshRuns={refreshRuns}
+                solverSpecDraft={solverSpecDraft}
+                setSolverSpecDraft={setSolverSpecDraft}
+                advancedJson={advancedJson}
+                setAdvancedJson={setAdvancedJson}
+                telemetryState={telemetryState}
+                setTelemetryState={setTelemetryState}
+                sensitivitySweepConfig={sensitivitySweepConfig}
+                setSensitivitySweepConfig={setSensitivitySweepConfig}
+                onRunDeal={handleRunDeal}
+                onSolveDeal={handleSolveDeal}
+                onCancelSolve={handleCancelSolve}
+                irJson={irJson}
+                irErrors={errors}
+              />
+            </div>
+          </details>
+        </div>
       )}
 
       {studioTab === "ir" && (

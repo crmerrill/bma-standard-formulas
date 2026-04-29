@@ -1022,6 +1022,167 @@ export function getSolverCatalog(dealId: string): Promise<SolverCatalogItem> {
   return request(`/deals/${dealId}/solver-catalog`);
 }
 
+// ---------------------------------------------------------------------------
+// Solver templates -- the outcome-led "Solve for X" cards.
+//
+// See ``docs/architecture/solver_ux_design.md`` for the design contract.
+// These types mirror ``src/bma_standard_formulas/deals/schemas/solver_template.py``;
+// keep them in sync by hand. The flow is:
+//
+//   1. listSolverTemplates(dealId)       -> SolverTemplateView[]
+//   2. user edits primary + customize
+//   3. instantiateSolverTemplate(...)    -> SolverSpec
+//   4. solveDeal(dealId, { solver_spec }) (existing endpoint)
+// ---------------------------------------------------------------------------
+
+export type PrimaryInputKind =
+  | "NUMBER_SLIDER"
+  | "NUMBER_INPUT"
+  | "PSA_SLIDER"
+  | "PCT_SLIDER"
+  | "BPS_SLIDER"
+  | "CHOICE"
+  | "BOOLEAN";
+
+export interface PrimaryInputChoice {
+  value: string;
+  label: string;
+  subtitle?: string;
+}
+
+export interface PrimaryInput {
+  kind: PrimaryInputKind;
+  field_id: string;
+  label: string;
+  tooltip: string;
+  unit?: string | null;
+  default?: number | string | boolean | null;
+  min_value?: number | null;
+  max_value?: number | null;
+  step?: number | null;
+  choices: PrimaryInputChoice[];
+}
+
+export type TemplateCategory =
+  | "BALANCE_DEAL"
+  | "SIZE_BONDS"
+  | "HIT_TARGET"
+  | "STRESS_TEST"
+  | "BREAK_EVEN"
+  | "DIAGNOSTIC";
+
+export type TemplateProductFamily =
+  | "AGENCY"
+  | "PRIME_JUMBO"
+  | "NON_QM_QRM"
+  | "CRT"
+  | "ANY";
+
+export interface SolverTemplateMeta {
+  template_id: string;
+  title: string;
+  one_line_summary: string;
+  description_md: string;
+  category: TemplateCategory;
+  suitable_for_families: TemplateProductFamily[];
+  primary_input: PrimaryInput;
+  // Patterns are intentionally opaque on the client; they're consumed
+  // by the server-side instantiate endpoint, not by the UI.
+  knobs_pattern: Record<string, unknown>;
+  objective_pattern: Record<string, unknown>;
+  constraint_patterns: Record<string, unknown>[];
+  estimated_runtime_seconds: number;
+  locked_aspects: string[];
+  tooltips: Record<string, string>;
+  primary_button_label: string;
+  success_message_template: string;
+  max_iterations: number;
+  convergence_tolerance_bps: number;
+}
+
+export interface ResolvedKnob {
+  knob_id: string;
+  knob_path: string;
+  label: string;
+  unit: string;
+  current_value: number;
+  lower: number;
+  upper: number;
+  step: number;
+  initial?: number | null;
+  locked: boolean;
+  description: string;
+}
+
+export interface ResolvedConstraint {
+  name: string;
+  description?: string;
+  metric_path?: string | null;
+  target_primitive?: string | null;
+  primitive_params?: Record<string, unknown>;
+  comparison: "GE" | "LE" | "EQ" | "BETWEEN";
+  value?: number | null;
+  lower?: number | null;
+  upper?: number | null;
+}
+
+export interface SolverTemplateView {
+  template: SolverTemplateMeta;
+  resolved_knobs: ResolvedKnob[];
+  resolved_constraints: ResolvedConstraint[];
+}
+
+export interface ListSolverTemplatesResponse {
+  deal_id: string;
+  templates: SolverTemplateView[];
+}
+
+export interface TemplateInstantiationRequest {
+  primary_input_value?: number | string | boolean | null;
+  knob_overrides?: Record<string, ResolvedKnob>;
+  constraint_overrides?: Record<string, ResolvedConstraint>;
+  locked_knob_ids?: string[];
+  max_iterations_override?: number | null;
+  convergence_tolerance_bps_override?: number | null;
+}
+
+export interface TemplateInstantiationResponse {
+  template_id: string;
+  spec: Record<string, unknown>;
+  summary: string;
+}
+
+export function listSolverTemplates(
+  dealId: string,
+  version?: number | null,
+): Promise<ListSolverTemplatesResponse> {
+  const q = version != null ? `?version=${version}` : "";
+  return request(`/deals/${dealId}/solver-templates${q}`);
+}
+
+export function getSolverTemplate(
+  dealId: string,
+  templateId: string,
+  version?: number | null,
+): Promise<SolverTemplateView> {
+  const q = version != null ? `?version=${version}` : "";
+  return request(`/deals/${dealId}/solver-templates/${templateId}${q}`);
+}
+
+export function instantiateSolverTemplate(
+  dealId: string,
+  templateId: string,
+  body: TemplateInstantiationRequest,
+  version?: number | null,
+): Promise<TemplateInstantiationResponse> {
+  const q = version != null ? `?version=${version}` : "";
+  return request(`/deals/${dealId}/solver-templates/${templateId}/instantiate${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 export function listSolverPresets(
   dealId: string,
 ): Promise<{ deal_id: string; presets: SolverPreset[] }> {

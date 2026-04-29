@@ -40,7 +40,18 @@ from ...orchestrator.deals.deal_store import (
     save_studio_ir,
 )
 from ...orchestrator.deals.solver_catalog import build_solver_catalog
+from ...orchestrator.deals.solver_templates import (
+    all_templates,
+    get_template,
+    instantiate_template,
+    list_templates_for_deal,
+    template_view_for_deal,
+)
 from ...orchestrator.deals.structuring_verification import verify_structure
+from bma_standard_formulas.deals.schemas.solver_template import (
+    TemplateInstantiationRequest,
+    TemplateInstantiationResponse,
+)
 from ...orchestrator.run_service import get_cashflow_preview, list_all_runs
 from ...storage import run_store
 
@@ -478,8 +489,93 @@ async def list_solver_runs(deal_id: str):
 
 @router.get("/deals/{deal_id}/solver-catalog", response_model=SolverCatalogResponse)
 async def get_solver_catalog(deal_id: str):
+    """Legacy raw-knob solver catalog. New code should use the
+    outcome-led template endpoints below (``solver-templates``) -- the
+    catalog is preserved as a level-3 advanced fallback per the solver
+    UX design doc.
+    """
     canonical = _ensure_canonical_deal(deal_id, version=None)
     return build_solver_catalog(deal_id, canonical)
+
+
+# ---------------------------------------------------------------------------
+# Outcome-led solver templates (the new "Solve for X" cards).
+#
+# See ``docs/architecture/solver_ux_design.md`` for the design contract.
+# These endpoints are the bridge between the Python template registry
+# and the Structuring Studio level-1 cards. Every endpoint goes through
+# ``_ensure_canonical_deal`` so the deal IR is migrated/normalized
+# before any template logic resolves knobs against it.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/deals/{deal_id}/solver-templates")
+async def list_solver_templates(deal_id: str, version: int | None = Query(None)):
+    """Return all registered solver templates with deal-aware defaults baked in.
+
+    Drives the level-1 "Solve for..." cards on the DealEditor. Each
+    entry includes the template metadata (title, summary, tooltips,
+    primary input, locked aspects) plus ``resolved_knobs`` and
+    ``resolved_constraints`` materialized against this specific deal's
+    current bond coupons / sizes / fees. The UI renders one card per
+    entry without needing to know the IR structure.
+    """
+    canonical = _ensure_canonical_deal(deal_id, version=version)
+    views = list_templates_for_deal(canonical)
+    return {
+        "deal_id": deal_id,
+        "templates": [view.model_dump() for view in views],
+    }
+
+
+@router.get("/deals/{deal_id}/solver-templates/{template_id}")
+async def get_solver_template(
+    deal_id: str,
+    template_id: str,
+    version: int | None = Query(None),
+):
+    """Return a single template view (template + deal-aware defaults).
+
+    Used when the user opens the customize panel and the UI needs to
+    display the resolved knob list and constraint defaults for one
+    specific template.
+    """
+    try:
+        template = get_template(template_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    canonical = _ensure_canonical_deal(deal_id, version=version)
+    view = template_view_for_deal(canonical, template)
+    return view.model_dump()
+
+
+@router.post(
+    "/deals/{deal_id}/solver-templates/{template_id}/instantiate",
+    response_model=TemplateInstantiationResponse,
+)
+async def instantiate_solver_template(
+    deal_id: str,
+    template_id: str,
+    request: TemplateInstantiationRequest,
+    version: int | None = Query(None),
+):
+    """Apply the user's level-1 + level-2 edits to produce a runnable SolverSpec.
+
+    The user has picked a target value (level-1) and optionally edited
+    knob bounds, locked specific knobs, or overridden constraints
+    (level-2). This endpoint returns the resolved ``SolverSpec`` ready
+    to POST to ``/deals/{id}/solve`` -- the Studio can pass the spec
+    straight through to the existing solver service unchanged.
+    """
+    try:
+        template = get_template(template_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    canonical = _ensure_canonical_deal(deal_id, version=version)
+    try:
+        return instantiate_template(canonical, template, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/deals/{deal_id}/verify-structure", response_model=StructuringVerificationResponse)
