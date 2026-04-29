@@ -417,10 +417,27 @@ export default function DealEditor({
         onCollateralRiskSettingsChange(toCollateralRiskSettings(maybeRisk));
       }
       const workspaceState = (snapshot.ir?.studio_workspace_state as unknown) ?? null;
-      setPendingWorkspaceState(workspaceState);
       if (!workspaceState) {
-        toast.info("Loaded deal snapshot. No workspace layout saved for this version.");
+        // Deal has no saved Blockly layout (e.g., it was seeded
+        // outside the Studio). Clear the canvas so the previous
+        // deal's blocks don't visually mislead the user. The IR is
+        // still loaded and is visible on the IR tab; the Properties
+        // panel will populate as the user authors blocks.
+        if (workspace) {
+          try {
+            workspace.clear();
+          } catch {
+            // Defensive: a stale Blockly workspace can throw on clear
+            // during navigation. Non-fatal.
+          }
+        }
+        setPendingWorkspaceState(null);
+        toast.info(
+          `Loaded ${snapshot.deal_name} — no Blockly layout saved. ` +
+            `Use the IR tab to inspect; rebuild blocks to edit visually.`,
+        );
       } else {
+        setPendingWorkspaceState(workspaceState);
         toast.success(`Loaded ${snapshot.deal_name} (${snapshot.deal_id})`);
       }
       setPendingCleanMark(true);
@@ -432,6 +449,7 @@ export default function DealEditor({
     selectedStudioDealId,
     selectedStudioVersion,
     onCollateralRiskSettingsChange,
+    workspace,
   ]);
 
   const persistDealForExecution = useCallback(async (): Promise<{
