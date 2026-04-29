@@ -58,7 +58,12 @@ from bma_standard_formulas.deals.schemas.common import (
     TrancheBehavior,
     TrancheType,
 )
-from bma_standard_formulas.deals.schemas.ir import BondDef, DealDefinition, RuleNode
+from bma_standard_formulas.deals.schemas.ir import (
+    BondDef,
+    CollateralGroupDef,
+    DealDefinition,
+    RuleNode,
+)
 
 from . import (
     GROUP_1_CLASSES,
@@ -457,4 +462,117 @@ def build_fnr_2006_018_group_2_deal(n_periods: int = 240) -> DealDefinition:
         deal_name="FNR 2006-018 Group 2",
         bonds=bonds,
         waterfall_rules=rules,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Combined two-group deal definition (full FNR 2006-018 trust)
+# ---------------------------------------------------------------------------
+
+
+def build_fnr_2006_018_combined_deal(
+    n_periods_group_1: int = 360,
+    n_periods_group_2: int = 240,
+) -> DealDefinition:
+    """Construct the FNR 2006-018 trust as a single multi-group deal.
+
+    The Fannie Mae REMIC Trust 2006-018 is one prospectus with two
+    cash-segregated collateral groups: Group 1 (PAC + Z + Support
+    classes; 30-yr collateral) and Group 2 (sequential pay; 20-yr
+    collateral). Cash from Group 1 collateral pays only Group 1
+    bonds; cash from Group 2 collateral pays only Group 2 bonds. The
+    residual is shared.
+
+    The combined deal definition declares two collateral groups and
+    tags every bond and every cashflow-touching waterfall rule with
+    its `group_id`. The runtime then routes each rule's bare
+    `INT_CASH` / `PRIN_CASH` / `CASH` tokens through that group's
+    cash arrays so the two groups stay financially independent
+    inside one IR.
+
+    Parameters
+    ----------
+    n_periods_group_1 :
+        Cashflow horizon for Group 1 bonds (default 360, matches the
+        30-yr aggregate term).
+    n_periods_group_2 :
+        Cashflow horizon for Group 2 bonds (default 240, matches the
+        20-yr term).
+    """
+    g1 = build_fnr_2006_018_group_1_deal(n_periods=n_periods_group_1)
+    g2 = build_fnr_2006_018_group_2_deal(n_periods=n_periods_group_2)
+
+    # Helper: tag every non-pseudo bond with its group_id; carry the
+    # rest of the bond definition through unchanged.
+    def _tag_bond(bond: BondDef, group_id: str) -> BondDef:
+        if bond.is_pseudo:
+            # The shared residual class lives outside any single group
+            # so it can absorb leftover cash from both. Pseudo bonds
+            # leave group_id null per the schema rule.
+            return bond
+        return bond.model_copy(update={"group_id": group_id})
+
+    # Helper: tag every rule (except residual sweeps, which we replace
+    # below with per-group sweeps).
+    def _tag_rule(rule: RuleNode, group_id: str, order_offset: int) -> RuleNode:
+        return rule.model_copy(
+            update={
+                "rule_id": f"{group_id}__{rule.rule_id}",
+                "group_id": group_id,
+                "order": rule.order + order_offset,
+            },
+        )
+
+    # Bonds: tag each non-pseudo bond with its group; deduplicate the
+    # residual class (both sub-deals declare "R", we keep one shared).
+    g1_bonds_tagged = [_tag_bond(b, "GROUP_1") for b in g1.bonds]
+    g2_bonds_tagged = [
+        _tag_bond(b, "GROUP_2") for b in g2.bonds if b.name != "R"
+    ]
+    bonds: list[BondDef] = g1_bonds_tagged + g2_bonds_tagged
+
+    # Rules: tag each rule with its group; offset Group 2's rule
+    # `order` so the combined waterfall fires Group 1 first then
+    # Group 2 (the actual prospectus runs them in parallel each
+    # period; sequencing them here is mathematically equivalent
+    # because the runtime fully advances state through Group 1's
+    # rules before it touches Group 2's per-group cash arrays).
+    rules: list[RuleNode] = []
+    g1_max_order = max((r.order for r in g1.waterfall_rules), default=-1)
+    rules.extend(_tag_rule(r, "GROUP_1", 0) for r in g1.waterfall_rules)
+    rules.extend(
+        _tag_rule(r, "GROUP_2", g1_max_order + 1) for r in g2.waterfall_rules
+    )
+
+    return DealDefinition(
+        deal_name="FNR 2006-018 (Group 1 + Group 2)",
+        description=(
+            "Fannie Mae REMIC Trust 2006-018, full deal: Group 1 "
+            "(PAC + Z + Support, 30-yr) + Group 2 (Sequential, 20-yr). "
+            "Each group's collateral is segregated; bonds and rules "
+            "are tagged with `group_id` so cashflows do not cross."
+        ),
+        bonds=bonds,
+        waterfall_rules=rules,
+        collateral_groups=[
+            CollateralGroupDef(
+                group_id="GROUP_1",
+                label="Group 1 (PAC + Z + Support)",
+                description=(
+                    "30-year aggregate at 5.94% gross / 5.50% net "
+                    "pass-through. Two sub-replines blended for "
+                    "$132.65MM UPB. Pays PA-PD, EI, EO, TA-TB, ZA, "
+                    "WA-WG, PO."
+                ),
+            ),
+            CollateralGroupDef(
+                group_id="GROUP_2",
+                label="Group 2 (Sequential)",
+                description=(
+                    "20-year repline at 5.94% gross / 5.50% net "
+                    "pass-through. $128.625MM UPB. Pays BA, BC, BD, "
+                    "DO sequentially with DI as a notional IO."
+                ),
+            ),
+        ],
     )
