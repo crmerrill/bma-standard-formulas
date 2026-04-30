@@ -1,34 +1,46 @@
-# Waterfall IR Design — research notes (work in progress)
+# Waterfall IR Design — research notes + IR reference
 
-**Status:** Initial findings from prospectus deep reads across RMBS
-and auto ABS. Not a final spec yet. Below documents what real
-prospectus language looks like and where the current IR matches or
-diverges from it.
+**Status:** Initial design synthesis from 13 prospectus deep reads
+across RMBS and auto ABS, plus full IR element reference and a
+worked example. Not a final spec for IR change yet. Part 1
+documents what real prospectus language looks like; Part 2
+documents the existing IR schema and how to write a deal in it
+both reusably and readably.
 
-**Sample size (8 deals + FNR 2006-018 fixture):**
+**Sample size (13 deals + FNR 2006-018 fixture):**
 
 | Asset class | Deal | Key features |
 |---|---|---|
-| Agency MBS REMIC | FNR 2006-018 | 2 collateral groups, PAC + Z + Support, face-weighted support split |
+| Agency MBS REMIC | FNR 2006-018 (fixture) | 2 collateral groups, PAC + Z + Support, face-weighted support split |
 | Agency MBS REMIC | FNR 2016-104 | 9 collateral groups, mix of pass-through, sequential, accretion-directed, PAC, face-weighted splits |
 | Agency MBS REMIC | FNR 2019-17 | 7 collateral groups, **nested face-weighted splits**, **named Aggregate Group** abstraction |
-| Agency Multifamily REMIC | FNMA 2024-M2 | Multifamily REMIC; structurally similar to single-family agency REMICs, fewer classes |
-| Agency Synthetic CRT | CAS 2024-R05, CAS 2024-R06 | Connecticut Avenue Securities — **synthetic risk transfer**, not cash-flow backed; loss reference structure. **Different category** from cash flow waterfalls and out of scope for this IR. |
+| Agency Multifamily REMIC | FNMA 2024-M2 | Multifamily; structurally similar to single-family REMICs |
+| Agency Synthetic CRT | CAS 2024-R05, CAS 2024-R06 | Connecticut Avenue Securities — synthetic risk transfer (not cashflow IR scope) |
+| Agency MBS REMIC | Ginnie Mae 2025-203 | **Confirms the FNR PAC + Z + Support pattern is industry-standard**; "Aggregate Scheduled Principal Balance" same abstraction as Fannie's "Aggregate Group Planned Balance" |
+| Agency MBS REMIC | Ginnie Mae 2025-009 (HECM) | Reverse-mortgage REMIC; **Deferred Interest Amount** (catch-up rule type not in current IR) |
+| Agency MBS REMIC | Ginnie Mae 2024-115 (Multifamily) | Multifamily-specific: **trustee fee % of Principal Distribution Amount** before cascade |
+| Freddie Mac REMIC general OC | (offering circular) | **Single-Tier vs Double-Tier Series**: REMIC-inside-REMIC trust structure (mostly transparent for cashflow IR) |
 | Non-Agency RMBS (subprime) | JPMMT 2006 | Single pool, **interest waterfall + principal waterfall** sub-streams, **stepdown date**, **trigger event override**, OC + excess interest, M-1..M-10 mezz with reverse-seniority loss allocation |
-| Prime Auto ABS | Ford Credit Auto Owner Trust 2024-C | Single pool, **interleaved interest + principal**, **first / second / regular priority principal** with computed amounts, target OC build, reserve replenishment as a step |
-| Subprime Auto ABS | Santander Drive Auto Receivables Trust 2024-2 | **Same waterfall shape as Ford Credit prime auto.** Differences are parametric (4 mezz classes vs 3, 5 named principal allocations vs 3, $300K trustee fee cap vs $375K). Confirms auto prime + subprime share one IR grammar. |
+| Non-Agency RMBS (Non-QM) | Verus 2024-9 / 2026-4 | **Step-up coupon** at year 5 (time-conditional rate), **LCF (Last Cashflow) class**, mixed pay (senior pro rata, mezz/sub sequential), Class XS for excess spread |
+| Prime Auto ABS | Ford Credit Auto Owner Trust 2024-C | Single pool, **interleaved I/P**, named priority principal amounts, target OC build, reserve replenishment, capped trustee fee with overflow |
+| Prime Auto ABS | Toyota Auto Receivables 2024-A | Same shape as Ford Credit. **Yield Supplement Overcollateralization Amount** for sub-WAC loan adjustment. Confirms prime auto = same grammar across sponsors. |
+| Auto Lease ABS | Toyota Lexus Owner Trust 2024-A (TLOT) | Lease-specific simpler waterfall (8 steps): pro-rata interest across all classes, single combined priority principal amount, "Securitization Value" valuation. Otherwise same grammar. |
+| Subprime Auto ABS | Santander Drive 2024-2 (SDART) | **Same shape as Ford / Toyota prime auto.** Parametric differences (4 mezz classes vs 2-3, 5 named allocations vs 3, $300K trustee cap vs $375K). |
+| Subprime Auto ABS | Westlake 2024-1 (WLAKE) | 8-class structure (A-1, A-2, A-3 + B, C, D, E). Same waterfall shape as SDART. Confirms subprime auto pattern is consistent across sponsors. |
 
-This is short of "10-15 per asset class" but already surfaces
-distinct structural requirements. The user has noted that more
-breadth (credit card master trusts, CLOs, marketplace consumer,
-equipment / aircraft, solar) will refine and extend these findings.
-**Plan: surface the patterns from this sample, agree on direction,
-then expand.**
+**Key cross-asset finding:** every asset class reduces to a small
+set of structural primitives. Prime auto + subprime auto + auto
+lease all share one grammar. Agency MBS REMICs across Fannie /
+Freddie / Ginnie share the same PAC + Z + Support pattern. The
+existing IR captures most of these patterns; the major real gap is
+**named computed distribution amounts** (heavy in non-agency RMBS
+and auto), and the **authoring practice** of fragmenting waterfall
+steps into one rule per bond (a fixture / generator issue, not an
+IR limitation).
 
-**Key cross-asset finding:** **prime auto and subprime auto are
-the same waterfall grammar.** All asset classes ultimately reduce
-to a small set of structural primitives — see "Cross-asset-class
-observations" below.
+**Asset classes still to cover** (not yet in sample): credit card
+master trusts, CLOs (managed), marketplace consumer (SoFi /
+LendingClub / Affirm), equipment ABS, aircraft ABS, solar ABS.
 
 ---
 
@@ -537,3 +549,794 @@ Group 7's nested 16.67 / 83.33 / first / second pattern.
 
    **The IR doesn't need a new rule type for PAC/TAC; the
    synthesizer + irGenerator just need to recognize the pattern.**
+
+---
+
+## Additional deals (round 2 research)
+
+### Ginnie Mae REMIC 2025-203 (single-family, multi-group)
+
+Three Security Groups; Group 3 has the canonical PAC + Z + Support
+structure verbatim:
+
+> **SECURITY GROUP 3** — The Group 3 Principal Distribution Amount
+> and the Accrual Amount will be allocated in the following order
+> of priority:
+> 1. Sequentially, to BP and PB, **in that order, until reduced to
+>    their Aggregate Scheduled Principal Balance for that
+>    Distribution Date**
+> 2. To Z, until retired
+> 3. Sequentially, to BP and PB, **in that order, without regard to
+>    their Aggregate Scheduled Principal Balance, until retired**
+
+Identical structure to FNR. "Aggregate Scheduled Principal Balance"
+is the same abstraction as Fannie's "Aggregate Group Planned
+Balance". Confirms the FNR pattern is industry-standard for agency
+REMICs.
+
+### Ginnie Mae REMIC 2025-009 (HECM-backed reverse mortgage)
+
+Reverse-mortgage REMIC has a distinct structural feature — the
+**Deferred Interest Amount**. The 3-step waterfall is:
+
+> 1. Concurrently, to AI, FA and FB, **pro rata based on their
+>    respective Interest Accrual Amounts**, up to the Class
+>    Interest Accrual Amount
+> 2. Concurrently, to FA and FB, **pro rata based on their Class
+>    Principal Balances**, in reduction of their Class Principal
+>    Balances, up to the Principal Distribution Amount
+> 3. To AI, until the **Class AI Deferred Interest Amount** is
+>    reduced to zero
+
+Step 3 is unique — it pays accrued-but-unpaid IO interest only
+*after* the principal cascade. Standard MBS pays IO at the same
+time as bond interest. **Reverse-mortgage REMICs need a "deferred
+interest catch-up" rule type or a `cap_mode=DEFERRED` flag.** Not
+in current IR.
+
+### Ginnie Mae REMIC 2024-115 (Multifamily)
+
+> Allocation of Principal: On each Distribution Date, a percentage
+> of the Principal Distribution Amount will be applied to the
+> **Trustee Fee**, and the remainder of the Principal Distribution
+> Amount (the **"Adjusted Principal Distribution Amount"**) will
+> be allocated, sequentially, to A and B, in that order, until
+> retired.
+
+Multifamily REMICs **deduct trustee fees from principal** as a
+percentage *before* the cascade. Single-family agency REMICs don't
+do this (trustee/servicer fees are netted at the underlying MBS
+layer). The IR's `PAY_FEE` rule with `basis_type=COLLATERAL_BALANCE`
+covers this; the multifamily case puts the fee earlier in the
+cascade.
+
+### Freddie Mac REMIC general structure (offering circular)
+
+Freddie Mac REMICs introduce a structural concept that doesn't
+exist in our current IR: **Single-Tier vs Double-Tier Series**:
+
+- **Single-Tier**: REMIC Certificates represent direct beneficial
+  ownership in *one* REMIC Pool. Cashflows flow pool → classes.
+- **Double-Tier**: An **Upper-Tier REMIC Pool** + one or more
+  **Lower-Tier REMIC Pools** stacked. Lower-Tier Classes are
+  themselves **Mortgage Securities** of the Upper-Tier Pool.
+  Cashflows flow pool → Lower-Tier classes → Upper-Tier classes.
+
+This is **REMIC-inside-a-REMIC** structure. Most agency deals
+abstract this away (the cashflow analyst just looks at the
+ultimate classes). For our IR, we already model this implicitly —
+the `Loan` → `BMA cashflow engine` → `DealRunInput` chain treats
+the underlying agency MBS as a black box delivering a single
+pool's cashflows to the deal. The lower-tier internal mechanics
+are out of scope unless we want to model RCR / MACR exchanges.
+
+Also notable: **MACR (Modifiable and Combinable REMIC) Certificates**
+allow exchange of one class for proportionate interests in another.
+This is purely an issuance/secondary mechanic (no waterfall
+implication) and doesn't touch the IR.
+
+### Verus Securitization Trust 2024-9 (Modern Non-QM RMBS)
+
+Adds three patterns not in JPMMT 2006:
+
+1. **Step-up coupon at year 5.** "On each payment date beginning
+   in January 2029, the A1, A2 and A3 [classes] will receive the
+   sum of [the deal's] fixed coupon, plus 1.00%."
+   - Time-conditional coupon change. Requires the IR to support
+     coupon as a function of period, not a static field.
+   - The current `BondDef.coupon: float` does not capture this.
+     `BondDef.coupon_schedule: list[{period, rate}]` would.
+2. **Last Cashflow (LCF) class.** "A1A, A1B, A1LCF" — A1LCF gets
+   paid LAST among the seniors. New seniority sub-pattern.
+   - LCF works as a normal bond with a junior position within the
+     senior tier; expressible via the existing rule ordering.
+3. **Class XS** — explicit excess-spread tracking class. Class XS
+   noteholders also control optional-redemption rights.
+   - Excess-spread tracking is just a residual class with extra
+     economic rights; expressible via `tranche_type=RESIDUAL`.
+   - Optional-redemption is governance, not waterfall, and is
+     out of scope for the IR.
+
+Pay structure: "senior notes pro rata, mezz + sub sequentially."
+Same hybrid pattern as JPMMT 2006 post-stepdown, but encoded with
+no stepdown date — Non-QM deals typically don't have one because
+the loans amortize quickly.
+
+### Toyota Auto Receivables 2024-A (Prime Auto, Toyota)
+
+Confirms the Ford Credit prime auto shape. Differences:
+
+- Has **First Priority Principal Distribution Amount** (Class A
+  catch-up) AND **Second Priority Principal Distribution Amount**
+  (Class A+B catch-up) AND **Regular Principal Distribution
+  Amount** (target OC build) — same three named amounts.
+- "**Yield Supplement Overcollateralization Amount**" (YSOC) — a
+  parallel concept used in adjusting the "adjusted pool balance"
+  for sub-WAC loans. Specific to auto deals where some loans have
+  rates below the WAC needed to support the bonds. Pure
+  computation tweak, doesn't change waterfall structure.
+- Reserve account replenishment, capped trustee fees with overflow
+  — same as Ford / SDART.
+- Confirms prime auto = same grammar across sponsors.
+
+### Toyota Lexus Owner Trust 2024-A (Auto LEASE — different shape)
+
+Lease-backed ABS has a SIMPLER waterfall (8 steps, not 11-14):
+
+```
+1. Servicing Fee
+2. Transaction Fees and Expenses (capped $300K/yr)
+3. Note Interest (pro rata across all classes — NOT class-by-class)
+4. Note Principal — priority principal distribution amount
+   (single combined amount, not per-class)
+5. Reserve Account Deposit
+6. Note Principal — regular principal distribution amount
+7. Additional Transaction Fees and Expenses (overflow)
+8. Excess Amounts to certificateholder
+```
+
+**Differences vs auto loan ABS:**
+
+- **Pro-rata interest across ALL classes** (no class-by-class
+  step). Less common in loan ABS.
+- **One combined "priority principal distribution amount"** instead
+  of per-class first/second priority. The lease structure pays all
+  notes pro rata for principal, with no class-priority cascade.
+- **"Securitization Value"** instead of "Pool Balance" — the lease
+  collateral is valued differently because of residual risk on the
+  vehicles.
+- Otherwise structurally the same as auto loan ABS.
+
+The IR already supports this (multi-target PAY_INTEREST with
+PRO_RATA payment_style; multi-target PAY_PRINCIPAL with PRO_RATA).
+Just simpler.
+
+### Westlake Automobile Receivables Trust 2024-1 (Subprime Auto)
+
+8 classes of notes (A-1, A-2, A-3 + B, C, D, E). Same waterfall
+shape as SDART — interleaved I/P, named priority allocations,
+reserve replenishment as a step. Westlake confirms the subprime
+auto pattern is consistent across sponsors.
+
+### Updated cross-asset matrix
+
+After 13 deals across 4 asset classes:
+
+| Feature | Agency MBS | Non-Agency RMBS | Prime Auto | Subprime Auto | Auto Lease |
+|---|---|---|---|---|---|
+| Distinct collateral groups | YES (1-9) | YES (1-2) | NO | NO | NO |
+| Separate INT/PRIN sub-streams | YES | YES | NO | NO | NO |
+| PAC / TAC / Z behavior | YES | NO | NO | NO | NO |
+| Stepdown date gate | NO | YES | NO | NO | NO |
+| Reserve account in waterfall | RARE | YES | YES | YES | YES |
+| Sequential vs pro-rata switch | NO | YES | NO | NO | NO |
+| Interleaved I/P by class | NO | NO | YES | YES | NO (pro-rata) |
+| Reverse-seniority loss allocation | NO | YES | NO | NO | NO |
+| Named computed distribution amounts | LIGHT | HEAVY | MEDIUM | MEDIUM | LIGHT |
+| Recursive splits | YES | RARE | NO | NO | NO |
+| Aggregate Group bond bundles | YES | NO | NO | NO | NO |
+| Step-up coupon | RARE | YES (Non-QM) | NO | NO | NO |
+| Deferred interest catch-up | RARE (HECM) | NO | NO | NO | NO |
+| Acceleration alternate waterfall | NO | NO | YES | YES | YES |
+
+### Updated IR gap list
+
+Adding the new patterns from round 2:
+
+| Gap | Severity | Affects | Already in IR? |
+|---|---|---|---|
+| Multi-target rule consolidation (authoring) | **HIGH** | every class | NO (fixture/irGen issue, not IR) |
+| Named computed distribution amounts | **HIGH** | non-agency RMBS, auto | NO |
+| Aggregate Group bond bundles | MEDIUM | agency MBS | NO |
+| Recursive SPLIT_CASH | MEDIUM | agency MBS | PARTIAL (need runtime verify) |
+| Loss allocation as separate cascade | MEDIUM | non-agency RMBS, future CMBS | NO |
+| Branched waterfalls (mutex blocks) | MEDIUM | non-agency RMBS | PARTIAL (per-rule trigger) |
+| **Time-conditional bond coupons (step-ups)** | **MEDIUM** | Non-QM, callable seniors | NO |
+| **Acceleration alternate waterfall** | **MEDIUM** | every auto deal | PARTIAL (trigger-based) |
+| **Deferred interest catch-up** (HECM IO) | LOW | reverse mortgage REMIC | NO |
+| Net WAC reserve sub-cascade | LOW | non-agency RMBS | PARTIAL (SPLIT_CASH + accounts) |
+| Capped fee with overflow to later step | LOW | auto | PARTIAL (max_amount_fixed) |
+
+---
+
+# Part 2 — IR reference: the schema and how to write a deal
+
+This second half of the document covers the IR itself. Goal: make
+the IR both **highly reusable** (one schema for many asset classes)
+and **human-readable** (an analyst should be able to read the IR
+top-to-bottom and match it to the prospectus paragraph by
+paragraph).
+
+## IR overview
+
+The IR is a JSON-serializable Pydantic schema that captures one
+deal's entire static structure in a single document. It is:
+
+- **Source of truth.** The runtime executes the IR; the UI
+  (Blockly canvas + Properties panel) edits the IR; saved deals
+  persist as IR JSON; tests compare against the IR.
+- **Versioned.** `schema_version: "1.0.0"` allows forward-compatible
+  migrations.
+- **Self-validating.** Pydantic enforces field types; the
+  top-level `_validate_references` validator enforces cross-field
+  consistency (every rule's `from_sources` and `to_targets` must
+  reference declared bonds, accounts, fees, or built-in streams;
+  every rule's `condition_trigger` must reference a declared
+  trigger; every bond's `support_tranches` must reference real
+  bonds; etc.).
+- **Round-tripping.** IR → runtime → cashflow output is
+  deterministic; IR → Blockly synthesizer → workspace → irGenerator
+  → IR is meant to be lossless.
+
+## Top-level schema: `DealDefinition`
+
+```python
+class DealDefinition(BaseModel):
+    schema_version: str = "1.0.0"
+    deal_name: str                        # "FNR 2006-018 (Group 1 + Group 2)"
+    description: str = ""
+    origination_date: date | None
+    settlement_date: date | None
+
+    # Structure
+    bonds: list[BondDef]                  # All tranches, including pseudo bonds
+    accounts: list[AccountDef]            # Reserves, prefunding, custodial
+    fees: list[FeeDef]                    # Trustee, servicer, etc.
+    triggers: list[TriggerNode]           # Conditional gates
+    calculations: list[CalculationNode]   # Named expressions for triggers
+    waterfall_rules: list[RuleNode]       # The actual priority of payments
+    collateral_groups: list[CollateralGroupDef]  # Multi-pool deals
+
+    # Solver / overrides
+    deal_knobs: dict[str, Any]            # Run-time scalar overrides
+```
+
+## `BondDef` — every tranche the deal pays
+
+A bond is anything that receives cash from the waterfall. This
+includes residual classes and "pseudo bonds" used as accounting
+sinks for fees.
+
+```python
+class BondDef(BaseModel):
+    name: str                             # "PA", "Class A-1", "M-1"
+    tranche_type: TrancheType             # PAC | TAC | SUPPORT | SEQUENTIAL | PO | IO | Z_BOND | RESIDUAL | PSEUDO
+    tranche_behavior: TrancheBehavior     # PAC | TAC | Z | SEQUENTIAL | ACCRETION_DIRECTED
+    is_bond: bool                         # False for residual/pseudo
+    is_pseudo: bool                       # True for fee sinks
+
+    # Coupon
+    coupon_type: CouponType               # FIXED | FLOATING | ZERO
+    coupon: float | None                  # Annual percent (5.5 = 5.5%)
+    margin: float | None                  # Floater spread over index
+    index_name: str | None                # SOFR | TERM_SOFR_1M | etc.
+    cap: float | None                     # Floater rate cap
+    floor: float | None                   # Floater rate floor
+
+    # Sizing
+    size_dollars: float | None
+    size_pct: float | None                # 0..100
+
+    # Maturity / accrual
+    maturity_date: date | None
+    day_count: DayCount                   # 30/360 | ACT/360 | ACT/ACT
+    accrual_period: AccrualPeriod         # MONTHLY | QUARTERLY
+
+    # PAC / TAC parameters
+    schedule_type: ScheduleType | None    # PLANNED | TARGETED
+    schedule_model_type: PrepayModelType  # PSA | CPR | ABS | CUSTOM_VECTOR
+    schedule_speed_low: float | None      # PAC lower PSA
+    schedule_speed_high: float | None     # PAC upper PSA
+    schedule_speed_target: float | None   # TAC pricing PSA
+    schedule_contract: list[dict]         # [{period, target_balance}]
+    schedule_tolerance_bps: float | None
+    support_tranches: list[str]           # PAC's support stack
+    supported_by_tranches: list[str]      # Z's accretion targets
+
+    # Z-bond / accrual
+    z_accrual_enabled: bool
+    z_release_trigger: str | None
+    accrual_start_period: int | None
+    accrual_end_period: int | None
+
+    # Notional / IO
+    parent_tranche: str | None
+    relation_type: StructureRelation | None  # NOTIONAL_IO | INVERSE | etc.
+    notional_ratio: float | None
+    tracks_bonds: dict[str, list[str]] | None  # {"balance": ["DO"]}
+
+    # Multi-group
+    group_id: str | None                  # "GROUP_1", "GROUP_2"
+
+    # Solver knob flags
+    solver_knob_coupon: bool
+    solver_knob_size: bool
+
+    pay_mode: PayMode                     # CASH_PAY | PIK
+```
+
+**Reusability principle:** one `BondDef` covers PAC, TAC, Z, IO,
+PO, sequential, support, residual, pseudo. The differences are
+encoded in `tranche_type` + `tranche_behavior` + the schedule /
+accrual / tracking fields. **No new bond class needs a new schema.**
+
+## `RuleNode` — one waterfall step
+
+```python
+class RuleNode(BaseModel):
+    rule_id: str                          # "r_int_PA_pacI"
+    rule_type: RuleType                   # PAY_INTEREST | PAY_PRINCIPAL | ...
+    order: int                            # 0, 1, 2 ... priority
+
+    from_sources: list[str]               # ["INT_CASH"] or ["GROUP_1_PRIN_CASH"]
+    to_targets: list[str]                 # ["PA", "PB", "PC", "PD", "EO"]
+    payment_style: PaymentStyle           # SEQUENTIAL | PRO_RATA | CONCURRENT
+    cap_mode: CapMode | None              # PLANNED | SCHEDULED | TARGETED | NONE
+
+    max_amount_fixed: float | None        # Hard $ cap on this rule
+    max_amount_expr: str | None           # Computed cap expression
+    target_weights: list[float] | None    # SPLIT_CASH per-target weights
+
+    condition_trigger: str | None         # Trigger name
+    condition_invert: bool                # Run when trigger is FALSE
+    condition_expr: str | None            # Custom condition expression
+
+    reserve_account: str | None           # PAY_TO_RESERVE / PAY_FROM_RESERVE_*
+    allow_negative_source: bool
+
+    group_id: str | None                  # Multi-group routing
+    description: str = ""
+```
+
+**Reusability principle:** every prospectus step maps to ONE
+`RuleNode`. The shape of the step (PAC schedule, sequential pay,
+pro-rata, fee, residual sweep, conditional pay) is conveyed by
+the *combination* of `rule_type` + `payment_style` + `cap_mode` +
+`condition_trigger`. **No new rule type for "PAY_PRINCIPAL_PAC_SCHEDULE"**
+or similar — those are just `PAY_PRINCIPAL` with `cap_mode=PLANNED`
+and the targeted bond's `tranche_behavior=PAC`.
+
+### `RuleType` enum — what cash this rule moves
+
+| RuleType | Cash moved | Typical sources | Typical targets |
+|---|---|---|---|
+| `PAY_INTEREST` | Bond cash interest | INT_CASH or CASH | One or more bonds |
+| `PAY_INTEREST_SHORTFALL` | Catch-up of unpaid interest | INT_CASH | Bonds with unpaid coupon |
+| `PAY_PRINCIPAL` | Principal | PRIN_CASH or CASH | One or more bonds |
+| `PAY_WRITEDOWN` | Loss allocation | LOSS | Bonds (reverse seniority) |
+| `PAY_FEE` | Fee | CASH or any source | One fee payee |
+| `PAY_TO_RESERVE` | Reserve top-up | CASH or interest | Reserve account |
+| `PAY_FROM_RESERVE_INTEREST` | Reserve cover | Reserve account | Bonds (interest shortfall) |
+| `PAY_FROM_RESERVE_PRINCIPAL` | Reserve cover | Reserve account | Bonds (principal acceleration) |
+| `PAY_FROM_RESERVE` | Reserve sweep | Reserve account | Bonds or other targets |
+| `PAY_RECOURSE_INTEREST` | Recourse cover | Sponsor recourse | Bonds (interest shortfall) |
+| `PAY_RECOURSE_PRINCIPAL` | Recourse cover | Sponsor recourse | Bonds (principal acceleration) |
+| `PAY_RESIDUAL` | Residual sweep | Any leftover stream | Residual classes |
+| `SPLIT_CASH` | Stream plumbing | One source stream | N named virtual streams |
+
+### `PaymentStyle` — order semantics within a multi-target rule
+
+| Style | Behavior |
+|---|---|
+| `SEQUENTIAL` | Pay first target until its cap, then next, etc. ("In that order") |
+| `PRO_RATA` | Pay all targets simultaneously by their balance / face / coupon weight |
+| `CONCURRENT` | Synonym of PRO_RATA used in some contexts |
+
+### `CapMode` — schedule cap interpretation for PAY_PRINCIPAL
+
+| Mode | Stops paying when | Prospectus phrasing |
+|---|---|---|
+| `PLANNED` | Bond reaches its `schedule_contract` planned balance | "to its Planned Balance" |
+| `SCHEDULED` | Bond reaches its scheduled (next-period) balance | "to its Scheduled Balance" |
+| `TARGETED` | Bond reaches a target | "to its Targeted Balance" |
+| `NONE` | Never (cleanup rule) | "without regard to its Planned Balance" / "until retired" |
+
+## Built-in source/target tokens (reusable across asset classes)
+
+Tokens that any rule's `from_sources` / `to_targets` can reference
+without explicit declaration:
+
+| Token | Meaning |
+|---|---|
+| `CASH` | Combined pool cashflow (interest + principal + recovery) |
+| `COLLATERAL` | Alias for `CASH`, common in older deals |
+| `INT_CASH` | Pool interest stream only (separated from principal) |
+| `PRIN_CASH` | Pool principal stream only |
+| `LOSS` | Pool loss stream (for writedown rules) |
+| `GROUP_<id>_CASH` | Combined cashflow for collateral group `<id>` |
+| `GROUP_<id>_INT_CASH` | Interest stream for collateral group `<id>` |
+| `GROUP_<id>_PRIN_CASH` | Principal stream for collateral group `<id>` |
+| `GROUP_<id>_COLLATERAL` | Alias for `GROUP_<id>_CASH` |
+| `GROUP_<id>_LOSS` | Loss stream for collateral group `<id>` |
+
+When a rule declares `group_id`, the bare tokens (`CASH`,
+`INT_CASH`, `PRIN_CASH`, `COLLATERAL`, `LOSS`) are auto-prefixed
+with `GROUP_<id>_` at compile time. So a multi-group rule can
+write `from_sources: ["INT_CASH"]` and have it resolve to the right
+group automatically.
+
+## Other elements
+
+### `AccountDef` — reserve / prefunding / custodial accounts
+
+```python
+class AccountDef(BaseModel):
+    name: str                             # "Reserve_Account"
+    account_type: AccountType             # RESERVE | PREFUNDING | CUSTODIAL | DISTRIBUTION
+    starting_amount: float                # $ amount at closing
+    starting_pct: float | None            # OR % of pool / bond stack
+    starting_basis: MinimumBasis          # FIXED_DOLLAR | NOTE_BALANCE
+    minimum_amount: float                 # Floor
+    minimum_pct: float | None
+    minimum_basis: MinimumBasis
+```
+
+### `FeeDef` — periodic fee paid to a payee
+
+```python
+class FeeDef(BaseModel):
+    name: str                             # "TRUSTEE", "SERVICER"
+    basis_type: FeeBasisType              # FIXED_DOLLAR | COLLATERAL_BALANCE | PER_LOAN
+    amount: float                         # $ amount per period (FIXED_DOLLAR)
+    amount_expr: str | None               # OR computed expression
+    rate: float | None                    # Annual rate (COLLATERAL_BALANCE)
+    rate_expr: str | None
+    minimum: float                        # Floor on the fee
+    frequency: FeeFrequency               # MONTHLY | QUARTERLY | ANNUAL
+    cumulative: bool                      # Track unpaid fees as carryover
+```
+
+### `TriggerNode` — conditional gate
+
+```python
+class TriggerNode(BaseModel):
+    name: str                             # "CumLossTrigger"
+    metric_type: TriggerMetricType        # CUMULATIVE_LOSS | CUMULATIVE_DEFAULT | DELINQUENCY_RATE | OC_TEST | IC_TEST | CUSTOM
+    threshold_value: float | None
+    threshold_schedule: list[float] | None # Per-period threshold (e.g., RMBS time-stepped triggers)
+    calculation_ref: str | None           # Pointer to a CalculationNode for dynamic thresholds
+    comparison_ref: str | None            # ">" / ">=" / etc.
+    cure_periods: int | None              # How many clean periods to clear the trigger
+```
+
+### `CalculationNode` — named expressions
+
+```python
+class CalculationNode(BaseModel):
+    name: str                             # "cum_loss_pct"
+    expression: str                       # "sum(loss[0:i+1]) / orig_collat_bal"
+    description: str
+```
+
+Used by triggers (and in proposed `ComputedAmountNode`) to compute
+per-period scalars. Supports a safe subset of Python: arithmetic,
+min/max/abs, references to bond/account/pool state.
+
+### `CollateralGroupDef` — multi-pool deals
+
+```python
+class CollateralGroupDef(BaseModel):
+    group_id: str                         # "GROUP_1"
+    label: str                            # Human-readable
+    description: str
+```
+
+Activates per-group cash routing in the runtime. When non-empty,
+every non-pseudo bond and every cashflow-touching rule must declare
+`group_id`.
+
+---
+
+## Worked example: FNR 2006-018 Group 1, written in IR
+
+The prospectus says (verbatim, paraphrased for brevity):
+
+> Group 1 cash flow priority of payments:
+> 1. Pay interest on all cash-paying bonds.
+> 2. Pay principal of Aggregate Group I to its Planned Balance
+>    (PA → PB → PC → PD → EO sequential).
+> 3. Pay principal of Aggregate Group II to its Planned Balance
+>    (TA → TB sequential).
+> 4. Pay principal to Z to zero.
+> 5. Distribute 95.65% of remaining principal to support sequential
+>    (WA → WB → WC → WD → WE → WG); 4.35% to PO.
+> 6. Pay principal of Aggregate Group II to zero (without regard
+>    to planned balance).
+> 7. Pay principal of Aggregate Group I to zero (without regard
+>    to planned balance).
+> 8. Sweep remaining cash to residual.
+
+Below is the **same waterfall expressed compactly in IR** (one
+rule per prospectus step). Every rule has a stable `rule_id` that
+matches the prospectus phrasing so an analyst can search the IR
+and find the corresponding step:
+
+```yaml
+deal_name: "FNR 2006-018 Group 1"
+collateral_groups:
+  - group_id: GROUP_1
+    label: "Group 1 (PAC + Z + Support)"
+
+bonds:
+  # Aggregate Group I (PAC I + IO/PO)
+  - { name: PA,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1,
+      coupon: 5.5, size_dollars: 33710000, schedule_contract: [...],
+      support_tranches: [WA, WB, WC, WD, WE, WG, PO] }
+  - { name: PB,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1, ... }
+  - { name: PC,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1, ... }
+  - { name: PD,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1, ... }
+  - { name: EO,  tranche_type: PO,     coupon_type: ZERO,     group_id: GROUP_1, ... }
+  - { name: EI,  tranche_type: IO,     tracks_bonds: { balance: [PA, PB, PC, PD] }, ... }
+
+  # Aggregate Group II (PAC II / accretion-directed)
+  - { name: TA,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1, ... }
+  - { name: TB,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1, ... }
+
+  # Z-bond (Aggregate Group II support)
+  - { name: Z,   tranche_type: Z_BOND, tranche_behavior: Z, pay_mode: PIK,
+      group_id: GROUP_1, z_accrual_enabled: true, supported_by_tranches: [TA, TB] }
+
+  # Support tranches
+  - { name: WA,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
+  - { name: WB,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
+  - { name: WC,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
+  - { name: WD,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
+  - { name: WE,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
+  - { name: WG,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
+
+  # Support PO (4.35% of support cash)
+  - { name: PO,  tranche_type: PO,     coupon_type: ZERO, group_id: GROUP_1, ... }
+
+  # Residual
+  - { name: R,   tranche_type: RESIDUAL, is_pseudo: true }
+
+waterfall_rules:
+  # Step 1 — Interest cascade (one rule, all cash-paying bonds in priority order)
+  - rule_id: r_int_cascade
+    rule_type: PAY_INTEREST
+    order: 0
+    group_id: GROUP_1
+    from_sources: [INT_CASH]
+    to_targets: [PA, PB, PC, PD, TA, TB, EI, WA, WB, WC, WD, WE, WG]
+    payment_style: SEQUENTIAL
+    description: "Pay accrued bond coupon. Z is PIK; its coupon is capitalized."
+
+  # Step 2 — PAC I to its Planned Balance (one rule, all PAC I bonds in priority)
+  - rule_id: r_prin_pac_i_planned
+    rule_type: PAY_PRINCIPAL
+    order: 1
+    group_id: GROUP_1
+    from_sources: [PRIN_CASH]
+    to_targets: [PA, PB, PC, PD, EO]
+    payment_style: SEQUENTIAL
+    cap_mode: PLANNED
+    description: "Aggregate Group I to its Planned Balance"
+
+  # Step 3 — PAC II to its Planned Balance
+  - rule_id: r_prin_pac_ii_planned
+    rule_type: PAY_PRINCIPAL
+    order: 2
+    group_id: GROUP_1
+    from_sources: [PRIN_CASH]
+    to_targets: [TA, TB]
+    payment_style: SEQUENTIAL
+    cap_mode: PLANNED
+    description: "Aggregate Group II to its Planned Balance"
+
+  # Step 4 — Z-bond
+  - rule_id: r_prin_Z
+    rule_type: PAY_PRINCIPAL
+    order: 3
+    group_id: GROUP_1
+    from_sources: [PRIN_CASH]
+    to_targets: [Z]
+    payment_style: SEQUENTIAL
+    description: "Z to zero"
+
+  # Step 5a — 95.65 / 4.35 face-weighted split
+  - rule_id: r_supp_split
+    rule_type: SPLIT_CASH
+    order: 4
+    group_id: GROUP_1
+    from_sources: [PRIN_CASH]
+    to_targets: [WAWG_BUCKET, PO_BUCKET]
+    target_weights: [0.956521694276, 0.043478305724]
+    description: "Face-weighted split of remaining principal: 95.65% to WA-WG, 4.35% to PO"
+
+  # Step 5b — WA-WG cascade (multi-target sequential)
+  - rule_id: r_pay_wawg
+    rule_type: PAY_PRINCIPAL
+    order: 5
+    group_id: GROUP_1
+    from_sources: [WAWG_BUCKET]
+    to_targets: [WA, WB, WC, WD, WE, WG]
+    payment_style: SEQUENTIAL
+
+  # Step 5c — Support PO
+  - rule_id: r_prin_PO
+    rule_type: PAY_PRINCIPAL
+    order: 6
+    group_id: GROUP_1
+    from_sources: [PO_BUCKET]
+    to_targets: [PO]
+
+  # Step 5d — Sweep leftover bucket cash back into PRIN_CASH
+  - rule_id: r_supp_sweep_back
+    rule_type: SPLIT_CASH
+    order: 7
+    group_id: GROUP_1
+    from_sources: [WAWG_BUCKET, PO_BUCKET]
+    to_targets: [PRIN_CASH]
+    target_weights: [1.0]
+
+  # Step 6 — PAC II cleanup
+  - rule_id: r_prin_pac_ii_uncapped
+    rule_type: PAY_PRINCIPAL
+    order: 8
+    group_id: GROUP_1
+    from_sources: [PRIN_CASH]
+    to_targets: [TA, TB]
+    payment_style: SEQUENTIAL
+    cap_mode: NONE
+    description: "Aggregate Group II to zero, without regard to Planned Balance"
+
+  # Step 7 — PAC I cleanup
+  - rule_id: r_prin_pac_i_uncapped
+    rule_type: PAY_PRINCIPAL
+    order: 9
+    group_id: GROUP_1
+    from_sources: [PRIN_CASH]
+    to_targets: [PA, PB, PC, PD, EO]
+    payment_style: SEQUENTIAL
+    cap_mode: NONE
+
+  # Step 7b — Support cleanup (in case face-weighted split left tail residue)
+  - rule_id: r_prin_supports_uncapped
+    rule_type: PAY_PRINCIPAL
+    order: 10
+    group_id: GROUP_1
+    from_sources: [PRIN_CASH]
+    to_targets: [WA, WB, WC, WD, WE, WG, PO]
+    payment_style: SEQUENTIAL
+    cap_mode: NONE
+
+  # Step 8 — Residual
+  - rule_id: r_resid_int
+    rule_type: PAY_RESIDUAL
+    order: 11
+    group_id: GROUP_1
+    from_sources: [INT_CASH]
+    to_targets: [R]
+    payment_style: SEQUENTIAL
+
+  - rule_id: r_resid_prin
+    rule_type: PAY_RESIDUAL
+    order: 12
+    group_id: GROUP_1
+    from_sources: [PRIN_CASH]
+    to_targets: [R]
+    payment_style: SEQUENTIAL
+```
+
+**Rule count: 13** (one per logical waterfall step), versus the
+current FNR fixture's **35 rules** (one per bond per step). The
+behavior is identical — the runtime walks `to_targets` sequentially
+with the right cap_mode — but the IR is now readable as
+prospectus paragraphs.
+
+---
+
+## Reusability principles
+
+1. **One bond schema covers all bond types.** The `BondDef` shape
+   accommodates PAC, TAC, Z, IO, PO, sequential, support,
+   residual, pseudo via the `tranche_type` + `tranche_behavior` +
+   schedule / accrual / tracking fields. **Don't add a
+   `PACBondDef` or `ZBondDef` subclass** — encode the variation
+   in the existing fields.
+
+2. **One rule schema covers all rule types.** Most prospectus
+   structural variation is captured by the *combination* of
+   `rule_type` + `payment_style` + `cap_mode` + `condition_trigger`.
+   PAC / TAC / cleanup / mezz cascades / interest waterfalls /
+   principal waterfalls / fee priorities all fit. **Don't add
+   `PAY_PRINCIPAL_PAC_SCHEDULE` or similar specialized rule
+   types** — encode the variation in `cap_mode` and the bond's
+   `tranche_behavior`.
+
+3. **One rule per prospectus step, not one per bond.** The
+   prospectus says "Pay sequentially to PA, PB, PC, PD, EO until
+   their planned balances." That is **ONE rule** with
+   `to_targets: [PA, PB, PC, PD, EO]` and `cap_mode: PLANNED`. Do
+   NOT fragment it into 5 rules.
+
+4. **Built-in tokens are reused everywhere.** `CASH` / `INT_CASH` /
+   `PRIN_CASH` / `LOSS` are universal. Multi-group deals add
+   `GROUP_<id>_*` prefixes which the runtime auto-resolves when
+   `group_id` is set on the rule.
+
+5. **Asset-class differences are parametric, not structural.**
+   Prime auto vs subprime auto: same grammar, more classes / more
+   named amounts / lower fee cap. Agency MBS vs non-agency RMBS:
+   different feature mix (PAC vs OC/stepdown), but the same
+   primitives.
+
+## Human-readability principles
+
+1. **Stable, descriptive `rule_id`s that match the prospectus.**
+   `r_prin_pac_i_planned` reads as "rule, principal, PAC I, to
+   planned balance" — a person can scan the IR and match it to
+   the prospectus paragraph. Avoid synthetic ids like
+   `r_principal_0001` that lose intent.
+
+2. **`description` field on every rule.** One sentence, ideally
+   verbatim from the prospectus. The IR should be readable on its
+   own without referring back to the source document.
+
+3. **Group IR top-level lists by purpose, not alphabetically.**
+   `bonds` ordered by seniority; `waterfall_rules` ordered by
+   priority (matching `order`); `triggers` ordered by deal-state
+   relevance. The IR document reads top-to-bottom as the
+   prospectus reads.
+
+4. **Comments allowed via `description` even where Pydantic
+   doesn't normally permit.** Every node has a `description: str`
+   field. Use it. Especially for:
+   - Rules: paste the prospectus phrasing verbatim.
+   - Bonds: note the rationale for any non-obvious field
+     (e.g., why `support_tranches` is set as it is).
+   - Triggers: explain the threshold table and cure logic.
+
+5. **Compact over verbose where math is identical.** If a rule
+   could be written as one multi-target rule or as N single-target
+   rules, prefer the compact form because it matches the
+   prospectus. The runtime produces identical output either way;
+   the compact form is far easier to read and edit.
+
+6. **Avoid hidden runtime knobs.** If a deal needs an exotic
+   behavior (Z accrual, schedule cap mode, face-weighted split),
+   make it visible in the IR via existing fields (`cap_mode`,
+   `target_weights`, `pay_mode=PIK`). Do not bury it in
+   `deal_knobs` or in code branches in the runtime.
+
+7. **One DealDefinition file per real-world deal.** A single,
+   self-contained, version-controlled JSON / YAML / Python
+   factory. The fixture for FNR 2006-018 is one file:
+   `tests/fixtures/fnr_2006_018/deal_definition.py`. The full
+   combined Group 1 + Group 2 deal is one `DealDefinition` with
+   multiple `collateral_groups`, not two separate files.
+
+## Anti-patterns to avoid
+
+| Anti-pattern | Better approach |
+|---|---|
+| One rule per bond ("`r_int_PA`, `r_int_PB`, ...") | One rule per waterfall step (`r_int_cascade` with all bonds) |
+| New `RuleType` for each prospectus phrase | Existing rule types + `cap_mode` + `payment_style` |
+| Subclassing `BondDef` for PAC / Z / IO | Set `tranche_type` + `tranche_behavior` + `schedule_contract` / `tracks_bonds` |
+| Hidden `deal_knobs` for hard-coded behavior | Visible IR fields (`target_weights`, `cap_mode`, `pay_mode`) |
+| Synthetic `rule_id` like `r_001` | Descriptive `r_prin_pac_i_planned` |
+| Empty `description` field | Verbatim prospectus phrasing |
+| Two `DealDefinition` files for one prospectus deal with multiple groups | One DealDefinition with multiple `collateral_groups` |
+| Trigger logic inline in expressions | Named `TriggerNode` referenced by `condition_trigger` |
+| Computed amount inline in `max_amount_expr` | Named `CalculationNode` (or proposed `ComputedAmountNode`) |
+
