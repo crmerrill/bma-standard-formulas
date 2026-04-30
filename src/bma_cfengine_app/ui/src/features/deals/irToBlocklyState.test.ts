@@ -242,4 +242,340 @@ describe("synthesizeWorkspaceState", () => {
       OUT_2: "INT_BUCKET",
     });
   });
+
+  describe("FNR-shape rule and bond coverage", () => {
+    it("emits a residual_target for PAY_RESIDUAL rules with PAY_TYPE=REMAINING", () => {
+      const deal: IRForSynthesis = {
+        bonds: [
+          { name: "A", coupon: 5, size_dollars: 80_000_000 },
+          { name: "R", tranche_type: "RESIDUAL", is_pseudo: true },
+        ],
+        waterfall_rules: [
+          {
+            rule_id: "r_resid",
+            rule_type: "PAY_RESIDUAL",
+            order: 0,
+            from_sources: ["INT_CASH"],
+            to_targets: ["R"],
+            payment_style: "SEQUENTIAL",
+          },
+        ],
+      };
+      const state = synthesizeWorkspaceState(deal);
+      const seq = state!.blocks.blocks[0];
+      expect(seq.type).toBe("pay_sequential");
+      expect(seq.fields?.PAY_TYPE).toBe("REMAINING");
+      expect(seq.inputs?.TARGETS?.block.type).toBe("residual_target");
+    });
+
+    it("preserves the PAC schedule and tranche_type on bond data fields", () => {
+      const deal: IRForSynthesis = {
+        bonds: [
+          {
+            name: "PA",
+            tranche_type: "PAC",
+            tranche_behavior: "PAC",
+            coupon: 5.5,
+            size_dollars: 33_710_000,
+            coupon_type: "FIXED",
+            schedule_contract: [
+              { period: 1, target_balance: 33_710_000 },
+              { period: 12, target_balance: 30_000_000 },
+            ],
+            support_tranches: ["WA", "WB", "PO"],
+          },
+        ],
+        waterfall_rules: [
+          {
+            rule_id: "r_prin_PA",
+            rule_type: "PAY_PRINCIPAL",
+            order: 0,
+            from_sources: ["PRIN_CASH"],
+            to_targets: ["PA"],
+            payment_style: "SEQUENTIAL",
+          },
+        ],
+      };
+      const state = synthesizeWorkspaceState(deal);
+      const target = state!.blocks.blocks[0].inputs?.TARGETS?.block;
+      expect(target?.type).toBe("bond_target");
+      expect(target?.fields?.NAME).toBe("PA");
+      const data = JSON.parse(target!.data!) as Record<string, unknown>;
+      expect(data.tranche_type).toBe("PAC");
+      expect(data.tranche_behavior).toBe("PAC");
+      expect(data.support_tranches).toEqual(["WA", "WB", "PO"]);
+      expect((data.schedule_contract as unknown[]).length).toBe(2);
+    });
+
+    it("preserves Z-bond accrual flags on bond data", () => {
+      const deal: IRForSynthesis = {
+        bonds: [
+          {
+            name: "Z",
+            tranche_type: "Z_BOND",
+            tranche_behavior: "Z",
+            coupon: 5.5,
+            size_dollars: 5_000_000,
+            pay_mode: "PIK",
+            z_accrual_enabled: true,
+            supported_by_tranches: ["TA", "TB"],
+          },
+        ],
+        waterfall_rules: [
+          {
+            rule_id: "r_prin_Z",
+            rule_type: "PAY_PRINCIPAL",
+            order: 0,
+            from_sources: ["PRIN_CASH"],
+            to_targets: ["Z"],
+            payment_style: "SEQUENTIAL",
+          },
+        ],
+      };
+      const state = synthesizeWorkspaceState(deal);
+      const target = state!.blocks.blocks[0].inputs?.TARGETS?.block;
+      expect(target?.fields?.PAY_MODE).toBe("PIK");
+      const data = JSON.parse(target!.data!) as Record<string, unknown>;
+      expect(data.z_accrual_enabled).toBe(true);
+      expect(data.supported_by_tranches).toEqual(["TA", "TB"]);
+    });
+
+    it("preserves IO tracks_bonds field on notional bonds", () => {
+      const deal: IRForSynthesis = {
+        bonds: [
+          {
+            name: "DI",
+            tranche_type: "IO",
+            tranche_behavior: "SEQUENTIAL",
+            coupon: 5.5,
+            size_dollars: 11_925_424,
+            tracks_bonds: { balance: ["DO"] },
+          },
+        ],
+        waterfall_rules: [
+          {
+            rule_id: "r_int_DI",
+            rule_type: "PAY_INTEREST",
+            order: 0,
+            from_sources: ["INT_CASH"],
+            to_targets: ["DI"],
+            payment_style: "SEQUENTIAL",
+          },
+        ],
+      };
+      const state = synthesizeWorkspaceState(deal);
+      const target = state!.blocks.blocks[0].inputs?.TARGETS?.block;
+      const data = JSON.parse(target!.data!) as Record<string, unknown>;
+      expect(data.tracks_bonds).toEqual({ balance: ["DO"] });
+    });
+
+    it("preserves cap_mode=NONE on cleanup rules", () => {
+      const deal: IRForSynthesis = {
+        bonds: [{ name: "PA", coupon: 5.5, size_dollars: 33_710_000 }],
+        waterfall_rules: [
+          {
+            rule_id: "r_prin_PA_uncapped",
+            rule_type: "PAY_PRINCIPAL",
+            order: 0,
+            from_sources: ["PRIN_CASH"],
+            to_targets: ["PA"],
+            payment_style: "SEQUENTIAL",
+            cap_mode: "NONE",
+          },
+        ],
+      };
+      const state = synthesizeWorkspaceState(deal);
+      const block = state!.blocks.blocks[0];
+      const data = JSON.parse(block.data!) as Record<string, unknown>;
+      expect(data.cap_mode).toBe("NONE");
+    });
+
+    it("strips GROUP_<id>_ prefix from source tokens for the UI dropdown", () => {
+      const deal: IRForSynthesis = {
+        collateral_groups: [{ group_id: "GROUP_1" }],
+        bonds: [
+          {
+            name: "PA", coupon: 5.5, size_dollars: 33_710_000,
+            group_id: "GROUP_1",
+          },
+        ],
+        waterfall_rules: [
+          {
+            rule_id: "r_int_PA",
+            rule_type: "PAY_INTEREST",
+            order: 0,
+            group_id: "GROUP_1",
+            from_sources: ["GROUP_GROUP_1_INT_CASH"],
+            to_targets: ["PA"],
+            payment_style: "SEQUENTIAL",
+          },
+        ],
+      };
+      const state = synthesizeWorkspaceState(deal);
+      const block = state!.blocks.blocks[0];
+      // GROUP_GROUP_1_INT_CASH -> INT_CASH -> "INT_COLLECTION" UI value.
+      expect(block.fields?.SOURCE).toBe("INT_COLLECTION");
+    });
+
+    it("partitions multi-group rules into one chain per group at distinct x positions", () => {
+      const deal: IRForSynthesis = {
+        collateral_groups: [
+          { group_id: "GROUP_1" },
+          { group_id: "GROUP_2" },
+        ],
+        bonds: [
+          { name: "PA", coupon: 5.5, size_dollars: 33_710_000, group_id: "GROUP_1" },
+          { name: "BA", coupon: 5.5, size_dollars: 100_000_000, group_id: "GROUP_2" },
+        ],
+        waterfall_rules: [
+          {
+            rule_id: "r_int_PA",
+            rule_type: "PAY_INTEREST",
+            order: 0,
+            group_id: "GROUP_1",
+            from_sources: ["INT_CASH"],
+            to_targets: ["PA"],
+            payment_style: "SEQUENTIAL",
+          },
+          {
+            rule_id: "r_int_BA",
+            rule_type: "PAY_INTEREST",
+            order: 1,
+            group_id: "GROUP_2",
+            from_sources: ["INT_CASH"],
+            to_targets: ["BA"],
+            payment_style: "SEQUENTIAL",
+          },
+        ],
+      };
+      const state = synthesizeWorkspaceState(deal);
+      expect(state!.blocks.blocks).toHaveLength(2);
+      const [g1Head, g2Head] = state!.blocks.blocks;
+      // Distinct x positions so the canvas reads as two columns.
+      expect(g1Head.x).toBeDefined();
+      expect(g2Head.x).toBeDefined();
+      expect(g2Head.x).not.toBe(g1Head.x);
+      // Each chain's top block carries its group_id on data.
+      const g1Data = JSON.parse(g1Head.data!) as Record<string, unknown>;
+      const g2Data = JSON.parse(g2Head.data!) as Record<string, unknown>;
+      expect(g1Data.group_id).toBe("GROUP_1");
+      expect(g2Data.group_id).toBe("GROUP_2");
+    });
+
+    it("smoke-test: synthesizes the full FNR 2006-018 combined IR shape", () => {
+      // Shrunken FNR-like shape: one PAC, one Z (PIK), one Sequential
+      // (Group 2), residuals, all the rule types.
+      const deal: IRForSynthesis = {
+        collateral_groups: [
+          { group_id: "GROUP_1" },
+          { group_id: "GROUP_2" },
+        ],
+        bonds: [
+          {
+            name: "PA",
+            tranche_type: "PAC",
+            tranche_behavior: "PAC",
+            coupon: 5.5,
+            size_dollars: 33_710_000,
+            group_id: "GROUP_1",
+            schedule_contract: [{ period: 1, target_balance: 33_710_000 }],
+            support_tranches: ["WA"],
+          },
+          {
+            name: "Z",
+            tranche_type: "Z_BOND",
+            tranche_behavior: "Z",
+            coupon: 5.5,
+            size_dollars: 5_000_000,
+            pay_mode: "PIK",
+            group_id: "GROUP_1",
+            z_accrual_enabled: true,
+            supported_by_tranches: ["TA"],
+          },
+          {
+            name: "BA",
+            coupon: 5.5,
+            size_dollars: 100_000_000,
+            group_id: "GROUP_2",
+          },
+          { name: "R", tranche_type: "RESIDUAL", is_pseudo: true },
+        ],
+        waterfall_rules: [
+          {
+            rule_id: "r_int_PA",
+            rule_type: "PAY_INTEREST",
+            order: 0,
+            group_id: "GROUP_1",
+            from_sources: ["INT_CASH"],
+            to_targets: ["PA"],
+            payment_style: "SEQUENTIAL",
+          },
+          {
+            rule_id: "r_prin_PA",
+            rule_type: "PAY_PRINCIPAL",
+            order: 1,
+            group_id: "GROUP_1",
+            from_sources: ["PRIN_CASH"],
+            to_targets: ["PA"],
+            payment_style: "SEQUENTIAL",
+            cap_mode: "PLANNED",
+          },
+          {
+            rule_id: "r_supp_split",
+            rule_type: "SPLIT_CASH",
+            order: 2,
+            group_id: "GROUP_1",
+            from_sources: ["PRIN_CASH"],
+            to_targets: ["WAWG_BUCKET", "PO_BUCKET"],
+            target_weights: [0.95, 0.05],
+          },
+          {
+            rule_id: "r_resid_g1",
+            rule_type: "PAY_RESIDUAL",
+            order: 3,
+            group_id: "GROUP_1",
+            from_sources: ["PRIN_CASH"],
+            to_targets: ["R"],
+            payment_style: "SEQUENTIAL",
+          },
+          {
+            rule_id: "r_int_BA",
+            rule_type: "PAY_INTEREST",
+            order: 4,
+            group_id: "GROUP_2",
+            from_sources: ["INT_CASH"],
+            to_targets: ["BA"],
+            payment_style: "SEQUENTIAL",
+          },
+        ],
+      };
+      const state = synthesizeWorkspaceState(deal);
+      expect(state).not.toBeNull();
+      // 2 groups -> 2 top-level chains.
+      expect(state!.blocks.blocks).toHaveLength(2);
+      // Group 1 chain: 4 rules linked by `next`.
+      const g1 = state!.blocks.blocks[0];
+      let count = 0;
+      let cursor: BlocklyBlock | undefined = g1;
+      while (cursor) {
+        count += 1;
+        cursor = cursor.next?.block;
+      }
+      expect(count).toBe(4);
+      // Group 1 PA bond_target carries the PAC schedule on data.
+      const paBlock = g1.inputs?.TARGETS?.block;
+      const paData = JSON.parse(paBlock!.data!) as Record<string, unknown>;
+      expect(paData.tranche_type).toBe("PAC");
+      expect((paData.schedule_contract as unknown[]).length).toBeGreaterThan(0);
+      // Group 2 chain: 1 rule.
+      const g2 = state!.blocks.blocks[1];
+      expect(g2.next).toBeUndefined();
+    });
+  });
 });
+
+// Avoid a top-of-file `import type` cycle by referencing the type
+// inline where the smoke test needs it.
+type BlocklyBlock = NonNullable<
+  ReturnType<typeof synthesizeWorkspaceState>
+>["blocks"]["blocks"][number];
