@@ -700,6 +700,369 @@ Group 7's nested 16.67 / 83.33 / first / second pattern.
 
 ---
 
+## Round 3 schema review — separating bond identity from rule behavior
+
+This round addresses an architectural concern surfaced during
+review: the current schema **conflates three different concepts**
+on `BondDef` and in the rule type enum:
+
+1. **What a bond IS** (intrinsic identity that doesn't change with rules) — IO vs PO vs cash-pay vs Z vs residual vs pseudo
+2. **What a bond HAS** (intrinsic schedules / properties) — coupon, notional, schedule contract, maturity, tracking relationships, loss treatment
+3. **HOW a bond gets paid** (extrinsic, lives on the rule that pays it) — sequential vs pro-rata, cap mode, conditional gating
+
+The dividing line: if the property is true regardless of which
+waterfall is paying the bond, it belongs on `BondDef`. If it
+describes a particular rule's allocation behavior, it belongs on
+the rule. The current schema crosses this line in several places.
+
+### G. Collapse TrancheType + TrancheBehavior into a single TrancheKind
+
+**Current state.** `TrancheType` has 13 values (`SEQUENTIAL`,
+`PAC`, `PAC_II`, `TAC`, `SUPPORT`, `Z_BOND`, `ACCRETION_DIRECTED`,
+`FLOATER`, `INVERSE_FLOATER`, `IO`, `PO`, `PSEUDO`, `RESIDUAL`).
+`TrancheBehavior` has 4 (`SEQUENTIAL`, `PAC`, `TAC`, `Z`). They
+overlap, and both encode rule-behavior properties on the bond.
+
+The 13 values are mixing five orthogonal concepts:
+
+| Concept | Values currently in `TrancheType` | Belongs on |
+|---|---|---|
+| Cashflow identity | `IO`, `PO`, `RESIDUAL`, `PSEUDO`, `Z_BOND` | `BondDef` (the bond IS this) |
+| Schedule type | `PAC`, `PAC_II`, `TAC` | `BondDef.schedule_contract` (already has `schedule_type`) |
+| Coupon style | `FLOATER`, `INVERSE_FLOATER` | `BondDef.coupon_type` (already exists) |
+| Payment role | `SUPPORT` | derived from `support_tranches` relationships |
+| Allocation order | `SEQUENTIAL`, `ACCRETION_DIRECTED` | rule's `payment_style` + bond's accretion targets |
+
+**Proposed.** A single `TrancheKind` that answers only "what
+*kind* of bond is this":
+
+```python
+class TrancheKind(StrEnum):
+    CASH_PAY = "CASH_PAY"   # ordinary bond — pays cash interest + cash principal
+    IO       = "IO"         # interest-only, notional-bearing
+    PO       = "PO"         # principal-only, zero coupon
+    Z        = "Z"          # accrues during accretion phase, then pays cash
+    RESIDUAL = "RESIDUAL"   # equity / sweep
+    PSEUDO   = "PSEUDO"     # accounting sink (fees, residuals tracking quantities)
+```
+
+Everything else moves out:
+
+- **PAC / TAC** → presence of `BondDef.schedule_contract` plus
+  `schedule_type=PLANNED|TARGETED`. The bond legitimately *has* a
+  schedule (you noted: "PAC and TAC bonds have real principal
+  schedules, so that might be okay to attach to the bond" — yes,
+  agreed). The bond's PAC-ness is the schedule; the rule's
+  PAC-ness is `cap_mode=PLANNED`.
+- **SUPPORT** → derived: a bond is "support" if some other bond's
+  `support_tranches` lists it. Removing the SUPPORT enum value
+  doesn't lose information.
+- **FLOATER / INVERSE_FLOATER** → already lives in `coupon_type`
+  enum (`FIXED | FLOATING | INVERSE_FLOATING | ZERO`). Duplicate.
+- **SEQUENTIAL** → not a property of the bond. It's the rule's
+  `payment_style`.
+- **ACCRETION_DIRECTED** → encoded by Z's accretion targets (see
+  proposal H below).
+
+**`TrancheBehavior` is fully redundant** with the simplified
+schema and should be deleted.
+
+### H. Unify tranche relationships into one structured list
+
+**Current state.** Three different fields express
+bond-to-bond structural relationships:
+
+- `support_tranches: list[str]` — PAC's support stack (the
+  bonds that absorb prepay variability for me)
+- `supported_by_tranches: list[str]` — Z's accretion targets
+  (where my PIK accrual is directed while they're outstanding)
+- `parent_tranche: str | None` + `relation_type: StructureRelation`
+  + `notional_ratio: float | None` + `tracks_bonds: dict[...]` —
+  a tangled mix used for IO/PO notional tracking and inverse-floater
+  parenting
+
+`StructureRelation` has only 3 values (`floater_inverse`, `io_po`,
+`z_accrual`), which doesn't cover the real-world set of relationships
+you raised: POs, IOs, **inverse IOs, inverse floaters, super
+floaters**, MACR exchanges.
+
+**Proposed.** One `tranche_relations` list with a typed enum that
+covers every real-world relationship:
+
+```python
+class TrancheRelationType(StrEnum):
+    SUPPORTED_BY        = "SUPPORTED_BY"        # PAC -> support stack
+    ACCRETES_TO         = "ACCRETES_TO"         # Z -> bonds receiving Z's PIK
+    NOTIONAL_TRACKS     = "NOTIONAL_TRACKS"     # IO / inverse IO (notional follows other bond's balance)
+    BALANCE_TRACKS      = "BALANCE_TRACKS"      # PO mirroring another bond's principal
+    COUPON_INVERSE_OF   = "COUPON_INVERSE_OF"   # inverse floater pegged to a floater
+    COUPON_LEVERAGE_OF  = "COUPON_LEVERAGE_OF"  # super floater (multiple of an index)
+    MACR_EXCHANGE       = "MACR_EXCHANGE"       # exchangeable / combinable
+
+class TrancheRelation(BaseModel):
+    relation_type: TrancheRelationType
+    targets: list[str]              # bonds at the other end of the relationship
+    weights: list[float] | None     # for tracking aggregate baskets
+    leverage: float | None          # for COUPON_LEVERAGE_OF (e.g., 2.5x)
+    cap: float | None               # for COUPON_INVERSE_OF (cap - rate * leverage)
+    floor: float | None
+    description: str = ""
+
+class BondDef(BaseModel):
+    ...
+    relations: list[TrancheRelation] = []
+```
+
+This single field covers:
+
+| Bond type | `relations` example |
+|---|---|
+| Plain IO | `[{relation_type: NOTIONAL_TRACKS, targets: [PA, PB, PC, PD], weights: [...]}]` |
+| Inverse IO | Same as IO, plus a separate `coupon_type=INVERSE_FLOATING` |
+| Plain PO | `[{relation_type: BALANCE_TRACKS, targets: [...]}]` (or just stand-alone with `coupon_type=ZERO`) |
+| Inverse Floater | `[{relation_type: COUPON_INVERSE_OF, targets: [Floater], cap: 0.10}]` |
+| Super Floater | `[{relation_type: COUPON_LEVERAGE_OF, targets: [Index], leverage: 2.5, cap: 0.12}]` |
+| PAC support stack | PAC has `[{SUPPORTED_BY, targets: [WA, WB, ...]}]` |
+| Z bond | Z has `[{ACCRETES_TO, targets: [TA, TB]}]` |
+| MACR / RCR | `[{MACR_EXCHANGE, targets: [...], weights: [...]}]` |
+
+The 4 separate fields collapse into 1, gaining expressiveness for
+inverse IOs / super floaters / MACR while staying compact.
+
+### I. Coupon as a value or a schedule (not just a scalar)
+
+**Current state.** `BondDef.coupon: float | None` plus separate
+`cap` / `floor` scalars. Cannot express:
+
+- Step-up coupons (Verus 2024-9 — coupon goes from `c` to `c + 1.00%` at month 60)
+- Step-down coupons
+- Lockout-period coupons (initial fixed rate, then floats)
+
+**Proposed.** Allow each rate field to be either a scalar or a
+period-keyed schedule:
+
+```python
+RateOrSchedule = float | list[RateScheduleEntry]
+
+class RateScheduleEntry(BaseModel):
+    from_period: int        # inclusive
+    rate: float
+
+class BondDef(BaseModel):
+    ...
+    coupon: RateOrSchedule | None
+    margin: RateOrSchedule | None      # floater spread
+    cap: RateOrSchedule | None
+    floor: RateOrSchedule | None
+```
+
+Most bonds keep the simple scalar form. Step-up bonds use:
+
+```yaml
+coupon:
+  - { from_period: 1,  rate: 5.50 }
+  - { from_period: 60, rate: 6.50 }
+```
+
+### J. Notional, not "size"
+
+**Current state.** `size_dollars: float | None` and
+`size_pct: float | None`.
+
+**Proposed rename.** "Size" is ambiguous. Use `notional`:
+
+```python
+notional: float | None                    # dollar notional / par balance
+notional_pct_of_collateral: float | None  # 0..1 of pool original balance
+```
+
+For IOs the notional is the literal IO notional (no principal
+flow). For cash-pay bonds the notional is the par/face balance.
+Same field, semantically clearer.
+
+### K. PAC band + TAC target — collapse the speed fields
+
+**Current state.** Three fields on `BondDef`:
+
+- `schedule_speed_low: float | None` — PAC lower PSA
+- `schedule_speed_high: float | None` — PAC upper PSA
+- `schedule_speed_target: float | None` — TAC pricing PSA
+
+**Proposed.** Two fields, with TAC just being the degenerate
+PAC where low == high:
+
+```python
+schedule_speed_low:  float | None    # PAC low end (== TAC target)
+schedule_speed_high: float | None    # PAC high end (== schedule_speed_low for TAC)
+```
+
+Or, if we'd rather be explicit, one tuple:
+
+```python
+schedule_speed_band: tuple[float, float] | None  # (low, high); for TAC use (target, target)
+```
+
+The runtime doesn't actually use these — `schedule_contract` is
+the per-period balance already. The speed fields are *derivation
+inputs* used at the time the schedule was built, kept around as
+metadata (so a UI can re-derive). They could be moved to a
+sub-object `schedule_metadata` or dropped entirely.
+
+### L. Drop CONCURRENT from PaymentStyle
+
+`CONCURRENT` is a synonym for `PRO_RATA`. Drop it.
+
+```python
+class PaymentStyle(StrEnum):
+    SEQUENTIAL = "SEQUENTIAL"
+    PRO_RATA   = "PRO_RATA"
+```
+
+### M. Reserve rules are not a separate rule type; they're rules sourced from / targeted to accounts
+
+**Current state.** Five reserve-related rule types:
+
+- `PAY_TO_RESERVE`              — deposit into reserve
+- `PAY_FROM_RESERVE`            — generic withdrawal
+- `PAY_FROM_RESERVE_INTEREST`   — withdrawal labeled "interest"
+- `PAY_FROM_RESERVE_PRINCIPAL`  — withdrawal labeled "principal"
+- (plus the same shape for recourse: `PAY_RECOURSE_INTEREST`, `PAY_RECOURSE_PRINCIPAL`)
+
+This conflates **two orthogonal things**: what cash is moving
+(interest? principal?) and where it's coming from / going to
+(account? bond? stream?). Every "from reserve" rule is really
+"`PAY_INTEREST` (or `PAY_PRINCIPAL`) with `from_sources` set to a
+reserve account."
+
+**Proposed.** Three rule types covering all account interactions:
+
+```python
+PAY_INTEREST       # to: bond. from: any stream OR any account.
+PAY_PRINCIPAL      # to: bond. from: any stream OR any account.
+PAY_TO_ACCOUNT     # to: account. from: any stream OR any account.
+                   # (renamed from PAY_TO_RESERVE — accounts are not just reserves)
+```
+
+The current `PAY_FROM_RESERVE_INTEREST` becomes
+`PAY_INTEREST` with `from_sources=[ReserveAcct]`. The current
+`PAY_TO_RESERVE` becomes `PAY_TO_ACCOUNT`. Recourse is just a
+named source stream (`from_sources=[RECOURSE_LINE]`).
+
+This change makes accounts truly first-class. Any rule can
+deposit to one or withdraw from one.
+
+**Risk.** The runtime *might* attach extra semantics to the
+reserve-specific rule types (e.g., maintaining a "shortfall
+carryover" counter that's affected only by `PAY_FROM_RESERVE_INTEREST`).
+That semantic is worth preserving but should be moved to the
+rule's effect, not its type — e.g., a `tracks_carryover_for: str`
+field on the rule that names which bond's interest-shortfall ledger
+to update. This needs runtime verification before code change.
+
+### N. Drop alias tokens; rename INT_CASH / PRIN_CASH
+
+**Current built-in tokens** (some redundant):
+
+| Token | Status |
+|---|---|
+| `CASH` | keep (canonical pool cashflow) |
+| `COLLATERAL` | **drop** — alias for `CASH`, doesn't add anything |
+| `INT_CASH` | **rename to `CASH_INT`** for prefix consistency |
+| `PRIN_CASH` | **rename to `CASH_PRIN`** for prefix consistency |
+| `LOSS` | keep |
+| `GROUP_<id>_CASH` | keep |
+| `GROUP_<id>_COLLATERAL` | **drop** — alias |
+| `GROUP_<id>_INT_CASH` | rename to `GROUP_<id>_CASH_INT` |
+| `GROUP_<id>_PRIN_CASH` | rename to `GROUP_<id>_CASH_PRIN` |
+| `GROUP_<id>_LOSS` | keep |
+
+The `CASH_*` prefix pattern reads better and groups the cashflow
+streams as siblings under a parent `CASH` concept.
+
+### O. AccountType — does the runtime actually differentiate?
+
+**Current `AccountType` enum:** `RESERVE | PREFUNDING | REVOLVING |
+PAYMENT | SPREAD_ACCOUNT`.
+
+(The earlier IR reference in this doc listed the wrong values —
+`CUSTODIAL | DISTRIBUTION` — and has been corrected.)
+
+The real-world account inventory is broader:
+
+- **Reserve account** — credit / liquidity reserve
+- **Prefunding account** — holds cash before bonds buy collateral
+- **Revolving account** — master-trust or credit-card style revolving funding
+- **Payment / collection account** — temporary holding for collections
+- **Spread account** — excess spread tracking (or just call it residual)
+- **Capitalized interest account** — holds capitalized interest during prefunding period
+- **Yield supplement account** — auto YSOC
+- **Trustee fee reserve** — fee carve-out
+
+Question for the runtime: **does account behavior actually depend
+on type?** Three possibilities:
+
+1. **Type drives runtime semantics** — e.g., PREFUNDING accounts
+   auto-amortize toward zero, REVOLVING accounts can be
+   replenished from new collateral, etc. If so, the enum needs
+   to grow to cover all real types.
+2. **Type is a UI / categorization label only** — runtime treats
+   all accounts identically (deposit/withdraw with optional
+   minimum). If so, the enum can be a free-form string label or
+   dropped entirely; behavior is fully captured by the rules
+   that interact with the account.
+3. **Type drives default minimums** — type implies a default
+   `minimum_basis` (e.g., reserves default to NOTE_BALANCE,
+   prefunding to FIXED_DOLLAR). If so, type is a hint; behavior
+   is still determined by the rules.
+
+**My read** (subject to runtime verification): currently #2.
+Account type doesn't drive runtime divergence. The existing rules
+(`PAY_TO_RESERVE`, `PAY_FROM_RESERVE_*`) don't switch on
+`AccountType`; they just operate on the named account. If that's
+true, the enum should be relabeled `AccountCategory` (UI-only
+label) and the type-drives-behavior assumption should be removed
+from the design intent.
+
+### P. Schema cleanup migration table
+
+| Current | Proposed | Rationale |
+|---|---|---|
+| `TrancheType` (13 values) | `TrancheKind` (6 values) | Drop SEQUENTIAL, SUPPORT, ACCRETION_DIRECTED, PAC, PAC_II, TAC, FLOATER, INVERSE_FLOATER — these are rule behavior or coupon-type properties |
+| `TrancheBehavior` (4 values) | (deleted) | Fully redundant with `TrancheKind` + `schedule_contract` + `pay_mode` |
+| `support_tranches`, `supported_by_tranches`, `parent_tranche`, `relation_type`, `notional_ratio`, `tracks_bonds` | `relations: list[TrancheRelation]` | One typed list covers PAC support, Z accretion, IO/PO tracking, inverse floater, super floater, MACR |
+| `coupon: float`, `cap: float`, `floor: float`, `margin: float` | `RateOrSchedule` (scalar OR period-keyed schedule) | Step-up / lockout / time-conditional coupons |
+| `size_dollars`, `size_pct` | `notional`, `notional_pct_of_collateral` | Naming clarity (covers IO notional and cash-pay par) |
+| `schedule_speed_low`, `schedule_speed_high`, `schedule_speed_target` | `schedule_speed_band: tuple[float, float]` (or move to `schedule_metadata`) | TAC = degenerate PAC band |
+| `PaymentStyle.CONCURRENT` | (deleted) | Synonym of `PRO_RATA` |
+| `RuleType.PAY_FROM_RESERVE`, `PAY_FROM_RESERVE_INTEREST`, `PAY_FROM_RESERVE_PRINCIPAL`, `PAY_RECOURSE_*` | (deleted) | Use `PAY_INTEREST` / `PAY_PRINCIPAL` with account or recourse stream as `from_sources` |
+| `RuleType.PAY_TO_RESERVE` | `PAY_TO_ACCOUNT` | Accounts are not just reserves |
+| Built-in token `COLLATERAL` | (deleted) | Alias for `CASH` |
+| Built-in token `GROUP_<id>_COLLATERAL` | (deleted) | Alias for `GROUP_<id>_CASH` |
+| `INT_CASH` / `PRIN_CASH` (and group variants) | `CASH_INT` / `CASH_PRIN` (and group variants) | Prefix consistency |
+| `AccountType` enum (treated as runtime-significant) | `AccountCategory` (UI label only) — pending runtime verification | Likely type doesn't drive runtime |
+
+Net schema impact:
+
+- 2 enums collapsed (`TrancheType` 13→6 as `TrancheKind`, `TrancheBehavior` deleted)
+- 6 fields on `BondDef` collapsed into 1 list (`relations`)
+- 5 rule types deleted (4 reserve, 1 recourse — folded into the
+  generic interest/principal rules)
+- 1 rule type renamed (`PAY_TO_RESERVE` → `PAY_TO_ACCOUNT`)
+- 1 enum value deleted (`PaymentStyle.CONCURRENT`)
+- 4 built-in tokens cleaned up (drop 2 aliases; rename 2 + group variants)
+- 1 enum repurposed (`AccountType` → `AccountCategory` UI label)
+
+The result is a schema where:
+
+- A bond is one of 6 things (kinds), and that's all the type info
+  it carries.
+- Schedules / coupons / notionals / relationships live on the
+  bond as concrete data, not behavior tags.
+- Behavior — sequential vs pro-rata, schedule-cap vs cleanup,
+  account-sourced vs cash-sourced — lives entirely on the rule.
+
+---
+
 ## Open questions for user before any code change
 
 1. **Priority.** Which of (A)-(F) above matter for your near-term
@@ -1062,50 +1425,67 @@ sinks for fees.
 ```python
 class BondDef(BaseModel):
     name: str                             # "PA", "Class A-1", "M-1"
-    tranche_type: TrancheType             # PAC | TAC | SUPPORT | SEQUENTIAL | PO | IO | Z_BOND | RESIDUAL | PSEUDO
-    tranche_behavior: TrancheBehavior     # PAC | TAC | Z | SEQUENTIAL | ACCRETION_DIRECTED
+    # NOTE: tranche_type currently has 13 values mixing identity, schedule, coupon, and role.
+    # Round 3 proposal G collapses this to TrancheKind (CASH_PAY | IO | PO | Z | RESIDUAL | PSEUDO).
+    # PAC/TAC will be encoded by the presence of schedule_contract; SUPPORT by relations;
+    # FLOATER/INVERSE_FLOATER by coupon_type; SEQUENTIAL is rule behavior, not bond identity.
+    tranche_type: TrancheType             # SEQUENTIAL | PAC | PAC_II | TAC | SUPPORT | Z_BOND | ACCRETION_DIRECTED | FLOATER | INVERSE_FLOATER | IO | PO | PSEUDO | RESIDUAL
+    # NOTE: tranche_behavior is fully redundant with the simplified TrancheKind + schedule + pay_mode.
+    # Round 3 proposal G deletes this field entirely.
+    tranche_behavior: TrancheBehavior     # SEQUENTIAL | PAC | TAC | Z
     is_bond: bool                         # False for residual/pseudo
     is_pseudo: bool                       # True for fee sinks
 
-    # Coupon
-    coupon_type: CouponType               # FIXED | FLOATING | ZERO
+    # Coupon — Round 3 I: each rate field should accept a scalar OR a period-keyed
+    # schedule (RateScheduleEntry list) so step-up / lockout coupons can be expressed.
+    coupon_type: CouponType               # FIXED | FLOATING | INVERSE_FLOATING | ZERO
     coupon: float | None                  # Annual percent (5.5 = 5.5%)
     margin: float | None                  # Floater spread over index
     index_name: str | None                # SOFR | TERM_SOFR_1M | etc.
     cap: float | None                     # Floater rate cap
     floor: float | None                   # Floater rate floor
 
-    # Sizing
-    size_dollars: float | None
-    size_pct: float | None                # 0..100
+    # Sizing — Round 3 J: rename to `notional` and `notional_pct_of_collateral`.
+    # "Notional" is the universal term (covers IOs which have notional but no principal flow)
+    # and "size" is ambiguous.
+    size_dollars: float | None            # → notional
+    size_pct: float | None                # → notional_pct_of_collateral (0..1, not 0..100)
 
     # Maturity / accrual
     maturity_date: date | None
-    day_count: DayCount                   # 30/360 | ACT/360 | ACT/ACT
-    accrual_period: AccrualPeriod         # MONTHLY | QUARTERLY
+    day_count: DayCount                   # 30/360 | ACT/360 | ACT/365 | ACT/ACT
+    accrual_period: AccrualPeriod         # MONTHLY | QUARTERLY | SEMI_ANNUAL | ANNUAL
 
-    # PAC / TAC parameters
-    schedule_type: ScheduleType | None    # PLANNED | TARGETED
+    # PAC / TAC parameters — schedule_contract legitimately lives on the bond
+    # because PAC/TAC bonds intrinsically have planned/targeted balances.
+    # Round 3 K: schedule_speed_low/high/target collapse to a single tuple
+    # (TAC = degenerate PAC band where low == high == target). The speed fields
+    # are derivation-time metadata; the runtime only consumes schedule_contract.
+    schedule_type: ScheduleType | None    # PAC | TAC | SUPPORT  (Round 3 G: drops SUPPORT)
     schedule_model_type: PrepayModelType  # PSA | CPR | ABS | CUSTOM_VECTOR
-    schedule_speed_low: float | None      # PAC lower PSA
-    schedule_speed_high: float | None     # PAC upper PSA
-    schedule_speed_target: float | None   # TAC pricing PSA
-    schedule_contract: list[dict]         # [{period, target_balance}]
+    schedule_speed_low: float | None      # PAC lower PSA  (TAC: == low)
+    schedule_speed_high: float | None     # PAC upper PSA  (TAC: == low)
+    schedule_speed_target: float | None   # TAC pricing PSA — Round 3 K: redundant with low when TAC
+    schedule_contract: list[dict]         # [{period, target_balance}] — runtime canonical form
     schedule_tolerance_bps: float | None
-    support_tranches: list[str]           # PAC's support stack
-    supported_by_tranches: list[str]      # Z's accretion targets
+
+    # Tranche relationships — Round 3 H: collapse the next 6 fields into ONE
+    # typed list `relations: list[TrancheRelation]` covering SUPPORTED_BY,
+    # ACCRETES_TO, NOTIONAL_TRACKS, BALANCE_TRACKS, COUPON_INVERSE_OF,
+    # COUPON_LEVERAGE_OF, MACR_EXCHANGE — full coverage of POs, IOs, inverse IOs,
+    # inverse floaters, super floaters, MACR exchange classes.
+    support_tranches: list[str]           # PAC support stack          → relations[?].SUPPORTED_BY
+    supported_by_tranches: list[str]      # Z accretion targets         → relations[?].ACCRETES_TO
+    parent_tranche: str | None            # IO/PO parent for tracking   → relations[?].NOTIONAL_TRACKS / BALANCE_TRACKS
+    relation_type: StructureRelation | None  # FLOATER_INVERSE | IO_PO | Z_ACCRUAL — Round 3 H expands to 7 values
+    notional_ratio: float | None          # IO notional ratio           → relations[?].weights / leverage
+    tracks_bonds: dict[str, list[str]] | None  # legacy IO/PO tracking  → relations[?].targets
 
     # Z-bond / accrual
     z_accrual_enabled: bool
     z_release_trigger: str | None
     accrual_start_period: int | None
     accrual_end_period: int | None
-
-    # Notional / IO
-    parent_tranche: str | None
-    relation_type: StructureRelation | None  # NOTIONAL_IO | INVERSE | etc.
-    notional_ratio: float | None
-    tracks_bonds: dict[str, list[str]] | None  # {"balance": ["DO"]}
 
     # Multi-group
     group_id: str | None                  # "GROUP_1", "GROUP_2"
@@ -1117,10 +1497,16 @@ class BondDef(BaseModel):
     pay_mode: PayMode                     # CASH_PAY | PIK
 ```
 
-**Reusability principle:** one `BondDef` covers PAC, TAC, Z, IO,
-PO, sequential, support, residual, pseudo. The differences are
-encoded in `tranche_type` + `tranche_behavior` + the schedule /
-accrual / tracking fields. **No new bond class needs a new schema.**
+**Reusability principle:** one `BondDef` covers all bond types.
+Today the differentiation is split across `tranche_type` +
+`tranche_behavior` + schedule + accrual + tracking fields — that
+works but conflates intrinsic identity with rule-driven behavior.
+The Round 3 cleanup (proposals G + H) reduces this to one
+`TrancheKind` enum (the bond's identity), one `relations` list
+(its structural ties to other bonds), and the actual schedule /
+coupon / notional / accrual data. PAC-ness, TAC-ness, support
+status, and IO/PO tracking become consequences of those concrete
+fields — no separate behavior tag needed.
 
 ## `RuleNode` — one waterfall step
 
@@ -1130,20 +1516,20 @@ class RuleNode(BaseModel):
     rule_type: RuleType                   # PAY_INTEREST | PAY_PRINCIPAL | ...
     order: int                            # 0, 1, 2 ... priority
 
-    from_sources: list[str]               # ["INT_CASH"] or ["GROUP_1_PRIN_CASH"]
-    to_targets: list[str]                 # ["PA", "PB", "PC", "PD", "EO"]
-    payment_style: PaymentStyle           # SEQUENTIAL | PRO_RATA | CONCURRENT
+    from_sources: list[str]               # ["CASH_INT"] or ["GROUP_1_CASH_PRIN"] or ["ReserveAcct"]
+    to_targets: list[str]                 # ["PA", "PB", "PC", "PD", "EO"] (bonds, accounts, named streams)
+    payment_style: PaymentStyle           # SEQUENTIAL | PRO_RATA  (Round 3: CONCURRENT alias dropped)
     cap_mode: CapMode | None              # PLANNED | SCHEDULED | TARGETED | NONE
 
     max_amount_fixed: float | None        # Hard $ cap on this rule
     max_amount_expr: str | None           # Computed cap expression
-    target_weights: list[float] | None    # SPLIT_CASH per-target weights
+    target_weights: list[float] | None    # SPLIT_CASH per-target weights (rule-level, not bond-level)
 
     condition_trigger: str | None         # Trigger name
     condition_invert: bool                # Run when trigger is FALSE
     condition_expr: str | None            # Custom condition expression
 
-    reserve_account: str | None           # PAY_TO_RESERVE / PAY_FROM_RESERVE_*
+    reserve_account: str | None           # PAY_TO_RESERVE / PAY_FROM_RESERVE_*  (Round 3 M: redundant once rules can source/target accounts directly)
     allow_negative_source: bool
 
     group_id: str | None                  # Multi-group routing
@@ -1156,25 +1542,44 @@ pro-rata, fee, residual sweep, conditional pay) is conveyed by
 the *combination* of `rule_type` + `payment_style` + `cap_mode` +
 `condition_trigger`. **No new rule type for "PAY_PRINCIPAL_PAC_SCHEDULE"**
 or similar — those are just `PAY_PRINCIPAL` with `cap_mode=PLANNED`
-and the targeted bond's `tranche_behavior=PAC`.
+on a bond that has a `schedule_contract` (Round 3 G: the bond's
+PAC-ness is the schedule itself, not a separate `tranche_behavior`
+flag).
 
 ### `RuleType` enum — what cash this rule moves
 
 | RuleType | Cash moved | Typical sources | Typical targets |
 |---|---|---|---|
-| `PAY_INTEREST` | Bond cash interest | INT_CASH or CASH | One or more bonds |
-| `PAY_INTEREST_SHORTFALL` | Catch-up of unpaid interest | INT_CASH | Bonds with unpaid coupon |
-| `PAY_PRINCIPAL` | Principal | PRIN_CASH or CASH | One or more bonds |
-| `PAY_WRITEDOWN` | Loss allocation | LOSS | Bonds (reverse seniority) |
-| `PAY_FEE` | Fee | CASH or any source | One fee payee |
-| `PAY_TO_RESERVE` | Reserve top-up | CASH or interest | Reserve account |
-| `PAY_FROM_RESERVE_INTEREST` | Reserve cover | Reserve account | Bonds (interest shortfall) |
-| `PAY_FROM_RESERVE_PRINCIPAL` | Reserve cover | Reserve account | Bonds (principal acceleration) |
-| `PAY_FROM_RESERVE` | Reserve sweep | Reserve account | Bonds or other targets |
-| `PAY_RECOURSE_INTEREST` | Recourse cover | Sponsor recourse | Bonds (interest shortfall) |
-| `PAY_RECOURSE_PRINCIPAL` | Recourse cover | Sponsor recourse | Bonds (principal acceleration) |
+| `PAY_INTEREST` | Bond cash interest | typically `CASH_INT` or `CASH`; can be any account or stream | One or more bonds |
+| `PAY_INTEREST_SHORTFALL` | Catch-up of unpaid interest | typically `CASH_INT`; can be any account | Bonds with unpaid coupon |
+| `PAY_PRINCIPAL` | Principal | typically `CASH_PRIN` or `CASH`; can be any account or stream | One or more bonds |
+| `PAY_WRITEDOWN` | Loss allocation | `LOSS` | Bonds (reverse seniority) |
+| `PAY_FEE` | Fee | any account or stream | One fee payee |
+| `PAY_TO_RESERVE` | Deposit to an account | any source | Any account |
+| `PAY_FROM_RESERVE_INTEREST` | Withdraw from account, used for interest | An account | Bonds (interest shortfall) |
+| `PAY_FROM_RESERVE_PRINCIPAL` | Withdraw from account, used for principal | An account | Bonds (principal acceleration) |
+| `PAY_FROM_RESERVE` | Generic withdrawal from account | An account | Bonds or other targets |
+| `PAY_RECOURSE_INTEREST` | Sponsor recourse covering interest | Recourse stream | Bonds (interest shortfall) |
+| `PAY_RECOURSE_PRINCIPAL` | Sponsor recourse covering principal | Recourse stream | Bonds (principal acceleration) |
 | `PAY_RESIDUAL` | Residual sweep | Any leftover stream | Residual classes |
 | `SPLIT_CASH` | Stream plumbing | One source stream | N named virtual streams |
+
+(Round 3 cleanup, proposal M: the five reserve-specific rule types
+(`PAY_TO_RESERVE`, `PAY_FROM_RESERVE`, `PAY_FROM_RESERVE_INTEREST`,
+`PAY_FROM_RESERVE_PRINCIPAL`) and the recourse rule types
+(`PAY_RECOURSE_INTEREST`, `PAY_RECOURSE_PRINCIPAL`) conflate
+"what cash is moving" with "where it's coming from / going to."
+The proposed cleaner model:
+- `PAY_INTEREST` / `PAY_PRINCIPAL` accept any account or stream as
+  their `from_sources`. So "pay interest from reserve" becomes
+  `PAY_INTEREST from=[ReserveAcct]`. "Pay interest from sponsor
+  recourse" becomes `PAY_INTEREST from=[RECOURSE_LINE]`.
+- `PAY_TO_RESERVE` is renamed to `PAY_TO_ACCOUNT` (accounts are
+  not just reserves) and accepts any account as `to_targets`.
+- The "this rule covers an interest shortfall" semantic is moved
+  from the rule type into a small `tracks_carryover_for: str`
+  field on the rule, naming the bond whose shortfall ledger gets
+  decremented.)
 
 ### `PaymentStyle` — order semantics within a multi-target rule
 
@@ -1182,7 +1587,10 @@ and the targeted bond's `tranche_behavior=PAC`.
 |---|---|
 | `SEQUENTIAL` | Pay first target until its cap, then next, etc. ("In that order") |
 | `PRO_RATA` | Pay all targets simultaneously by their balance / face / coupon weight |
-| `CONCURRENT` | Synonym of PRO_RATA used in some contexts |
+
+(Round 3 cleanup: `CONCURRENT` was a synonym of `PRO_RATA` and has
+been removed; older code referencing it should migrate to
+`PRO_RATA`.)
 
 ### `CapMode` — schedule cap interpretation for PAY_PRINCIPAL
 
@@ -1201,30 +1609,44 @@ without explicit declaration:
 | Token | Meaning |
 |---|---|
 | `CASH` | Combined pool cashflow (interest + principal + recovery) |
-| `COLLATERAL` | Alias for `CASH`, common in older deals |
-| `INT_CASH` | Pool interest stream only (separated from principal) |
-| `PRIN_CASH` | Pool principal stream only |
+| `CASH_INT` | Pool interest stream only (separated from principal) |
+| `CASH_PRIN` | Pool principal stream only |
 | `LOSS` | Pool loss stream (for writedown rules) |
 | `GROUP_<id>_CASH` | Combined cashflow for collateral group `<id>` |
-| `GROUP_<id>_INT_CASH` | Interest stream for collateral group `<id>` |
-| `GROUP_<id>_PRIN_CASH` | Principal stream for collateral group `<id>` |
-| `GROUP_<id>_COLLATERAL` | Alias for `GROUP_<id>_CASH` |
+| `GROUP_<id>_CASH_INT` | Interest stream for collateral group `<id>` |
+| `GROUP_<id>_CASH_PRIN` | Principal stream for collateral group `<id>` |
 | `GROUP_<id>_LOSS` | Loss stream for collateral group `<id>` |
 
 When a rule declares `group_id`, the bare tokens (`CASH`,
-`INT_CASH`, `PRIN_CASH`, `COLLATERAL`, `LOSS`) are auto-prefixed
-with `GROUP_<id>_` at compile time. So a multi-group rule can
-write `from_sources: ["INT_CASH"]` and have it resolve to the right
+`CASH_INT`, `CASH_PRIN`, `LOSS`) are auto-prefixed with
+`GROUP_<id>_` at compile time. So a multi-group rule can write
+`from_sources: ["CASH_INT"]` and have it resolve to the right
 group automatically.
+
+(Round 3 cleanup notes:
+- The `COLLATERAL` and `GROUP_<id>_COLLATERAL` aliases for `CASH`
+  have been dropped — they didn't add expressiveness and
+  duplicated the canonical name.
+- The previous tokens `INT_CASH` / `PRIN_CASH` (and group variants)
+  have been renamed to `CASH_INT` / `CASH_PRIN` for prefix
+  consistency. Existing IR documents using the old names should
+  be migrated; the validator can accept both names during a
+  transition period.)
 
 ## Other elements
 
-### `AccountDef` — reserve / prefunding / custodial accounts
+### `AccountDef` — named cash buckets (reserves, prefunding, etc.)
 
 ```python
 class AccountDef(BaseModel):
     name: str                             # "Reserve_Account"
-    account_type: AccountType             # RESERVE | PREFUNDING | CUSTODIAL | DISTRIBUTION
+    # Current code: RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT
+    # Round 3 review (proposal O): the runtime does not appear to differentiate behavior
+    # by account_type — accounts are uniformly "named cash buckets with deposit/withdraw
+    # operations and an optional minimum." The enum should be relabeled `AccountCategory`
+    # and treated as a UI category label rather than a runtime semantic switch (subject
+    # to runtime verification).
+    account_type: AccountType             # RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT
     starting_amount: float                # $ amount at closing
     starting_pct: float | None            # OR % of pool / bond stack
     starting_basis: MinimumBasis          # FIXED_DOLLAR | NOTE_BALANCE
