@@ -1075,7 +1075,7 @@ to update. This needs runtime verification before code change.
 The `CASH_*` prefix pattern reads better and groups the cashflow
 streams as siblings under a parent `CASH` concept.
 
-### O. AccountType — does the runtime actually differentiate?
+### O. AccountType is a label, not runtime semantics
 
 **Current `AccountType` enum:** `RESERVE | PREFUNDING | REVOLVING |
 PAYMENT | SPREAD_ACCOUNT`.
@@ -1083,41 +1083,57 @@ PAYMENT | SPREAD_ACCOUNT`.
 (The earlier IR reference in this doc listed the wrong values —
 `CUSTODIAL | DISTRIBUTION` — and has been corrected.)
 
-The real-world account inventory is broader:
+**Verified against the runtime:** `account_type` is purely a
+display label. The runtime touches it in exactly two places, both
+of which are passthrough:
+
+1. **Initialization** (`runtime.py:324`) — copy
+   `account_def.account_type.value` (a string) into
+   `AccountWorkspace.account_type`.
+2. **Output** (`runtime.py:1611`) — copy that string into the
+   `DealAccountRow` for output / reporting.
+
+There is **no `if account_type == X` branch anywhere** in the
+runtime. The runtime treats every account uniformly: a named
+bucket with `balance`, `deposit`, `withdrawal`, and a
+`required_minimum` array, plus a `minimum_basis` that determines
+how `required_minimum` is computed (`FIXED_DOLLAR` /
+`COLLATERAL_BALANCE` / `NOTE_BALANCE` / `ORIGINAL_COLLATERAL`).
+**`MinimumBasis` is the actual behavioral driver, not
+`AccountType`.**
+
+This means real-world account variety:
 
 - **Reserve account** — credit / liquidity reserve
 - **Prefunding account** — holds cash before bonds buy collateral
-- **Revolving account** — master-trust or credit-card style revolving funding
-- **Payment / collection account** — temporary holding for collections
-- **Spread account** — excess spread tracking (or just call it residual)
-- **Capitalized interest account** — holds capitalized interest during prefunding period
+- **Revolving account** — master-trust style revolving funding
+- **Payment / collection account** — temporary holding
+- **Spread account** — excess spread tracking
+- **Capitalized interest account** — capitalized interest during prefunding
 - **Yield supplement account** — auto YSOC
 - **Trustee fee reserve** — fee carve-out
 
-Question for the runtime: **does account behavior actually depend
-on type?** Three possibilities:
+…is supported today not by adding more `AccountType` values, but
+by configuring the right `minimum_basis`, the right `starting_amount`,
+and the right rules that deposit to / withdraw from the account.
+For example:
 
-1. **Type drives runtime semantics** — e.g., PREFUNDING accounts
-   auto-amortize toward zero, REVOLVING accounts can be
-   replenished from new collateral, etc. If so, the enum needs
-   to grow to cover all real types.
-2. **Type is a UI / categorization label only** — runtime treats
-   all accounts identically (deposit/withdraw with optional
-   minimum). If so, the enum can be a free-form string label or
-   dropped entirely; behavior is fully captured by the rules
-   that interact with the account.
-3. **Type drives default minimums** — type implies a default
-   `minimum_basis` (e.g., reserves default to NOTE_BALANCE,
-   prefunding to FIXED_DOLLAR). If so, type is a hint; behavior
-   is still determined by the rules.
+| Real-world account | How it's expressed today |
+|---|---|
+| Reserve floored at 0.5% of original collateral | `minimum_basis: COLLATERAL_BALANCE`, `minimum_pct: 0.5`, plus a `PAY_TO_RESERVE` rule |
+| Prefunding account drawing down to zero | `starting_amount: <prefunded $>`, `minimum: 0`, plus a deposit rule funded by the prefunding stream and a withdrawal rule that pays it out as principal |
+| Capitalized interest account auto-amortizing | `starting_amount: <cap-i $>`, `minimum: 0`, plus a `PAY_INTEREST` rule with this account as `from_sources` for the bond's coupon during the cap-i period |
+| YSOC account | A `SPREAD_ACCOUNT` (label) feeding a `SPLIT_CASH` that boosts under-WAC bond cash |
 
-**My read** (subject to runtime verification): currently #2.
-Account type doesn't drive runtime divergence. The existing rules
-(`PAY_TO_RESERVE`, `PAY_FROM_RESERVE_*`) don't switch on
-`AccountType`; they just operate on the named account. If that's
-true, the enum should be relabeled `AccountCategory` (UI-only
-label) and the type-drives-behavior assumption should be removed
-from the design intent.
+**Proposed change:** rename `AccountType` → `AccountCategory` to
+reflect that the field is a UI / reporting label and stop signaling
+"this might gate behavior" via the name. No runtime change needed.
+
+If a future deal needs runtime behavior keyed on account type
+(e.g., "PREFUNDING accounts auto-amortize without explicit rules"),
+that should be added as a *separate* explicit field — e.g.,
+`auto_amortizes: bool`, `amortization_schedule: list[...]` — not by
+overloading `account_type` with hidden semantics.
 
 ### P. Schema cleanup migration table
 
@@ -1136,7 +1152,7 @@ from the design intent.
 | Built-in token `COLLATERAL` | (deleted) | Alias for `CASH` |
 | Built-in token `GROUP_<id>_COLLATERAL` | (deleted) | Alias for `GROUP_<id>_CASH` |
 | `INT_CASH` / `PRIN_CASH` (and group variants) | `CASH_INT` / `CASH_PRIN` (and group variants) | Prefix consistency |
-| `AccountType` enum (treated as runtime-significant) | `AccountCategory` (UI label only) — pending runtime verification | Likely type doesn't drive runtime |
+| `AccountType` enum (treated as runtime-significant) | `AccountCategory` (UI label only) | **Verified**: runtime never branches on `account_type`; behavior driven by `minimum_basis` and the rules touching the account |
 
 Net schema impact:
 
@@ -1746,11 +1762,12 @@ group automatically.
 class AccountDef(BaseModel):
     name: str                             # "Reserve_Account"
     # Current code: RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT
-    # Round 3 review (proposal O): the runtime does not appear to differentiate behavior
-    # by account_type — accounts are uniformly "named cash buckets with deposit/withdraw
-    # operations and an optional minimum." The enum should be relabeled `AccountCategory`
-    # and treated as a UI category label rather than a runtime semantic switch (subject
-    # to runtime verification).
+    # VERIFIED against runtime.py: account_type is a passthrough display label only.
+    # The runtime stores it at init (line 324) and copies it to output (line 1611);
+    # there is NO `if account_type == X` branch anywhere. Behavior is driven by
+    # `minimum_basis` (FIXED_DOLLAR | COLLATERAL_BALANCE | NOTE_BALANCE |
+    # ORIGINAL_COLLATERAL) and by the rules that deposit to / withdraw from the
+    # account, not by account_type. Round 3 proposal O renames to AccountCategory.
     account_type: AccountType             # RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT
     starting_amount: float                # $ amount at closing
     starting_pct: float | None            # OR % of pool / bond stack
