@@ -739,6 +739,8 @@ The 13 values are mixing five orthogonal concepts:
 ```python
 class TrancheKind(StrEnum):
     CASH_PAY = "CASH_PAY"   # ordinary bond — pays cash interest + cash principal
+    PAC      = "PAC"        # planned amortization class — REQUIRES schedule_contract
+    TAC      = "TAC"        # targeted amortization class — REQUIRES schedule_contract
     IO       = "IO"         # interest-only, notional-bearing
     PO       = "PO"         # principal-only, zero coupon
     Z        = "Z"          # accrues during accretion phase, then pays cash
@@ -746,23 +748,45 @@ class TrancheKind(StrEnum):
     PSEUDO   = "PSEUDO"     # accounting sink (fees, residuals tracking quantities)
 ```
 
+8 kinds. **Validation rule**: if `kind ∈ {PAC, TAC}` then
+`schedule_contract` MUST be non-empty; if
+`kind ∈ {CASH_PAY, IO, PO, Z, RESIDUAL, PSEUDO}` then
+`schedule_contract` MUST be empty (or absent). The bond's
+identity drives the schedule requirement, not the other way
+around — Pydantic enforces this with a model validator.
+
+**Why keep PAC and TAC as kinds (not just "CASH_PAY with a
+schedule"):**
+
+- **The prospectus uses these names.** "Class PA is a PAC
+  Class. Class TA is a TAC Class." The IR vocabulary should
+  match.
+- **They are distinct economic identities.** A PAC has a *band*
+  of speeds it tolerates; a TAC has a *single* target speed and
+  no upside protection. Both concepts have to be captured
+  somewhere; making them kinds is more legible than inferring
+  from `schedule_speed_low == schedule_speed_high`.
+- **Validation enforcement.** A PAC bond without a schedule is
+  always wrong. The kind makes that constraint explicit and
+  catchable at IR validation time, not at runtime.
+
 Everything else moves out:
 
-- **PAC / TAC** → presence of `BondDef.schedule_contract` plus
-  `schedule_type=PLANNED|TARGETED`. The bond legitimately *has* a
-  schedule (you noted: "PAC and TAC bonds have real principal
-  schedules, so that might be okay to attach to the bond" — yes,
-  agreed). The bond's PAC-ness is the schedule; the rule's
-  PAC-ness is `cap_mode=PLANNED`.
 - **SUPPORT** → derived: a bond is "support" if some other bond's
-  `support_tranches` lists it. Removing the SUPPORT enum value
+  `relations` list points to it as `SUPPORTED_BY`. The bond
+  itself is just a `CASH_PAY`. Removing the SUPPORT enum value
   doesn't lose information.
+- **PAC_II** → still a `PAC` kind. The "II" is a structural
+  ordering relative to PAC_I (PAC_I shortfalls cascade to
+  PAC_II's planned balance), expressible via the rule's order
+  and a relation pointing PAC_II at PAC_I. Doesn't need to be a
+  separate kind.
 - **FLOATER / INVERSE_FLOATER** → already lives in `coupon_type`
   enum (`FIXED | FLOATING | INVERSE_FLOATING | ZERO`). Duplicate.
 - **SEQUENTIAL** → not a property of the bond. It's the rule's
   `payment_style`.
-- **ACCRETION_DIRECTED** → encoded by Z's accretion targets (see
-  proposal H below).
+- **ACCRETION_DIRECTED** → encoded by Z's `ACCRETES_TO` relation
+  (see proposal H below).
 
 **`TrancheBehavior` is fully redundant** with the simplified
 schema and should be deleted.
@@ -880,33 +904,105 @@ For IOs the notional is the literal IO notional (no principal
 flow). For cash-pay bonds the notional is the par/face balance.
 Same field, semantically clearer.
 
-### K. PAC band + TAC target — collapse the speed fields
+### K. Two-phase schedule derivation — speeds are design-time, schedule_contract is runtime
 
-**Current state.** Three fields on `BondDef`:
+The right framing: **schedule_contract is a derived artifact**.
+The user owns the schedule's *inputs* (speed band, prepay model,
+collateral assumptions); the system computes and caches the
+*output* (the per-period planned balance vector); the runtime
+reads only the output.
 
-- `schedule_speed_low: float | None` — PAC lower PSA
-- `schedule_speed_high: float | None` — PAC upper PSA
-- `schedule_speed_target: float | None` — TAC pricing PSA
-
-**Proposed.** Two fields, with TAC just being the degenerate
-PAC where low == high:
-
-```python
-schedule_speed_low:  float | None    # PAC low end (== TAC target)
-schedule_speed_high: float | None    # PAC high end (== schedule_speed_low for TAC)
+```
+┌─ Design-time (structuring) ─────────────────────┐    ┌─ Runtime (execution) ─┐
+│                                                  │    │                        │
+│  user inputs:                                    │    │  reads:                │
+│    schedule_speed_low     (PAC low, e.g., 100%)  │    │    schedule_contract   │
+│    schedule_speed_high    (PAC high, e.g., 250%) │    │                        │
+│    schedule_model_type    (PSA / CPR / ABS)      │    │  uses it via:          │
+│    collateral_assumptions (WAC, WAM, balance)    │    │    cap_mode=PLANNED on │
+│                          │                       │    │    the PAY_PRINCIPAL   │
+│                          ▼                       │    │    rule                │
+│                  derive_schedule(...)            │    │                        │
+│                          │                       │    └────────────────────────┘
+│                          ▼                       │
+│  cached output:                                  │
+│    schedule_contract: list[{period, balance}]    │
+│                                                  │
+└──────────────────────────────────────────────────┘
 ```
 
-Or, if we'd rather be explicit, one tuple:
+**Derivation algorithm** (PAC):
+
+For each period *t*, compute the projected outstanding balance of
+the bond at speed_low and speed_high using the prepay model and
+collateral assumptions. The PAC's planned balance at *t* is the
+**maximum** of the two (or, equivalently, the balance under the
+slower speed) — this is what gives PAC stability across the band:
+fast-prepay scenarios drain support tranches; slow-prepay scenarios
+let support tranches absorb the shortfall.
+
+For TAC: same calculation, single speed, balance = projected balance
+at that speed.
+
+**Schema after Round 3**:
 
 ```python
-schedule_speed_band: tuple[float, float] | None  # (low, high); for TAC use (target, target)
+class BondDef(BaseModel):
+    ...
+    kind: TrancheKind                              # PAC | TAC | CASH_PAY | ...
+
+    # Design-time inputs (kept so the schedule is re-derivable)
+    schedule_speed_low:  float | None              # PAC low end; TAC uses this as the target
+    schedule_speed_high: float | None              # PAC high end; TAC sets == low
+    schedule_model_type: PrepayModelType           # PSA | CPR | ABS | CUSTOM_VECTOR
+    schedule_tolerance_bps: float | None
+
+    # Runtime canonical (what the cap_mode=PLANNED rule consults)
+    schedule_contract: list[ScheduleEntry]         # [{period, target_balance}]
 ```
 
-The runtime doesn't actually use these — `schedule_contract` is
-the per-period balance already. The speed fields are *derivation
-inputs* used at the time the schedule was built, kept around as
-metadata (so a UI can re-derive). They could be moved to a
-sub-object `schedule_metadata` or dropped entirely.
+The redundant `schedule_speed_target` field is dropped —
+`schedule_speed_low == schedule_speed_high` already encodes TAC
+as the degenerate band.
+
+**When does schedule_contract get re-derived?**
+
+- User changes the speed band in the structuring UI.
+- User changes prepay model or collateral assumptions.
+- User changes the bond's notional (changes the absolute balance
+  curve).
+- User adjusts which support tranches absorb shortfalls (changes
+  the schedule shape under stress).
+
+The structuring UI runs derivation eagerly on input change; the
+runtime never derives — it only consumes. This separation gives
+us:
+
+- **Reproducibility**: a deal definition with a populated
+  `schedule_contract` runs identically every time, regardless of
+  whether speeds / collateral assumptions changed *after* the
+  schedule was built. The IR is self-contained.
+- **Auditability**: the schedule_contract is what was *actually
+  used* in pricing and execution. Speeds are inputs; the
+  schedule is the audit artifact.
+- **Performance**: derivation only happens at design time; the
+  runtime does not pay derivation cost on every period.
+- **UI ergonomics**: the user works in speed-band terms ("100%-
+  250% PSA"), which is how prospectuses and analysts talk;
+  derivation handles the math.
+
+**Validation contract**:
+
+- If `kind ∈ {PAC, TAC}` and `schedule_contract` is empty →
+  invalid IR (can't run a PAC bond without a schedule).
+- If `kind = PAC`, both `schedule_speed_low` and
+  `schedule_speed_high` should be set.
+- If `kind = TAC`, both should be set and equal.
+- The validator can additionally check that
+  `schedule_contract` is *consistent* with the speeds and
+  collateral (re-derive and compare with tolerance). This is an
+  optional integrity check, not a correctness requirement at
+  runtime.
 
 ### L. Drop CONCURRENT from PaymentStyle
 
@@ -1027,7 +1123,8 @@ from the design intent.
 
 | Current | Proposed | Rationale |
 |---|---|---|
-| `TrancheType` (13 values) | `TrancheKind` (6 values) | Drop SEQUENTIAL, SUPPORT, ACCRETION_DIRECTED, PAC, PAC_II, TAC, FLOATER, INVERSE_FLOATER — these are rule behavior or coupon-type properties |
+| `TrancheType` (13 values) | `TrancheKind` (8 values: CASH_PAY, PAC, TAC, IO, PO, Z, RESIDUAL, PSEUDO) | Drop SEQUENTIAL, SUPPORT, ACCRETION_DIRECTED, PAC_II, FLOATER, INVERSE_FLOATER (rule behavior, derived role, or coupon-type properties); KEEP PAC and TAC because they're real economic identities and validation can enforce that PAC/TAC require `schedule_contract` |
+| `schedule_speed_target` field | (deleted) | Redundant — TAC uses `schedule_speed_low == schedule_speed_high` as the degenerate band |
 | `TrancheBehavior` (4 values) | (deleted) | Fully redundant with `TrancheKind` + `schedule_contract` + `pay_mode` |
 | `support_tranches`, `supported_by_tranches`, `parent_tranche`, `relation_type`, `notional_ratio`, `tracks_bonds` | `relations: list[TrancheRelation]` | One typed list covers PAC support, Z accretion, IO/PO tracking, inverse floater, super floater, MACR |
 | `coupon: float`, `cap: float`, `floor: float`, `margin: float` | `RateOrSchedule` (scalar OR period-keyed schedule) | Step-up / lockout / time-conditional coupons |
@@ -1043,8 +1140,9 @@ from the design intent.
 
 Net schema impact:
 
-- 2 enums collapsed (`TrancheType` 13→6 as `TrancheKind`, `TrancheBehavior` deleted)
+- 2 enums collapsed (`TrancheType` 13→8 as `TrancheKind`, `TrancheBehavior` deleted)
 - 6 fields on `BondDef` collapsed into 1 list (`relations`)
+- 1 BondDef field deleted (`schedule_speed_target`)
 - 5 rule types deleted (4 reserve, 1 recourse — folded into the
   generic interest/principal rules)
 - 1 rule type renamed (`PAY_TO_RESERVE` → `PAY_TO_ACCOUNT`)
@@ -1054,10 +1152,12 @@ Net schema impact:
 
 The result is a schema where:
 
-- A bond is one of 6 things (kinds), and that's all the type info
-  it carries.
+- A bond is one of 8 things (kinds), with PAC/TAC carrying a
+  validator that requires a `schedule_contract`.
 - Schedules / coupons / notionals / relationships live on the
   bond as concrete data, not behavior tags.
+- Schedule derivation is design-time; the runtime consumes the
+  derived `schedule_contract` directly without re-deriving.
 - Behavior — sequential vs pro-rata, schedule-cap vs cleanup,
   account-sourced vs cash-sourced — lives entirely on the rule.
 
@@ -1426,9 +1526,12 @@ sinks for fees.
 class BondDef(BaseModel):
     name: str                             # "PA", "Class A-1", "M-1"
     # NOTE: tranche_type currently has 13 values mixing identity, schedule, coupon, and role.
-    # Round 3 proposal G collapses this to TrancheKind (CASH_PAY | IO | PO | Z | RESIDUAL | PSEUDO).
-    # PAC/TAC will be encoded by the presence of schedule_contract; SUPPORT by relations;
-    # FLOATER/INVERSE_FLOATER by coupon_type; SEQUENTIAL is rule behavior, not bond identity.
+    # Round 3 proposal G collapses this to TrancheKind (8 values:
+    # CASH_PAY | PAC | TAC | IO | PO | Z | RESIDUAL | PSEUDO). PAC and TAC remain
+    # because they're real economic identities; the validator enforces that
+    # PAC/TAC kinds require a non-empty schedule_contract. SUPPORT becomes a
+    # derived role; FLOATER/INVERSE_FLOATER live in coupon_type; SEQUENTIAL is
+    # rule behavior, not bond identity; PAC_II is just a PAC with structural ordering.
     tranche_type: TrancheType             # SEQUENTIAL | PAC | PAC_II | TAC | SUPPORT | Z_BOND | ACCRETION_DIRECTED | FLOATER | INVERSE_FLOATER | IO | PO | PSEUDO | RESIDUAL
     # NOTE: tranche_behavior is fully redundant with the simplified TrancheKind + schedule + pay_mode.
     # Round 3 proposal G deletes this field entirely.
@@ -1456,17 +1559,19 @@ class BondDef(BaseModel):
     day_count: DayCount                   # 30/360 | ACT/360 | ACT/365 | ACT/ACT
     accrual_period: AccrualPeriod         # MONTHLY | QUARTERLY | SEMI_ANNUAL | ANNUAL
 
-    # PAC / TAC parameters — schedule_contract legitimately lives on the bond
-    # because PAC/TAC bonds intrinsically have planned/targeted balances.
-    # Round 3 K: schedule_speed_low/high/target collapse to a single tuple
-    # (TAC = degenerate PAC band where low == high == target). The speed fields
-    # are derivation-time metadata; the runtime only consumes schedule_contract.
-    schedule_type: ScheduleType | None    # PAC | TAC | SUPPORT  (Round 3 G: drops SUPPORT)
-    schedule_model_type: PrepayModelType  # PSA | CPR | ABS | CUSTOM_VECTOR
-    schedule_speed_low: float | None      # PAC lower PSA  (TAC: == low)
-    schedule_speed_high: float | None     # PAC upper PSA  (TAC: == low)
-    schedule_speed_target: float | None   # TAC pricing PSA — Round 3 K: redundant with low when TAC
-    schedule_contract: list[dict]         # [{period, target_balance}] — runtime canonical form
+    # PAC / TAC parameters
+    # Round 3 K: two-phase derivation — the speed fields are DESIGN-TIME inputs
+    # (kept so the schedule can be re-derived if collateral / band assumptions
+    # change). The runtime ONLY consumes `schedule_contract`. Derivation runs
+    # at structuring-time on input change, caches the result here, and the
+    # runtime reads the cache directly. TAC is the degenerate band where
+    # low == high; `schedule_speed_target` is therefore redundant and is dropped.
+    schedule_type: ScheduleType | None    # PAC | TAC | SUPPORT  (Round 3 G: drops SUPPORT — the kind tells you)
+    schedule_model_type: PrepayModelType  # PSA | CPR | ABS | CUSTOM_VECTOR  (design-time input)
+    schedule_speed_low: float | None      # PAC lower PSA / TAC target  (design-time input)
+    schedule_speed_high: float | None     # PAC upper PSA  (TAC: == low)  (design-time input)
+    schedule_speed_target: float | None   # Round 3 K: dropped — redundant with low when TAC
+    schedule_contract: list[dict]         # [{period, target_balance}] — runtime canonical, derived
     schedule_tolerance_bps: float | None
 
     # Tranche relationships — Round 3 H: collapse the next 6 fields into ONE
