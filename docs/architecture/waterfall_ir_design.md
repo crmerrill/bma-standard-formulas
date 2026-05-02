@@ -1098,12 +1098,10 @@ runtime. The runtime treats every account uniformly: a named
 bucket with `balance`, `deposit`, `withdrawal`, and a
 `required_minimum` array.
 
-**Important correction:** an earlier draft of this section
-claimed "`MinimumBasis` is the actual behavioral driver." That
-was also wrong — see proposal Q below. In the current runtime
-both `account_type` AND `minimum_basis` are display labels; the
-`required_minimum` is computed once at initialization against the
-*original* collateral balance and held constant for every period.
+**`MinimumBasis` (after the Round 3 Q fix) IS the actual
+behavioral driver** for account floors and starting amounts —
+the runtime now branches on it correctly. `AccountType` remains a
+passthrough display label.
 
 This means real-world account variety:
 
@@ -1138,10 +1136,15 @@ that should be added as a *separate* explicit field — e.g.,
 `auto_amortizes: bool`, `amortization_schedule: list[...]` — not by
 overloading `account_type` with hidden semantics.
 
-### Q. Implement `minimum_basis` and `starting_basis` per-period semantics (real bug)
+### Q. Implement `minimum_basis` and `starting_basis` per-period semantics — FIXED
 
-**Current state.** The IR has `MinimumBasis` and `starting_basis`
-fields with 4 enum values:
+**Status:** Implemented. `runtime.py` now honors all 4 basis values
+for both `minimum_basis` and `starting_basis`. New regression tests
+in `tests/test_account_minimum_basis.py` lock in the per-period
+behavior. The remainder of this section is preserved for context.
+
+**Original state (silently buggy).** The IR had `MinimumBasis` and
+`starting_basis` fields with 4 enum values:
 
 ```python
 class MinimumBasis(StrEnum):
@@ -1227,11 +1230,42 @@ amortization in many deals — auto ABS reserves often have a
 $X minimum"; non-agency RMBS reserves track note balance through
 the OC waterfall. Currently neither is correctly modeled.
 
-**Severity.** This is an HIGH-severity gap because it's a
-silent correctness bug, not a missing feature: the IR accepts
-the value, the validator passes, the runtime silently ignores
-the user's choice, and the output looks plausible but is wrong
-for any account with a non-`ORIGINAL_COLLATERAL` basis.
+**Severity.** This was a HIGH-severity silent correctness bug
+because the IR accepted the value, the validator passed, the
+runtime silently ignored the user's choice, and the output
+looked plausible but was wrong for any account with a
+non-`ORIGINAL_COLLATERAL` basis.
+
+**Resolution (May 2026).** Fixed in `runtime.py`. The new
+`_allocate_account_workspace` builds `required_minimum` per period
+based on `minimum_basis`:
+
+- `FIXED_DOLLAR` — broadcast `minimum_amount` to every period.
+- `ORIGINAL_COLLATERAL` — broadcast `max(minimum_amount,
+  minimum_pct × collateral_balance_0)`.
+- `COLLATERAL_BALANCE` — vectorized
+  `max(minimum_amount, minimum_pct × pool_balance[t])` per period
+  using the projected pool balance series.
+- `NOTE_BALANCE` — period 0 from the initial note stack at
+  allocation time; periods 1..T are filled by
+  `_refresh_note_balance_minimums(deal, accounts, bonds, t)`
+  inside the main run loop, which sums
+  `bonds[*].balance[t]` for `is_bond=True, is_pseudo=False`
+  bonds and applies `minimum_pct`.
+
+`starting_basis` is honored at period 0 in the same way.
+
+Test coverage in `tests/test_account_minimum_basis.py`:
+
+- `FIXED_DOLLAR` floor stays constant; `pct` is ignored.
+- `ORIGINAL_COLLATERAL` floor stays constant at `pct × initial_pool`.
+- `COLLATERAL_BALANCE` floor monotonically decreases with pool amortization.
+- `NOTE_BALANCE` floor monotonically decreases with bond amortization
+  and tracks the live note stack.
+- `minimum_amount` (dollar floor) takes precedence when it exceeds
+  the percentage-derived floor.
+- `starting_basis` produces the right initial balance for every
+  enum value.
 
 ### P. Schema cleanup migration table
 
@@ -1251,7 +1285,7 @@ for any account with a non-`ORIGINAL_COLLATERAL` basis.
 | Built-in token `GROUP_<id>_COLLATERAL` | (deleted) | Alias for `GROUP_<id>_CASH` |
 | `INT_CASH` / `PRIN_CASH` (and group variants) | `CASH_INT` / `CASH_PRIN` (and group variants) | Prefix consistency |
 | `AccountType` enum (treated as runtime-significant) | `AccountCategory` (UI label only) | **Verified**: runtime never branches on `account_type` |
-| `minimum_basis` and `starting_basis` ignored by runtime (silently treated as `ORIGINAL_COLLATERAL`) | Implement per-period recomputation honoring the enum value | **Verified bug** — proposal Q. The IR accepts the field but the runtime always uses original collateral and broadcasts a single value across all periods. |
+| ~~`minimum_basis` and `starting_basis` ignored by runtime~~ | Per-period recomputation honoring the enum value | **FIXED (May 2026)** — proposal Q. `_allocate_account_workspace` + `_refresh_note_balance_minimums` in runtime.py; covered by `tests/test_account_minimum_basis.py` (9 tests, all passing). |
 
 Net schema impact:
 
@@ -1509,7 +1543,7 @@ Adding the new patterns from round 2:
 |---|---|---|---|
 | Multi-target rule consolidation (authoring) | **HIGH** | every class | NO (fixture/irGen issue, not IR) |
 | Named computed distribution amounts | **HIGH** | non-agency RMBS, auto | NO |
-| **`minimum_basis` and `starting_basis` honored at runtime** | **HIGH (silent correctness bug)** | every account-using deal — auto, RMBS, CRT | NO (validator accepts, runtime ignores — see Round 3 Q) |
+| ~~`minimum_basis` and `starting_basis` honored at runtime~~ | ~~HIGH~~ → **FIXED (May 2026)** | every account-using deal | YES — implemented in `runtime.py`; regression tests in `tests/test_account_minimum_basis.py` (proposal Q) |
 | Aggregate Group bond bundles | MEDIUM | agency MBS | NO |
 | Recursive SPLIT_CASH | MEDIUM | agency MBS | PARTIAL (need runtime verify) |
 | **Bond-level loss treatment** (`writedown` vs `notional_hold`) | **HIGH** | CRT (core), non-agency RMBS | NO |
@@ -1866,22 +1900,18 @@ class AccountDef(BaseModel):
     # The runtime stores it at init (line 324) and copies it to output (line 1611);
     # there is NO `if account_type == X` branch anywhere. Round 3 O renames to
     # AccountCategory. Behavior comes from minimum_basis + the rules that touch
-    # the account — but minimum_basis is also currently a passthrough label;
-    # the runtime always uses original-collateral semantics regardless of value.
-    # See Round 3 Q (HIGH-severity bug) for details.
+    # the account; minimum_basis is now (post-Round 3 Q fix) honored at runtime
+    # for both starting and required-minimum calculations.
     account_type: AccountType             # RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT
     starting_amount: float                # $ amount at closing
-    starting_pct: float | None            # OR % of <something> per starting_basis
+    starting_pct: float | None            # OR % of <basis quantity> at period 0
     starting_basis: MinimumBasis          # FIXED_DOLLAR | COLLATERAL_BALANCE | NOTE_BALANCE | ORIGINAL_COLLATERAL
-                                          #   *** Round 3 Q: VERIFIED BUG — runtime ignores this enum. starting_pct is
-                                          #   always interpreted as % of original collateral balance. ***
-    minimum_amount: float                 # Floor (constant $)
-    minimum_pct: float | None             # OR % of <something> per minimum_basis
-    minimum_basis: MinimumBasis           # FIXED_DOLLAR | COLLATERAL_BALANCE | NOTE_BALANCE | ORIGINAL_COLLATERAL
-                                          #   *** Round 3 Q: VERIFIED BUG — runtime ignores this enum. The minimum
-                                          #   is computed once at period 0 against original collateral and held
-                                          #   constant for every period. Authoring with COLLATERAL_BALANCE or
-                                          #   NOTE_BALANCE silently produces ORIGINAL_COLLATERAL semantics. ***
+                                          # — honored at runtime as of May 2026 (Round 3 Q fix)
+    minimum_amount: float                 # Dollar floor; combined with the pct-derived floor via max()
+    minimum_pct: float | None             # OR % of <basis quantity> per minimum_basis
+    minimum_basis: MinimumBasis           # FIXED_DOLLAR (constant $) | COLLATERAL_BALANCE (steps down with pool) |
+                                          # NOTE_BALANCE (steps down with notes) | ORIGINAL_COLLATERAL (constant pct of orig)
+                                          # — honored at runtime as of May 2026 (Round 3 Q fix)
 ```
 
 ### `FeeDef` — periodic fee paid to a payee

@@ -22,7 +22,7 @@ from .ops import (
     update_bonds_post_ws,
     update_bonds_pre_ws,
 )
-from .schemas.common import RuleType, TriggerState
+from .schemas.common import MinimumBasis, RuleType, TriggerState
 from .schemas.input import (
     DealRunInput,
     GroupedCollateralInput,
@@ -307,18 +307,98 @@ def _allocate_bond_workspace(
     )
 
 
-def _allocate_account_workspace(account_def: Any, cf_len: int, collateral_balance_0: float) -> AccountWorkspace:
-    starting_amount = float(account_def.starting_amount or 0.0)
-    if account_def.starting_pct is not None:
-        starting_amount = collateral_balance_0 * float(account_def.starting_pct) / 100.0
-    minimum = float(account_def.minimum_amount or 0.0)
-    if account_def.minimum_pct is not None:
-        minimum = max(minimum, collateral_balance_0 * float(account_def.minimum_pct) / 100.0)
+def _basis_amount(
+    basis: MinimumBasis,
+    collateral_balance_0: float,
+    pool_balance_t: float,
+    note_balance_t: float,
+) -> float:
+    """Return the dollar quantity that `*_pct` is multiplied against given a
+    basis enum value at a particular point in time.
+
+    `FIXED_DOLLAR` returns 0.0 (the percentage path is unused — the dollar
+    amount is taken directly). All other bases return the relevant balance
+    quantity at time t.
+    """
+    if basis == MinimumBasis.FIXED_DOLLAR:
+        return 0.0
+    if basis == MinimumBasis.ORIGINAL_COLLATERAL:
+        return float(collateral_balance_0)
+    if basis == MinimumBasis.COLLATERAL_BALANCE:
+        return float(pool_balance_t)
+    if basis == MinimumBasis.NOTE_BALANCE:
+        return float(note_balance_t)
+    return float(collateral_balance_0)
+
+
+def _allocate_account_workspace(
+    account_def: Any,
+    cf_len: int,
+    collateral_balance_0: float,
+    pool_balance_vec: np.ndarray,
+    initial_note_balance: float,
+) -> AccountWorkspace:
+    """Allocate per-period account state with basis-aware floors and starts.
+
+    Honors the `starting_basis` and `minimum_basis` enums:
+
+    - `FIXED_DOLLAR`: use the dollar amount; ignore any pct.
+    - `ORIGINAL_COLLATERAL`: pct of original (period-0) pool balance, constant.
+    - `COLLATERAL_BALANCE`: pct of current pool balance per period (steps down
+      with pool amortization).
+    - `NOTE_BALANCE`: pct of outstanding note balance per period (steps down
+      as bonds amortize). Period 0 is set here from `initial_note_balance`;
+      periods 1..cf_len-1 are filled in during the main run loop by
+      `_refresh_note_balance_minimums` because bond balances at t > 0 aren't
+      known until the runtime computes them.
+
+    For the prior bug (runtime ignored both basis enums and always treated
+    them as ORIGINAL_COLLATERAL), see `docs/architecture/waterfall_ir_design.md`
+    proposal Q.
+    """
+    starting_basis = getattr(account_def, "starting_basis", None) or MinimumBasis.FIXED_DOLLAR
+    minimum_basis = getattr(account_def, "minimum_basis", None) or MinimumBasis.FIXED_DOLLAR
+    starting_pct = account_def.starting_pct
+    minimum_pct = account_def.minimum_pct
+    starting_dollars = float(account_def.starting_amount or 0.0)
+    minimum_dollars = float(account_def.minimum_amount or 0.0)
+
+    pool_t0 = float(pool_balance_vec[0]) if len(pool_balance_vec) > 0 else float(collateral_balance_0)
+
+    if starting_pct is not None:
+        basis_amt_0 = _basis_amount(
+            starting_basis,
+            collateral_balance_0,
+            pool_t0,
+            initial_note_balance,
+        )
+        if starting_basis == MinimumBasis.FIXED_DOLLAR:
+            starting_amount = starting_dollars
+        else:
+            starting_amount = max(starting_dollars, basis_amt_0 * float(starting_pct) / 100.0)
+    else:
+        starting_amount = starting_dollars
+
+    required_minimum = np.zeros(cf_len)
+    if minimum_basis == MinimumBasis.FIXED_DOLLAR:
+        required_minimum[:] = minimum_dollars
+    elif minimum_basis == MinimumBasis.ORIGINAL_COLLATERAL:
+        floor = max(minimum_dollars, collateral_balance_0 * float(minimum_pct or 0.0) / 100.0)
+        required_minimum[:] = floor
+    elif minimum_basis == MinimumBasis.COLLATERAL_BALANCE:
+        pct = float(minimum_pct or 0.0)
+        for t in range(cf_len):
+            balance_t = float(pool_balance_vec[t]) if t < len(pool_balance_vec) else 0.0
+            required_minimum[t] = max(minimum_dollars, balance_t * pct / 100.0)
+    elif minimum_basis == MinimumBasis.NOTE_BALANCE:
+        # Period 0 from initial note balance; subsequent periods are
+        # refreshed during the main loop once bond balances for that period
+        # have been computed.
+        pct = float(minimum_pct or 0.0)
+        required_minimum[0] = max(minimum_dollars, initial_note_balance * pct / 100.0)
 
     balance = np.zeros(cf_len)
     balance[0] = starting_amount
-    required_minimum = np.zeros(cf_len)
-    required_minimum[:] = minimum
     return AccountWorkspace(
         name=account_def.name,
         account_type=account_def.account_type.value,
@@ -328,6 +408,39 @@ def _allocate_account_workspace(account_def: Any, cf_len: int, collateral_balanc
         required_minimum=required_minimum,
         minimum_basis=account_def.minimum_basis.value,
     )
+
+
+def _refresh_note_balance_minimums(
+    deal: DealDefinition,
+    accounts: dict[str, AccountWorkspace],
+    bonds: dict[str, BondWorkspace],
+    period: int,
+) -> None:
+    """Update `required_minimum[period]` for accounts with
+    `minimum_basis = NOTE_BALANCE` based on the current outstanding note
+    balance (sum of `is_bond=True, is_pseudo=False` bond balances).
+
+    Called once per period after bond balances for the period have been
+    populated but before any waterfall rule executes, so the floor reflects
+    the post-amortization note stack at the start of the period.
+    """
+    note_basis_accounts = [
+        acc for acc in deal.accounts
+        if getattr(acc, "minimum_basis", None) == MinimumBasis.NOTE_BALANCE
+    ]
+    if not note_basis_accounts:
+        return
+    note_balance_t = sum(
+        float(ws.balance[period]) for ws in bonds.values()
+        if ws.is_bond and not ws.is_pseudo
+    )
+    for acc_def in note_basis_accounts:
+        ws = accounts.get(acc_def.name)
+        if ws is None:
+            continue
+        pct = float(acc_def.minimum_pct or 0.0)
+        floor_d = float(acc_def.minimum_amount or 0.0)
+        ws.required_minimum[period] = max(floor_d, note_balance_t * pct / 100.0)
 
 
 # Dispatch tags
@@ -1053,8 +1166,19 @@ def run_deal(
             xs_spread_cpn=np.zeros(cf_len),
         )
 
+    initial_note_balance = sum(
+        float(ws.balance[0]) for ws in bonds.values()
+        if ws.is_bond and not ws.is_pseudo
+    )
     accounts: dict[str, AccountWorkspace] = {
-        account_def.name: _allocate_account_workspace(account_def, cf_len, collat_bal_0) for account_def in deal.accounts
+        account_def.name: _allocate_account_workspace(
+            account_def,
+            cf_len,
+            collat_bal_0,
+            collateral["balance"],
+            initial_note_balance,
+        )
+        for account_def in deal.accounts
     }
     compiled = _compile_rules(deal)
     fee_defs_by_name = {fee.name: fee for fee in deal.fees}
@@ -1122,6 +1246,11 @@ def run_deal(
         update_bonds_pre_ws(bonds, i)
         for acct in accounts.values():
             acct.balance[i] = acct.balance[i - 1]
+        # Refresh required_minimum[i] for any accounts whose minimum tracks
+        # the live note stack. This must run after bond pre-update so
+        # period-`i` bond balances reflect amortization, but before rules
+        # consult the account floors.
+        _refresh_note_balance_minimums(deal, accounts, bonds, i)
         cash_avail[i] = collateral["cashflow"][i]
         interest_avail[i] = collateral["interest"][i]
         principal_avail[i] = collateral["principal"][i]
