@@ -992,9 +992,66 @@ class DealDefinition(BaseModel):
     waterfall_rules: list[RuleNode]       # The actual priority of payments
     collateral_groups: list[CollateralGroupDef]  # Multi-pool deals
 
-    # Solver / overrides
-    deal_knobs: dict[str, Any]            # Run-time scalar overrides
+    # Solver / overrides / runtime extensions (see below)
+    deal_knobs: dict[str, Any] = {}
 ```
+
+### `deal_knobs` — what's actually in there
+
+`deal_knobs` is intentionally a free-form `dict[str, Any]` because
+it serves four distinct purposes. **Five reserved keys** have
+specific runtime meaning; everything else is a free scalar that
+gets injected into expression-evaluation context.
+
+| Key | Type | Purpose |
+|---|---|---|
+| `source_formulas` | `dict[str, str]` | Named per-period expressions that become first-class `from_source` tokens. Example: `{"NET_EXCESS": "INT_CASH - bond_coupon_total"}` makes `NET_EXCESS` referenceable in any rule's `from_sources`. |
+| `balance_trackers` | `dict[str, str]` | Maps a residual / pseudo bond's name to a runtime quantity it should mirror. Example: `{"R": "collateral_balance"}` makes residual `R` carry a balance equal to outstanding pool balance each period. Used when a residual interest's economics track a non-bond quantity. |
+| `orig_collat_bal_override` | `float` | Override for the original collateral balance used in trigger denominator calculations (when the natural pool balance differs from the trigger reference balance, e.g., tape excludes some loans). |
+| `allow_negative_cashflow_math` | `bool` | Permit transient negative intermediate cash states during rule execution. Used for deals with negative-amortization streams (HECM, certain ARM cases) where cash conservation invariants need temporary relaxation. |
+| `<any_identifier>` | `int \| float` | **Free expression-context globals.** Every numeric value with an identifier-safe key gets injected into the `expr` evaluation context for fee `amount_expr`, rule `max_amount_expr`, calculation `expression`, and trigger thresholds. Example: `{"servicing_fee_bps": 25.0}` lets a fee expression reference `servicing_fee_bps / 10000` directly. |
+
+The four functional roles, in plain language:
+
+1. **Solver scratch-pad.** The solver writes proposed values into
+   `deal_knobs.<name>` and re-runs the deal. `KnobSpec.knob_path`
+   uses dot-paths like `deal_knobs.class_a_pctbal` to reach
+   them.
+2. **Expression-context globals.** Numeric values are auto-injected
+   into the runtime expression evaluator so any expression-bearing
+   field (`amount_expr`, `max_amount_expr`, `condition_expr`,
+   trigger thresholds, calculation expressions) can reference
+   them by bare name without declaring them as
+   `CalculationNode`s.
+3. **Runtime feature flags.** A few well-known boolean keys
+   toggle runtime behavior (currently just
+   `allow_negative_cashflow_math`).
+4. **Runtime extension hooks.** `source_formulas` and
+   `balance_trackers` are reserved-key escape hatches for
+   capabilities that haven't been promoted to first-class IR
+   fields yet. Both are candidates for elevation: `source_formulas`
+   should become the proposed `ComputedAmountNode`;
+   `balance_trackers` should become a `BondDef` field
+   (`tracks_quantity: str | None`).
+
+### Migration intent for `deal_knobs`
+
+Per the human-readability principle "no hidden runtime knobs,"
+`deal_knobs` is a tension we accept temporarily. The direction
+of travel is to **shrink** the schemaless surface:
+
+- `source_formulas` → graduate to `calculations: list[ComputedAmountNode]` (proposed addition B).
+- `balance_trackers` → graduate to `BondDef.tracks_quantity` field.
+- `orig_collat_bal_override` → graduate to a top-level
+  `DealDefinition.original_collateral_balance: float | None`.
+- `allow_negative_cashflow_math` → graduate to a
+  `DealDefinition.runtime_options: RuntimeOptions` typed nested
+  model (one field per flag).
+
+After graduation, `deal_knobs` becomes purely #1 + #2: a typed
+scratch-pad of named scalar overrides for the solver and for
+expression evaluation, with everything behavioral promoted to
+real schema fields.
 
 ## `BondDef` — every tranche the deal pays
 
@@ -1518,7 +1575,7 @@ prospectus paragraphs.
 | One rule per bond ("`r_int_PA`, `r_int_PB`, ...") | One rule per waterfall step (`r_int_cascade` with all bonds) |
 | New `RuleType` for each prospectus phrase | Existing rule types + `cap_mode` + `payment_style` |
 | Subclassing `BondDef` for PAC / Z / IO | Set `tranche_type` + `tranche_behavior` + `schedule_contract` / `tracks_bonds` |
-| Hidden `deal_knobs` for hard-coded behavior | Visible IR fields (`target_weights`, `cap_mode`, `pay_mode`) |
+| Ad-hoc behavioral key in `deal_knobs` (not one of the 5 reserved keys) | Visible IR fields (`target_weights`, `cap_mode`, `pay_mode`) — promote new behavior to a real schema field |
 | Synthetic `rule_id` like `r_001` | Descriptive `r_prin_pac_i_planned` |
 | Empty `description` field | Verbatim prospectus phrasing |
 | Two `DealDefinition` files for one prospectus deal with multiple groups | One DealDefinition with multiple `collateral_groups` |
