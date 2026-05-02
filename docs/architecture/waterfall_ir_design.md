@@ -15,7 +15,7 @@ both reusably and readably.
 | Agency MBS REMIC | FNR 2016-104 | 9 collateral groups, mix of pass-through, sequential, accretion-directed, PAC, face-weighted splits |
 | Agency MBS REMIC | FNR 2019-17 | 7 collateral groups, **nested face-weighted splits**, **named Aggregate Group** abstraction |
 | Agency Multifamily REMIC | FNMA 2024-M2 | Multifamily; structurally similar to single-family REMICs |
-| Agency Synthetic CRT | CAS 2024-R05, CAS 2024-R06 | Connecticut Avenue Securities — synthetic risk transfer (not cashflow IR scope) |
+| Agency Synthetic CRT | CAS 2024-R05, CAS 2024-R06 | Connecticut Avenue Securities — synthetic credit risk transfer; reference pool of FNMA-acquired loans, M-1 / M-2 / B-1 / B-2 notes, **reverse-seniority bond writedowns** on reference-pool losses (sometimes with later writeup), pro-rata principal pre-stepdown / sequential post-stepdown |
 | Agency MBS REMIC | Ginnie Mae 2025-203 | **Confirms the FNR PAC + Z + Support pattern is industry-standard**; "Aggregate Scheduled Principal Balance" same abstraction as Fannie's "Aggregate Group Planned Balance" |
 | Agency MBS REMIC | Ginnie Mae 2025-009 (HECM) | Reverse-mortgage REMIC; **Deferred Interest Amount** (catch-up rule type not in current IR) |
 | Agency MBS REMIC | Ginnie Mae 2024-115 (Multifamily) | Multifamily-specific: **trustee fee % of Principal Distribution Amount** before cascade |
@@ -128,6 +128,85 @@ mini-waterfall. Sample group structures:
   retired, then to Z" (a sequential cascade itself).
 - Face-weighted splits are first-class and **can nest**.
 - "Aggregate Group" is a named bond bundle with its own schedule.
+
+---
+
+## Agency Synthetic CRT (CAS 2024-R05, CAS 2024-R06)
+
+Connecticut Avenue Securities (CAS) — Fannie Mae's flagship credit
+risk transfer program. Structurally distinct from cash REMICs but
+**fully in scope** for the IR.
+
+### Structure
+
+- **Reference pool**, not a real cash pool. The trust holds no
+  mortgage collateral — it holds Fannie Mae's payment obligations
+  derived from the *performance* of a reference pool of FNMA-acquired
+  loans. The reference pool's amortization, prepayments, and credit
+  events drive the bonds.
+- **Note classes** (typical CAS structure): M-1, M-2, B-1, B-2 plus
+  unrated B-3H. M-1 is most senior of the issued notes; B-2 is most
+  junior. There is also a hypothetical reference tranche stack
+  (A-H, M-1H, M-2H, B-1H, B-2H, B-3H) used to compute payments
+  but with no actual notes.
+- **No reserves, no excess spread, no OC.** Credit enhancement is
+  pure subordination — junior notes absorb losses before senior.
+
+### Cashflow mechanics
+
+Two simple things happen each period:
+
+1. **Interest** — each note accrues coupon (typically SOFR + spread)
+   on its outstanding balance and Fannie Mae pays that coupon
+   monthly. Like a normal floater.
+2. **Principal & writedowns** — the reference pool's scheduled
+   amortization + prepayments are allocated to bonds (pro-rata
+   pre-stepdown, sequential post-stepdown), and any reference-pool
+   credit losses are *written down* against bond balances in
+   reverse seniority (B-2 first, then B-1, M-2, M-1).
+
+### What CRT needs from the IR
+
+CRT is the **simplest waterfall structurally** but the **hardest
+without `BondDef.loss_treatment`**. Because there is no cash
+collateral, the bonds' economic existence IS their balance — and
+losses are the primary state change. Specifically:
+
+- **Bond writedown semantics** — when LOSS is allocated to a bond,
+  its balance must decrease and future coupon must accrue on the
+  reduced balance. This is `BondDef.loss_treatment = WRITEDOWN`
+  (proposed addition E in this document).
+- **Bond writeup semantics** (rare but real) — if Fannie Mae later
+  determines a credit event was overstated, the writedown is
+  reversed. The bond's balance increases and the bondholder
+  receives a "writeup payment" representing missed coupon. This is
+  `BondDef.writeup_enabled = true`.
+- **Stepdown date + performance triggers** — same idea as
+  non-agency RMBS: pre-stepdown is pro-rata, post-stepdown is
+  sequential, but a delinquency trigger reverts to sequential
+  early if collateral underperforms. Expressible with the
+  proposed `WaterfallBranch` (proposed addition C).
+- **Reference-pool collateral input** — the IR's existing
+  `Loan` / `DealRunInput` types accept the reference pool's
+  cashflows directly (treated as if they were real); this part
+  works today.
+
+### Match with current IR
+
+| CRT feature | Current IR | Status |
+|---|---|---|
+| Sequential / pro-rata principal cascade | `PAY_PRINCIPAL` with `payment_style` | ✅ |
+| Reverse-seniority loss cascade | `PAY_WRITEDOWN` with reverse `to_targets` | ✅ |
+| **Bond balance writedown on loss** | none | ❌ (need `loss_treatment`) |
+| Bond writeup on loss reversal | none | ❌ (need `writeup_enabled` + `PAY_WRITEUP`) |
+| Stepdown × trigger conditional waterfall | per-rule `condition_trigger` | ⚠️ works but verbose; `WaterfallBranch` is cleaner |
+| Floater coupon | `BondDef.coupon_type=FLOATING` + index | ✅ |
+
+The summary: **CRT is structurally the simplest deal in this
+research corpus, but the existing IR cannot model it correctly
+because of the missing bond-level loss treatment.** Fixing that
+one gap unlocks the entire CRT product family (CAS, STACR,
+CIRT, ACIS).
 
 ---
 
@@ -404,15 +483,20 @@ mode gated by a deal-state trigger.
    "any named formula". Need a `CalculationNode`-style
    "ComputedAmount" object that produces a per-period scalar usable
    as a `from_source` cap.
-3. **Conditional rule blocks** — the RMBS principal waterfall has
-   six mutually exclusive blocks (A through F) keyed on (stepdown
-   date, trigger event). Currently expressed via `condition_trigger`
-   on each rule, which works but is verbose. A `RuleGroup` or
-   `WaterfallBranch` abstraction would make multi-step branches
-   readable.
-4. **Loss allocation as a first-class waterfall** — separate from
-   cash distribution. Order is reverse seniority. Inputs are the
-   pool LOSS stream + write-down provisions.
+3. **`if / elif / else` over rule blocks** — the RMBS principal
+   waterfall has six mutually exclusive blocks (A through F) keyed
+   on (stepdown date, trigger event). Currently expressed via
+   `condition_trigger` on each rule, which works but is verbose
+   and error-prone (every rule must remember to invert the
+   condition for the "else" branch). A `WaterfallBranch` node with
+   ordered `if / elif / else` cases reads exactly like the
+   prospectus.
+4. **Bond-level loss treatment** — the existing `PAY_WRITEDOWN`
+   rule already does the reverse-seniority cascade. What's missing
+   is the bond's *response* to a writedown: does the bond's
+   balance decrease (`WRITEDOWN`) or stay constant with a deferred
+   carryover (`NOTIONAL_HOLD`)? Critical for CRT (writedown is the
+   primary economic event), important for non-agency RMBS subs.
 5. **Aggregate Group abstraction** — a NAMED collection of bonds
    treated as a unit (own planned balance, internal allocation rule).
    Currently expressed by tagging each bond and listing them in a
@@ -436,8 +520,8 @@ After this 4-deal sample:
 | Multi-target sequential rules under-used in fixtures and irGenerator | **HIGH** | every asset class (visual / authoring) |
 | Aggregate Group bond bundles | MEDIUM | agency MBS |
 | Recursive / nested splits | MEDIUM | agency MBS (FNR 2019-17 pattern) |
-| Loss allocation as first-class waterfall (reverse seniority) | MEDIUM | non-agency RMBS, future CMBS |
-| Branched waterfalls (6 mutually exclusive A-F blocks gated by stepdown × trigger) | MEDIUM | non-agency RMBS |
+| Bond-level loss treatment (writedown vs notional-hold) | **HIGH** | CRT, non-agency RMBS, future CMBS |
+| Conditional waterfall blocks (`if / elif / else` over rule groups) | MEDIUM | non-agency RMBS, CRT, auto post-acceleration |
 | Net WAC reserve / sub-cascade plumbing | LOW (covered by SPLIT_CASH + accounts) | non-agency RMBS |
 | Post-acceleration alternate waterfall | LOW (covered by triggers) | auto |
 | Capped fee with overflow to later step | LOW | auto |
@@ -469,20 +553,69 @@ Rules can reference `ComputedAmountNode` names in `from_sources` the
 same way they reference `INT_CASH`/`PRIN_CASH`. The runtime resolves
 the name to the per-period scalar.
 
-### C. RuleGroup / WaterfallBranch wrapper
+### C. WaterfallBranch — `if / elif / else` over rule blocks
+
+The natural way to express "if Trigger Event in effect: pay rules
+1; else: pay rules 2" is exactly that — an explicit
+`if / elif / else` chain at the IR level, not per-rule
+`condition_trigger` tags. Per-rule tagging works mathematically
+but is error-prone (you have to remember to invert the condition
+on every "else" rule and keep the inversion in sync) and
+unreadable (the prospectus phrasing "If X, do Y, else do Z" is
+fragmented across many rules).
 
 ```python
-class RuleGroup(BaseModel):
-    rule_group_id: str
+class WaterfallBranch(BaseModel):
+    branch_id: str
     description: str
-    condition_trigger: str | None
-    condition_invert: bool = False
-    rules: list[RuleNode]
+    cases: list[WaterfallCase]   # ordered; first matching case fires
+
+class WaterfallCase(BaseModel):
+    when: str | None             # trigger name, None for the `else` arm
+    invert: bool = False         # treat the trigger as `not when`
+    expr: str | None             # OR a free expression evaluated per period
+    rules: list[RuleNode]        # rules to execute when this case matches
 ```
 
-A rule group is "rules that fire only when a condition holds, as a
-unit". Solves the RMBS A-F branching problem without putting
-`condition_trigger` on every rule individually.
+Reads exactly like the prospectus:
+
+```yaml
+waterfall_rules:
+  - branch_id: principal_waterfall
+    description: "RMBS principal allocation: stepdown × trigger event"
+    cases:
+      - when: TriggerEvent
+        rules: [ ... rules block A: sequential to senior, no mezz ... ]
+      - when: StepdownDate
+        invert: true
+        rules: [ ... block B: pre-stepdown sequential ... ]
+      - expr: "stepdown_date_reached and not trigger_event"
+        rules: [ ... block C: post-stepdown pro-rata ... ]
+      - when: null   # the `else` arm
+        rules: [ ... default block ... ]
+```
+
+**Why prefer this over per-rule `condition_trigger`:**
+
+1. **Mutual exclusion is explicit.** `if/elif/else` semantics
+   guarantee exactly one branch fires. Per-rule tags can
+   accidentally fire two branches if conditions aren't perfectly
+   complementary.
+2. **DRY.** Don't repeat the same condition on 14 rules.
+3. **Reads like the prospectus.** "Block A — Trigger Event in
+   effect" maps to one case; "Block B — pre-stepdown" to another.
+4. **Refactor-friendly.** Adding a rule to a conditional block is
+   one append; under the per-rule scheme it's an append plus
+   matching the condition exactly.
+
+**When to still use per-rule `condition_trigger`:** one-off gates
+on a *single* rule (e.g., "this single fee only applies if the
+servicer is in default"). Per-rule remains for one-off cases;
+`WaterfallBranch` is for multi-rule blocks.
+
+This is the IR equivalent of asking "why don't we just write
+`if/else`?" — the answer is "we should, and that's what this
+node is."
 
 ### D. AggregateGroup bond bundle
 
@@ -498,17 +631,66 @@ A virtual bundle that rules can target by name. The runtime caps at
 the bundle's planned balance and distributes internally per the
 allocation rule.
 
-### E. LossAllocationRule (new rule type)
+### E. Bond-level loss treatment (the real loss-allocation question)
 
-```python
-RuleType.LOSS_ALLOCATION = "LOSS_ALLOCATION"
-# from_sources: ["LOSS"]
-# to_targets: ["M-10", "M-9", ..., "M-1", "A"]  (reverse seniority)
-# payment_style: SEQUENTIAL
+Reverse-seniority loss allocation isn't a special new IR
+construct — it's the standard pattern across RMBS, CRT, and
+future CMBS, and the existing `PAY_WRITEDOWN` rule type already
+expresses it:
+
+```yaml
+rule_type: PAY_WRITEDOWN
+from_sources: [LOSS]
+to_targets: [B-2, B-1, M-2, M-1]   # reverse seniority
+payment_style: SEQUENTIAL
 ```
 
-Separate from cash distribution. Decrements bond balance for losses,
-rather than paying cash.
+The **real question** that the IR currently doesn't answer is:
+**when a loss hits a bond, what happens to that bond's balance
+and accrual base going forward?** Two distinct treatments exist
+in real prospectuses:
+
+1. **`WRITEDOWN`** — bond balance is reduced by the loss amount.
+   Future coupon accrues on the *reduced* balance. Future principal
+   distributions are based on the reduced balance. This is the CRT
+   default and the non-agency RMBS subordinate default.
+
+2. **`NOTIONAL_HOLD`** — bond balance stays unchanged. The loss
+   becomes a deferred-amount carryover that reduces cash to that
+   bond until covered by recovery / excess interest, but the bond
+   continues to accrue coupon on its *full* original balance. This
+   is rare but appears in some prime jumbo deals and in
+   particularly investor-friendly subordinate structures.
+
+3. **`NONE`** — bond doesn't absorb losses at all (typically
+   senior-most class with full guarantee).
+
+Adding this is a small `BondDef` extension:
+
+```python
+class LossTreatment(StrEnum):
+    WRITEDOWN = "WRITEDOWN"
+    NOTIONAL_HOLD = "NOTIONAL_HOLD"
+    NONE = "NONE"
+
+class BondDef(BaseModel):
+    ...
+    loss_treatment: LossTreatment = LossTreatment.NONE
+    writeup_enabled: bool = False   # CRT-style loss reversal
+```
+
+The runtime change is small: in `PAY_WRITEDOWN`, look up each
+target bond's `loss_treatment` and either decrement its balance
+(`WRITEDOWN`) or accumulate a deferred amount (`NOTIONAL_HOLD`).
+Recovery / writeup applies inversely.
+
+**Why this matters for CRT.** CRT bonds are pure
+notional-bearing instruments — there is no actual cash collateral
+in the trust. The bonds' economic existence IS their balance, and
+loss allocation IS the primary cashflow event. Without
+`loss_treatment` on `BondDef`, the IR can't model CRT at all. The
+existing `PAY_WRITEDOWN` rule type is the *cascade*; the missing
+piece is the *bond's* response to that cascade.
 
 ### F. Recursive SPLIT_CASH (no schema change, runtime change)
 
@@ -524,7 +706,8 @@ Group 7's nested 16.67 / 83.33 / first / second pattern.
    deal universe? My read: (A) is must-have *now* (it fixes the
    visual problem you flagged); (B) and (C) are needed once we
    start modeling private-label RMBS; (D) is agency-MBS-specific;
-   (E) is RMBS / CMBS / future CRT; (F) is already kind of working.
+   (E) is **must-have for CRT** and important for non-agency RMBS
+   subordinates; (F) is already kind of working.
 
 2. **More research breadth.** Do you want me to extend this study
    to the other asset classes (subprime auto, credit card, CLO,
@@ -720,24 +903,25 @@ auto pattern is consistent across sponsors.
 
 ### Updated cross-asset matrix
 
-After 13 deals across 4 asset classes:
+After 13 deals across 5 asset classes:
 
-| Feature | Agency MBS | Non-Agency RMBS | Prime Auto | Subprime Auto | Auto Lease |
-|---|---|---|---|---|---|
-| Distinct collateral groups | YES (1-9) | YES (1-2) | NO | NO | NO |
-| Separate INT/PRIN sub-streams | YES | YES | NO | NO | NO |
-| PAC / TAC / Z behavior | YES | NO | NO | NO | NO |
-| Stepdown date gate | NO | YES | NO | NO | NO |
-| Reserve account in waterfall | RARE | YES | YES | YES | YES |
-| Sequential vs pro-rata switch | NO | YES | NO | NO | NO |
-| Interleaved I/P by class | NO | NO | YES | YES | NO (pro-rata) |
-| Reverse-seniority loss allocation | NO | YES | NO | NO | NO |
-| Named computed distribution amounts | LIGHT | HEAVY | MEDIUM | MEDIUM | LIGHT |
-| Recursive splits | YES | RARE | NO | NO | NO |
-| Aggregate Group bond bundles | YES | NO | NO | NO | NO |
-| Step-up coupon | RARE | YES (Non-QM) | NO | NO | NO |
-| Deferred interest catch-up | RARE (HECM) | NO | NO | NO | NO |
-| Acceleration alternate waterfall | NO | NO | YES | YES | YES |
+| Feature | Agency MBS | Agency CRT | Non-Agency RMBS | Prime Auto | Subprime Auto | Auto Lease |
+|---|---|---|---|---|---|---|
+| Distinct collateral groups | YES (1-9) | NO (single ref pool) | YES (1-2) | NO | NO | NO |
+| Separate INT/PRIN sub-streams | YES | YES (synthetic) | YES | NO | NO | NO |
+| PAC / TAC / Z behavior | YES | NO | NO | NO | NO | NO |
+| Stepdown date gate | NO | YES | YES | NO | NO | NO |
+| Reserve account in waterfall | RARE | NO | YES | YES | YES | YES |
+| Sequential vs pro-rata switch | NO | YES (gate on perf trigger) | YES | NO | NO | NO |
+| Interleaved I/P by class | NO | NO | NO | YES | YES | NO (pro-rata) |
+| Bond writedown on losses | NO | **YES (core mechanic)** | YES | NO | NO | NO |
+| Bond writeup on loss reversal | NO | YES (rare) | RARE | NO | NO | NO |
+| Named computed distribution amounts | LIGHT | MEDIUM | HEAVY | MEDIUM | MEDIUM | LIGHT |
+| Recursive splits | YES | NO | RARE | NO | NO | NO |
+| Aggregate Group bond bundles | YES | NO | NO | NO | NO | NO |
+| Step-up coupon | RARE | NO | YES (Non-QM) | NO | NO | NO |
+| Deferred interest catch-up | RARE (HECM) | NO | NO | NO | NO | NO |
+| Acceleration alternate waterfall | NO | NO | NO | YES | YES | YES |
 
 ### Updated IR gap list
 
@@ -749,8 +933,9 @@ Adding the new patterns from round 2:
 | Named computed distribution amounts | **HIGH** | non-agency RMBS, auto | NO |
 | Aggregate Group bond bundles | MEDIUM | agency MBS | NO |
 | Recursive SPLIT_CASH | MEDIUM | agency MBS | PARTIAL (need runtime verify) |
-| Loss allocation as separate cascade | MEDIUM | non-agency RMBS, future CMBS | NO |
-| Branched waterfalls (mutex blocks) | MEDIUM | non-agency RMBS | PARTIAL (per-rule trigger) |
+| **Bond-level loss treatment** (`writedown` vs `notional_hold`) | **HIGH** | CRT (core), non-agency RMBS | NO |
+| Conditional waterfall blocks (`if / elif / else`) | MEDIUM | non-agency RMBS, CRT, auto post-accel | PARTIAL (per-rule trigger only) |
+| Bond writeup on loss reversal | LOW | CRT | NO |
 | **Time-conditional bond coupons (step-ups)** | **MEDIUM** | Non-QM, callable seniors | NO |
 | **Acceleration alternate waterfall** | **MEDIUM** | every auto deal | PARTIAL (trigger-based) |
 | **Deferred interest catch-up** (HECM IO) | LOW | reverse mortgage REMIC | NO |
