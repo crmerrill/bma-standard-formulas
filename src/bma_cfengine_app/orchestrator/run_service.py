@@ -201,6 +201,54 @@ def _safe_artifact_name(name: str) -> str:
     return safe[:80]
 
 
+def _bma_actual_to_aggregate_dataframe(
+    actual: Any,
+    run_mode: str,
+) -> pd.DataFrame:
+    """Build an aggregate DataFrame for a single BMAActualCashflow.
+
+    Mirrors the shape produced by ``PortfolioCashflow.to_dataframe()`` for
+    ACTUAL_ONLY / PAIRED modes (pool fields joined with the trust waterfall),
+    but operates on a pre-computed BMAActualCashflow rather than re-running
+    the engine.  Used by the orchestrator to emit per-group artifacts from
+    the unified portfolio's per-group aggregates without an extra engine
+    invocation per group.
+
+    The function wraps the supplied actual cashflow in a one-constituent
+    PortfolioCashflow (with the same default cross-collateralization
+    settings the orchestrator uses for whole-pool runs) so the existing
+    waterfall computation path is reused unchanged.
+
+    Parameters
+    ----------
+    actual:
+        A pre-aggregated ``BMAActualCashflow`` (e.g., one entry from
+        ``portfolio.aggregate_actual_by_group()``).
+    run_mode:
+        Run mode used by the caller. Currently informational; the returned
+        DataFrame shape is identical for ``"actual"`` and ``"paired"`` (both
+        produce pool + waterfall columns).
+    """
+    from bma_standard_formulas.engine import PortfolioCashflow
+    from bma_standard_formulas.engine.portfolio import PortfolioMode
+
+    wrapper = PortfolioCashflow([actual], mode=PortfolioMode.ACTUAL_ONLY)
+    return wrapper.to_dataframe()
+
+
+def _bma_scheduled_to_dataframe(scheduled: Any) -> pd.DataFrame:
+    """Build a DataFrame from a single BMAScheduledCashflow.
+
+    Mirrors the per-group scheduled artifact shape used by the pre-Phase-0B
+    orchestrator (``pd.DataFrame(...)`` over each ndarray dataclass field).
+    """
+    return pd.DataFrame({
+        f.name: getattr(scheduled, f.name)
+        for f in scheduled.__dataclass_fields__.values()
+        if isinstance(getattr(scheduled, f.name), np.ndarray)
+    })
+
+
 def _execute_single_scenario(
     run_id: str,
     scenario_name: str,
@@ -212,7 +260,32 @@ def _execute_single_scenario(
     rate_index: Any,
     grouping: GroupingConfig | None,
 ) -> tuple[list[str], list[str], dict[str, str]]:
-    """Run one scenario. Returns (sections, group_names, group_artifact_map)."""
+    """Run one scenario. Returns (sections, group_names, group_artifact_map).
+
+    Phase 0B refactor (May 2026): the engine is invoked exactly ONCE per
+    scenario, regardless of grouping configuration. Per-group artifacts are
+    derived by partitioning the resulting ``PortfolioCashflow``'s
+    constituents on their ``group_id`` field via
+    :meth:`PortfolioCashflow.aggregate_actual_by_group` (and
+    ``aggregate_scheduled_by_group`` for paired/scheduled modes).
+
+    Pre-Phase-0B this function ran the engine N+1 times for grouped runs
+    (once for the aggregate plus once per group with a filtered loan list).
+    Each per-group invocation duplicated the per-loan amortization /
+    prepay / default math that the aggregate run had already performed.
+    Eliminating that duplication is the primary reason for the refactor;
+    the engine already supports per-loan assumption curves
+    (``smm: dict[loan_id, np.ndarray]``) so a single invocation is
+    sufficient to produce both the aggregate and the per-group results.
+
+    Per-loan ``group_id`` is set on each ``Loan`` by the caller in
+    :func:`execute_run` via ``loan.group_id = gid`` immediately before
+    invocation here, so the engine propagates ``group_id`` into each
+    constituent BMAActualCashflow / BMAScheduledCashflow. The portfolio
+    flush triggered inside ``_run_portfolio`` populates the per-group
+    aggregation cache as part of flush() (see Phase 0A) so per-group
+    results remain available after individual constituents are released.
+    """
     prefix = _safe_artifact_name(scenario_name)
 
     smm, mdr, severity, sev_lag, months_liq = resolve_portfolio_curves(
@@ -221,19 +294,18 @@ def _execute_single_scenario(
 
     _save_assumption_curves(run_id, prefix, smm, mdr, severity, loans, group_id_map)
 
+    # ─── Single engine invocation across all loans ────────────────────────
     portfolio = _run_portfolio(loans, smm, mdr, severity, sev_lag, months_liq, rate_index, run_mode)
 
+    # Whole-portfolio (aggregate) artifact — unchanged from pre-refactor
     actual_df = _dedup_cols(portfolio.to_dataframe())
     run_store.save_artifact(run_id, f"{prefix}_portfolio_actual", actual_df)
     run_store.save_artifact_csv(run_id, f"{prefix}_portfolio_actual", actual_df)
 
     if run_mode in ("paired", "scheduled"):
         try:
-            from bma_standard_formulas.formulas.cashflows import BMAScheduledCashflow
             sch = portfolio.scheduled
-            sch_df = pd.DataFrame({f.name: getattr(sch, f.name) for f in sch.__dataclass_fields__.values()
-                                   if isinstance(getattr(sch, f.name), np.ndarray)})
-            sch_df = _dedup_cols(sch_df)
+            sch_df = _dedup_cols(_bma_scheduled_to_dataframe(sch))
             run_store.save_artifact(run_id, f"{prefix}_portfolio_scheduled", sch_df)
             run_store.save_artifact_csv(run_id, f"{prefix}_portfolio_scheduled", sch_df)
         except Exception:
@@ -243,11 +315,31 @@ def _execute_single_scenario(
     group_names: list[str] = []
     group_artifact_map: dict[str, str] = {}
 
+    # ─── Per-group artifacts via filter+aggregate (no engine re-run) ──────
     if grouping and groups_by_id:
-        for gid, group_loans in sorted(groups_by_id.items()):
+        # ``aggregate_actual_by_group()`` partitions the portfolio's
+        # constituents by their group_id and runs _aggregate_actual on each
+        # bucket. The dict is keyed by str(group_id), with "_ungrouped" used
+        # for any constituents whose group_id was None (we skip that bucket
+        # — those loans appear in the whole-pool aggregate but should not
+        # generate a named per-group artifact).
+        per_group_actuals = portfolio.aggregate_actual_by_group()
+        per_group_scheduled: dict[str, Any] = {}
+        if run_mode in ("paired", "scheduled"):
             try:
-                gp = _run_portfolio(group_loans, smm, mdr, severity, sev_lag, months_liq, rate_index, run_mode)
-                gdf = _dedup_cols(gp.to_dataframe())
+                per_group_scheduled = portfolio.aggregate_scheduled_by_group()
+            except Exception:
+                per_group_scheduled = {}
+
+        for gid in sorted(per_group_actuals.keys()):
+            if gid == "_ungrouped":
+                # Ungrouped constituents are reflected in the aggregate
+                # artifact only; emitting a "_ungrouped" group artifact
+                # would be confusing in the UI run history.
+                continue
+            try:
+                gactual = per_group_actuals[gid]
+                gdf = _dedup_cols(_bma_actual_to_aggregate_dataframe(gactual, run_mode))
                 gname = _safe_artifact_name(gid)
                 artifact_key = f"{prefix}_group_{gname}_actual"
                 run_store.save_artifact(run_id, artifact_key, gdf)
@@ -255,12 +347,10 @@ def _execute_single_scenario(
                 group_names.append(gid)
                 group_artifact_map[gid] = artifact_key
 
-                if run_mode in ("paired", "scheduled"):
+                if run_mode in ("paired", "scheduled") and gid in per_group_scheduled:
                     try:
-                        gsch = gp.scheduled
-                        gsch_df = pd.DataFrame({f.name: getattr(gsch, f.name) for f in gsch.__dataclass_fields__.values()
-                                                if isinstance(getattr(gsch, f.name), np.ndarray)})
-                        gsch_df = _dedup_cols(gsch_df)
+                        gsch = per_group_scheduled[gid]
+                        gsch_df = _dedup_cols(_bma_scheduled_to_dataframe(gsch))
                         run_store.save_artifact(run_id, f"{prefix}_group_{gname}_scheduled", gsch_df)
                         run_store.save_artifact_csv(run_id, f"{prefix}_group_{gname}_scheduled", gsch_df)
                     except Exception:
