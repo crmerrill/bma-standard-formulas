@@ -204,9 +204,23 @@ class StructureRelation(str, Enum):
 
 
 class CollateralInputMode(str, Enum):
+    """Discriminator for the collateral payload variants in DealRunInput.
+
+    POOLED:   Single LDCMA-format CollateralCashflows feed (legacy parity path).
+    GROUPED:  ``dict[group_id, CollateralCashflows]`` for multi-group deals
+              (legacy parity path).
+    STRIP_PI: Separate principal and interest LDCMA streams (rare; mostly
+              legacy strip products).
+    PAIRED:   BMA PortfolioCashflow in PAIRED mode, consumed natively by the
+              runtime with full per-loan visibility (proposal R, Phase 1).
+              Multi-group deals tag each loan with ``group_id`` and the
+              runtime calls ``portfolio.aggregate_actual_by_group()`` to
+              route ``GROUP_<id>_*`` source tokens.
+    """
     POOLED = "POOLED"
     GROUPED = "GROUPED"
     STRIP_PI = "STRIP_PI"
+    PAIRED = "PAIRED"
 
 
 class SolverStatus(str, Enum):

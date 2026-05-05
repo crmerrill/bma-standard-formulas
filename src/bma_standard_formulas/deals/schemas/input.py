@@ -1,8 +1,31 @@
-"""DealRunInput schemas — collateral cashflow inputs to the waterfall engine."""
-from typing import Annotated, Literal, Union
+"""DealRunInput schemas — collateral cashflow inputs to the waterfall engine.
+
+Two families of collateral inputs coexist:
+
+LDCMA-format (POOLED / GROUPED / STRIP_PI variants):
+    Period-keyed dict-of-arrays matching the LDCMA ``collCF`` convention.
+    Built by the legacy adapters (``from_collateral_dict``,
+    ``from_actual_cashflow``, ``from_portfolio_cashflow``,
+    ``from_grouped_portfolio_cashflows``).  Suitable for parity testing
+    against legacy LDCMA fixtures and for the bridge path that reads
+    aggregate / per-group artifacts from disk.
+
+PAIRED-format (proposal R, Phase 1):
+    ``PortfolioCashflow`` in PAIRED mode held directly on the input
+    payload, consumed natively by the runtime with full per-loan visibility
+    (each constituent retains its ``group_id``, ``loan_id``, and per-period
+    BMA-native arrays).  Multi-group deals tag each loan with ``group_id``
+    and the runtime routes ``GROUP_<id>_*`` source tokens via
+    ``portfolio.aggregate_actual_by_group()``.
+
+The design intent is for PAIRED to become the canonical primary input form
+while LDCMA-format remains for parity testing — see the design doc
+``docs/architecture/waterfall_ir_design.md`` proposal R.
+"""
+from typing import Annotated, Any, Literal, Union
 
 import numpy as np
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .common import CollateralInputMode, Dollars, SchemaMetadata
 
@@ -93,11 +116,75 @@ class StripCollateralInput(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Paired (BMA-native) input
+# ---------------------------------------------------------------------------
+
+
+class PairedCollateralInput(BaseModel):
+    """Direct BMA PortfolioCashflow (PAIRED mode) input — proposal R Phase 1.
+
+    Wraps a ``bma_standard_formulas.engine.PortfolioCashflow`` in PAIRED
+    mode. The deal runtime consumes the payload natively without going
+    through the LDCMA-format adapter chain:
+
+      - Whole-pool aggregate fields come from ``portfolio.pool``
+        (``BMAActualCashflow``).
+      - Whole-pool scheduled stream comes from ``portfolio.scheduled``
+        (``BMAScheduledCashflow``) — used for scheduled-vs-actual
+        decompositions in outputs and for PAC/TAC schedule re-derivation.
+      - Per-group aggregates come from
+        ``portfolio.aggregate_actual_by_group()`` and
+        ``aggregate_scheduled_by_group()`` (Phase 0A primitives), keyed by
+        ``str(loan.group_id)``. Multi-group deals tag each loan with its
+        group_id; the runtime routes ``GROUP_<id>_*`` source tokens to the
+        matching aggregate.
+      - Per-loan resolution (Phase 1d) is available via
+        ``portfolio.constituents`` for triggers, calculations, and per-loan
+        analytics.
+
+    Pydantic note: the underlying PortfolioCashflow is not a Pydantic model
+    (it's a mutable engine object holding numpy arrays). The schema accepts
+    it via ``arbitrary_types_allowed`` and the runtime treats it as an
+    opaque handle. Serializing a DealRunInput with PAIRED mode through
+    JSON is therefore not supported — the input is only meaningful for
+    in-process runs from the engine.
+    """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    mode: Literal[CollateralInputMode.PAIRED] = CollateralInputMode.PAIRED
+    portfolio: Any  # bma_standard_formulas.engine.PortfolioCashflow
+
+    @model_validator(mode="after")
+    def _validate_portfolio(self) -> "PairedCollateralInput":
+        # Lazy import to avoid a circular dependency between schemas and engine.
+        from bma_standard_formulas.engine import PortfolioCashflow
+        from bma_standard_formulas.engine.portfolio import PortfolioMode
+
+        if not isinstance(self.portfolio, PortfolioCashflow):
+            raise TypeError(
+                f"PairedCollateralInput.portfolio must be a PortfolioCashflow, "
+                f"got {type(self.portfolio).__name__}"
+            )
+        if self.portfolio.mode != PortfolioMode.PAIRED:
+            raise ValueError(
+                f"PairedCollateralInput requires PortfolioMode.PAIRED, got "
+                f"{self.portfolio.mode.name}. Build the portfolio with "
+                f"run_paired_portfolio() or with mode=PortfolioMode.PAIRED."
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
 # Discriminated union
 # ---------------------------------------------------------------------------
 
 CollateralInput = Annotated[
-    Union[PooledCollateralInput, GroupedCollateralInput, StripCollateralInput],
+    Union[
+        PooledCollateralInput,
+        GroupedCollateralInput,
+        StripCollateralInput,
+        PairedCollateralInput,
+    ],
     Field(discriminator="mode"),
 ]
 
