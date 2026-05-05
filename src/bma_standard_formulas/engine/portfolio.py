@@ -588,6 +588,107 @@ def _aggregate_actual(cfs: list[BMAActualCashflow]) -> BMAActualCashflow:
     )
 
 
+# ---------------------------------------------------------------------------
+# Group-aware aggregation
+# ---------------------------------------------------------------------------
+#
+# Per-loan cashflows carry a `group_id` META field (propagated from Loan.group_id
+# during cashflow construction).  These helpers partition a list of constituents
+# by `group_id` and run the existing whole-portfolio aggregator against each
+# partition, producing one aggregate per group in a SINGLE pass.
+#
+# This is the engine-layer primitive that replaces the wasteful "run engine N+1
+# times for grouped portfolios" pattern at the orchestrator level.  Because
+# the engine already supports per-loan assumption curves
+# (smm_curves: dict[loan_id, np.ndarray]), one engine invocation against all
+# loans is sufficient — per-group results then come from filter+aggregate of
+# the resulting constituents.
+#
+# Bucket semantics:
+#   - Constituents with `group_id != None` are partitioned by str(group_id).
+#   - Constituents with `group_id == None` go into the special bucket "_ungrouped"
+#     so callers can detect missing tags (a single mixed result with both
+#     "_ungrouped" and explicit group keys is a signal that the upstream
+#     loan tape is partially tagged).
+#   - The output is `dict[str, BMAActualCashflow]` (or `BMAScheduledCashflow`)
+#     keyed by stringified group_id.
+#
+# Ref: BMA SF-17 partitioned advance recovery; CrossCollateralMode.GROUP
+# (per-group reallocation; not yet implemented at the trust waterfall layer
+# but the per-group aggregation primitive is independent of it).
+
+
+def _partition_by_group_id(
+    cfs: list,
+) -> dict[str, list]:
+    """Partition a list of cashflow constituents by their `group_id` field.
+
+    Constituents with `group_id == None` go into the bucket ``"_ungrouped"``.
+    Constituents with non-None `group_id` go into the bucket ``str(group_id)``,
+    so numeric and string group identifiers coexist (e.g., ``Loan.group_id=1``
+    and ``Loan.group_id="GROUP_1"`` would be different buckets — callers should
+    use one convention consistently across a tape).
+
+    Returns:
+        dict[str, list]: Bucket key -> list of constituents in that bucket.
+        Empty dict if *cfs* is empty.
+    """
+    buckets: dict[str, list] = {}
+    for cf in cfs:
+        gid = getattr(cf, "group_id", None)
+        key = "_ungrouped" if gid is None else str(gid)
+        buckets.setdefault(key, []).append(cf)
+    return buckets
+
+
+def _aggregate_actual_by_group(
+    cfs: list[BMAActualCashflow],
+) -> dict[str, BMAActualCashflow]:
+    """Aggregate actual cashflows per group_id, returning one aggregate per partition.
+
+    Walks the constituents once to bucket by ``group_id`` (using
+    :func:`_partition_by_group_id`), then calls :func:`_aggregate_actual` on
+    each non-empty bucket.  The mathematical identity
+
+        _aggregate_actual(cfs) == _sum_aggregates(_aggregate_actual_by_group(cfs).values())
+
+    holds for FLOW fields (perf_bal, act_int, act_am, etc.) by linearity of
+    summation; STOCK and RATIO fields are reconstructed per-group from the
+    summed flows of that group, so they reflect the group-local pool.
+
+    Returns:
+        dict[str, BMAActualCashflow]: One aggregated cashflow per group,
+        keyed by stringified group_id.  Returns ``{}`` when *cfs* is empty.
+
+    Ref: BMA SF-18, SF-19 (C.3 variables / formulas applied per group).
+    """
+    if not cfs:
+        return {}
+    buckets = _partition_by_group_id(cfs)
+    return {gid: _aggregate_actual(group_cfs) for gid, group_cfs in buckets.items()}
+
+
+def _aggregate_scheduled_by_group(
+    cfs: list[BMAScheduledCashflow],
+) -> dict[str, BMAScheduledCashflow]:
+    """Aggregate scheduled cashflows per group_id, returning one aggregate per partition.
+
+    Same partitioning logic as :func:`_aggregate_actual_by_group`, applied to
+    scheduled cashflows.  Used in PAIRED mode to expose per-group scheduled
+    streams alongside per-group actual streams (e.g., for scheduled-vs-actual
+    decomposition reporting per group, or for PAC/TAC schedule derivation
+    that needs the scheduled stream of a specific collateral group).
+
+    Returns:
+        dict[str, BMAScheduledCashflow]: One aggregated cashflow per group,
+        keyed by stringified group_id.  Returns ``{}`` when *cfs* is empty.
+    """
+    if not cfs:
+        return {}
+    buckets = _partition_by_group_id(cfs)
+    return {gid: _aggregate_scheduled(group_cfs) for gid, group_cfs in buckets.items()}
+
+
 def _compute_waterfall(
     pool: BMAActualCashflow,
     cross_collateral_mode: CrossCollateralMode = CrossCollateralMode.NONE,
@@ -887,6 +988,16 @@ class PortfolioCashflow:
           - _pending is empty (individual cashflow objects can be GC'd)
           - _flushed is True
 
+        Per-group aggregates are also computed at flush time when any constituent
+        carries a non-None ``group_id``.  This is necessary because per-loan
+        ``group_id`` metadata only exists on individual constituents, so once
+        ``_pending`` is cleared the per-group decomposition cannot be reconstructed
+        from the whole-portfolio aggregate alone.  Callers that consume per-group
+        results post-flush (e.g. the orchestrator's grouped-portfolio artifact
+        emission) can therefore call :meth:`aggregate_actual_by_group` and
+        :meth:`aggregate_scheduled_by_group` after ``flush()`` returns without
+        re-running the engine.
+
         If persistent_history=True, appends all constituents currently in _pending
         as a new Parquet row group (O(1) per flush — no re-reads of prior data).
         Only individual constituents are written — never the aggregate.
@@ -899,11 +1010,21 @@ class PortfolioCashflow:
         the committed aggregate is moved back to _pending as a single
         super-constituent before adding the new item.
         """
-        # Trigger aggregation
+        # Trigger whole-portfolio aggregation
         if self._mode in (PortfolioMode.SCHEDULED_ONLY, PortfolioMode.PAIRED):
             _ = self.scheduled
         if self._mode in (PortfolioMode.ACTUAL_ONLY, PortfolioMode.PAIRED):
             _ = self.pool
+
+        # Trigger per-group aggregation BEFORE clearing _pending.
+        # We only pay the partition cost when at least one constituent carries
+        # an explicit group_id — pure single-pool runs (every constituent's
+        # group_id is None) skip per-group work entirely.
+        if self._has_grouped_constituents():
+            if self._mode in (PortfolioMode.SCHEDULED_ONLY, PortfolioMode.PAIRED):
+                _ = self.aggregate_scheduled_by_group()
+            if self._mode in (PortfolioMode.ACTUAL_ONLY, PortfolioMode.PAIRED):
+                _ = self.aggregate_actual_by_group()
 
         # Persist constituents to Parquet before releasing refs
         if self._persistent_history and self._history_path and self._pending:
@@ -911,6 +1032,27 @@ class PortfolioCashflow:
 
         self._pending.clear()
         self._flushed = True
+
+    def _has_grouped_constituents(self) -> bool:
+        """Return True if any pending constituent carries a non-None group_id.
+
+        Used by :meth:`flush` to decide whether per-group aggregation is worth
+        triggering.  Walks ``_pending`` and short-circuits on the first tagged
+        constituent, so the cost is O(1) for ungrouped tapes and O(k) for
+        grouped tapes (where k is the index of the first tagged constituent).
+
+        For PAIRED-mode constituents the ``group_id`` is read off the
+        underlying ``.actual`` (or ``.scheduled``) — every CashFlowPair carries
+        the same ``group_id`` on both halves because both halves derive from
+        the same source ``Loan``.
+        """
+        for c in self._pending:
+            if isinstance(c, CashFlowPair):
+                if c.actual.group_id is not None or c.scheduled.group_id is not None:
+                    return True
+            elif getattr(c, "group_id", None) is not None:
+                return True
+        return False
 
     def _write_constituents_to_parquet(self) -> None:
         """Append current _pending constituents as one row group to the Parquet file.
@@ -1109,14 +1251,7 @@ class PortfolioCashflow:
         """
         if "_scheduled" in self._committed:
             return self._committed["_scheduled"]
-        cfs: list[BMAScheduledCashflow] = []
-        for c in self._pending:
-            if isinstance(c, CashFlowPair):
-                cfs.append(c.scheduled)
-            elif isinstance(c, BMAScheduledCashflow):
-                cfs.append(c)
-            else:
-                raise TypeError(f"Cannot aggregate {type(c).__name__} for scheduled view")
+        cfs = self._extract_scheduled_constituents()
         if not cfs:
             raise ValueError("Portfolio has no scheduled cashflows to aggregate")
         result = _aggregate_scheduled(cfs)
@@ -1132,19 +1267,139 @@ class PortfolioCashflow:
         """
         if "_pool" in self._committed:
             return self._committed["_pool"]
-        cfs: list[BMAActualCashflow] = []
-        for c in self._pending:
-            if isinstance(c, CashFlowPair):
-                cfs.append(c.actual)
-            elif isinstance(c, BMAActualCashflow):
-                cfs.append(c)
-            else:
-                raise TypeError(f"Cannot aggregate {type(c).__name__} for pool view")
+        cfs = self._extract_actual_constituents()
         if not cfs:
             raise ValueError("Portfolio has no actual cashflows to aggregate")
         result = _aggregate_actual(cfs)
         self._committed["_pool"] = result
         return result
+
+    # --- Per-group lazy aggregation ---
+    #
+    # Per-loan cashflows carry `group_id` from their source Loan.  When the
+    # caller wants per-group views (multi-group RMBS deals, segment-level
+    # analytics), these methods partition the constituents by `group_id` and
+    # run the existing whole-portfolio aggregator against each partition.
+    #
+    # IMPORTANT: per-group aggregation MUST run before flush() clears _pending,
+    # because the partition step requires walking every constituent.  flush()
+    # opportunistically populates the cache (see _trigger_group_aggregation_if_needed)
+    # so callers can still get per-group results post-flush.
+
+    def aggregate_actual_by_group(self) -> dict[str, BMAActualCashflow]:
+        """Per-group aggregated actual cashflows (lazy — computed on first access, cached).
+
+        Walks every constituent, partitions them by `group_id`, and runs the
+        whole-portfolio actual aggregator (:func:`_aggregate_actual`) against
+        each partition.  The result is the dollar-summable decomposition of
+        the whole pool::
+
+            sum(group_aggregate.flow_field
+                for group_aggregate in aggregate_actual_by_group().values())
+            == self.pool.flow_field   for any FLOW field
+
+        Constituents with `group_id == None` go into the special bucket
+        ``"_ungrouped"`` so callers can detect partially-tagged tapes (mixed
+        explicit-group and ungrouped constituents).
+
+        Available in ACTUAL_ONLY and PAIRED modes.  In PAIRED mode, the
+        ``.actual`` component of each CashFlowPair is used (mirroring the
+        ``pool`` property).
+
+        Returns:
+            dict[str, BMAActualCashflow]: One aggregate per group, keyed by
+            stringified ``group_id``.  Returns ``{}`` if the portfolio has no
+            actual constituents.
+
+        Caching: result is stored in ``_committed["_pool_by_group"]`` and
+        invalidated by any portfolio mutation (via :meth:`_invalidate`).
+
+        Lifecycle: if called on a flushed portfolio that did NOT have
+        per-group aggregation triggered before flush, this method falls back
+        to the cached aggregate result if available — but with only a single
+        ``"_ungrouped"`` bucket since per-loan group_id is no longer
+        accessible.  To guarantee per-group results post-flush, callers
+        should ensure :meth:`flush` runs after constituents with non-None
+        group_ids are added (the flush implementation auto-triggers
+        per-group aggregation in that case).
+        """
+        if "_pool_by_group" in self._committed:
+            return self._committed["_pool_by_group"]
+        cfs = self._extract_actual_constituents()
+        if not cfs:
+            return {}
+        result = _aggregate_actual_by_group(cfs)
+        self._committed["_pool_by_group"] = result
+        return result
+
+    def aggregate_scheduled_by_group(self) -> dict[str, BMAScheduledCashflow]:
+        """Per-group aggregated scheduled cashflows (lazy — computed on first access, cached).
+
+        Same partition-and-aggregate pattern as :meth:`aggregate_actual_by_group`,
+        applied to scheduled cashflows.  Available in SCHEDULED_ONLY and PAIRED
+        modes.  In PAIRED mode, the ``.scheduled`` component of each
+        CashFlowPair is used.
+
+        Returns:
+            dict[str, BMAScheduledCashflow]: One aggregate per group, keyed by
+            stringified ``group_id``.  Returns ``{}`` if the portfolio has no
+            scheduled constituents.
+
+        Caching: result is stored in ``_committed["_scheduled_by_group"]``.
+        """
+        if "_scheduled_by_group" in self._committed:
+            return self._committed["_scheduled_by_group"]
+        cfs = self._extract_scheduled_constituents()
+        if not cfs:
+            return {}
+        result = _aggregate_scheduled_by_group(cfs)
+        self._committed["_scheduled_by_group"] = result
+        return result
+
+    # --- Constituent extraction helpers ---
+    #
+    # Both .pool / .scheduled and .aggregate_*_by_group need to walk _pending
+    # and unwrap CashFlowPair constituents into BMAActualCashflow /
+    # BMAScheduledCashflow.  Centralized here so the unwrap logic stays in
+    # one place.
+
+    def _extract_actual_constituents(self) -> list[BMAActualCashflow]:
+        """Walk _pending and return the BMAActualCashflow leaves.
+
+        For PAIRED mode constituents (CashFlowPair) returns the ``.actual``
+        component; for ACTUAL_ONLY constituents returns them directly.
+        Raises ``TypeError`` for any other constituent type encountered.
+        """
+        out: list[BMAActualCashflow] = []
+        for c in self._pending:
+            if isinstance(c, CashFlowPair):
+                out.append(c.actual)
+            elif isinstance(c, BMAActualCashflow):
+                out.append(c)
+            else:
+                raise TypeError(
+                    f"Cannot extract actual cashflow from {type(c).__name__}"
+                )
+        return out
+
+    def _extract_scheduled_constituents(self) -> list[BMAScheduledCashflow]:
+        """Walk _pending and return the BMAScheduledCashflow leaves.
+
+        For PAIRED mode constituents (CashFlowPair) returns the ``.scheduled``
+        component; for SCHEDULED_ONLY constituents returns them directly.
+        Raises ``TypeError`` for any other constituent type encountered.
+        """
+        out: list[BMAScheduledCashflow] = []
+        for c in self._pending:
+            if isinstance(c, CashFlowPair):
+                out.append(c.scheduled)
+            elif isinstance(c, BMAScheduledCashflow):
+                out.append(c)
+            else:
+                raise TypeError(
+                    f"Cannot extract scheduled cashflow from {type(c).__name__}"
+                )
+        return out
 
     # --- Mode extraction (Part G) ---
 
