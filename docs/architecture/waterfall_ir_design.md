@@ -1004,15 +1004,19 @@ us:
   optional integrity check, not a correctness requirement at
   runtime.
 
-### L. Drop CONCURRENT from PaymentStyle
+### L. Drop CONCURRENT from PaymentStyle — already a fact
 
-`CONCURRENT` is a synonym for `PRO_RATA`. Drop it.
+**Verified.** `PaymentStyle` is already two values:
 
 ```python
 class PaymentStyle(StrEnum):
     SEQUENTIAL = "SEQUENTIAL"
     PRO_RATA   = "PRO_RATA"
 ```
+
+`CONCURRENT` was never in the code; the IR-reference table earlier
+in this doc listed it incorrectly. **No code change required.**
+The doc references to `CONCURRENT` have been removed.
 
 ### M. Reserve rules are not a separate rule type; they're rules sourced from / targeted to accounts
 
@@ -1309,6 +1313,282 @@ The result is a schema where:
   derived `schedule_contract` directly without re-deriving.
 - Behavior — sequential vs pro-rata, schedule-cap vs cleanup,
   account-sourced vs cash-sourced — lives entirely on the rule.
+
+---
+
+## Round 3 fresh review (May 2026) — grounded against runtime
+
+Before any code change, every Round 3 proposal was re-verified
+against the actual runtime + schemas. Findings:
+
+| # | Proposal | Verdict | Notes |
+|---|---|---|---|
+| G | Collapse `TrancheType` (13) + `TrancheBehavior` (4) → `TrancheKind` (8) | Confirmed | Runtime uses `tranche_type == "RESIDUAL"` (1 site) and `tranche_behavior == "Z"` (3 sites). Replaceable with `kind == TrancheKind.RESIDUAL` / `kind == TrancheKind.Z`. PAC/TAC stay as kinds; validator enforces `schedule_contract` non-empty. |
+| H | Unify 6 BondDef relationship fields into one `relations: list[TrancheRelation]` | Confirmed with refinement | `support_tranches` (PAC support), `supported_by_tranches` (Z accretion), `tracks_bonds` (IO/PO mirror — used in `ops.py`), `parent_tranche` + `relation_type: StructureRelation` + `notional_ratio` (existing `StructureRelation` enum is `FLOATER_INVERSE \| IO_PO \| Z_ACCRUAL` — only 3 values). Migration to a 7-value `TrancheRelationType` covers IO/inverse-IO/super-floater/MACR with no behavior loss. Big migration in tranche_behaviors.py and the IO/PO ops. |
+| I | Coupon as `RateOrSchedule` for step-ups | Confirmed | New feature; runtime currently treats coupon as scalar. Touches coupon evaluation + Verus-style step-up bonds. |
+| J | Rename `size_dollars`/`size_pct` → `notional`/`notional_pct_of_collateral` | Confirmed | Read in 4 places at workspace allocation (`runtime.py:190-254`). Pure rename + fixture migration. |
+| K | Two-phase derivation; drop `schedule_speed_target` | **Confirmed AND already implemented** | `schedule_derivation.py` already exists at `src/bma_cfengine_app/orchestrator/deals/` with `derive_pac_schedule(...)` (lower envelope of two PSA projections) and `derive_tac_schedule(...)`. Runtime never reads speeds — only `schedule_contract`. Proposal collapses to just dropping the redundant `schedule_speed_target` field. |
+| **L** | **Drop `PaymentStyle.CONCURRENT`** | **DOC WAS WRONG** | The current enum has only `SEQUENTIAL \| PRO_RATA`. `CONCURRENT` was never in the code. **No code change needed.** |
+| M | Reserve / recourse rule consolidation | Confirmed with refinement | `PAY_FROM_RESERVE_INTEREST` decrements bond's `int_shortfall` ledger and accumulates `opt_interest` (`runtime.py:1635-1642`). `PAY_FROM_RESERVE_PRINCIPAL` increments bond principal/balance. `PAY_RECOURSE_*` draws against pseudo-bond capacity. **Full collapse needs a `coverage_mode: NORMAL \| INTEREST_SHORTFALL \| PRINCIPAL_ACCELERATION` field** to preserve the shortfall-ledger semantics. Recourse pseudo-bonds are also valid `from_sources` since they have a balance to decrement. Recommend phased migration. |
+| N | Drop `COLLATERAL` aliases; rename `INT_CASH`/`PRIN_CASH` → `CASH_INT`/`CASH_PRIN` | Confirmed | Runtime token resolver has explicit `if key == "INT_CASH"` checks; rename touches `runtime.py:765-787` plus every fixture. The `COLLATERAL` alias is checked at `runtime.py:769, 787, 1421` and is not used by any current fixture. |
+| O | Rename `AccountType` → `AccountCategory` | Confirmed | Already verified to be a passthrough label only. |
+| Q | Implement `minimum_basis`/`starting_basis` per-period | **SHIPPED** (May 2026) | Done. |
+
+### PAC/TAC schedule derivation (your earlier question)
+
+> Are PAC/TAC schedules driven off of collateral amortization or
+> targeted bond amortization? Where is the CPR/PSA speed applied
+> — the bond balance or the collateral balance?
+
+**Answer:** the CPR/PSA speed is applied to the **collateral
+(pool)**, not to the bond. The bond's planned balance schedule is
+**derived** by running the deal's principal allocation logic
+against the pool's projected cashflows under each speed in the
+PAC range.
+
+The current implementation is in
+`src/bma_cfengine_app/orchestrator/deals/schedule_derivation.py`.
+The algorithm:
+
+```
+1. project_pool_principal(pool_balance, wac, term, psa_low, n)
+   → array of pool principal cashflow per period at psa_low
+2. project_pool_principal(pool_balance, wac, term, psa_high, n)
+   → array of pool principal cashflow per period at psa_high
+3. _track_pac_principal(proj_lo, pac_size)
+   → PAC absorbs pool principal each period up to its
+     remaining balance (sequential PAC-first allocation), under psa_low
+4. _track_pac_principal(proj_hi, pac_size) → same under psa_high
+5. For each period t:
+     target[t] = MIN(pac_principal_lo[t], pac_principal_hi[t])
+   → "lower envelope" — the principal amount the PAC is
+     guaranteed to receive at any speed within the band
+6. schedule_contract = [{period, target_principal} for t]
+   (legacy form; newer entries use {period, target_balance}
+    where target_balance is the integrated remaining balance)
+```
+
+The PAC is guaranteed to amortize at *at least* the schedule rate
+across the entire PSA band because at each period it receives at
+least `MIN(pac_lo, pac_hi)` worth of principal. Outside the band
+the support tranches are exhausted (high speed) or the pool just
+doesn't deliver enough principal (low speed) and the PAC schedule
+breaks.
+
+TAC uses a single PSA target rather than a band. Same algorithm,
+no envelope step. Asymmetric protection — covers extension only,
+not contraction.
+
+**Implication for proposal K:** the design-time schedule
+derivation is ALREADY structured the right way. The bond carries
+the speeds (PAC band edges or TAC target) as design-time
+metadata, the structuring tool runs the derivation against
+collateral projections, and the resulting `schedule_contract`
+goes into the IR. The runtime just consumes the schedule. The
+only Round 3 cleanup is dropping the redundant
+`schedule_speed_target` field (TAC = degenerate band where
+low == high) and confirming the structuring tool handles
+re-derivation when bond size, collateral assumptions, or speeds
+change.
+
+### Refinement to proposal M (reserve rule consolidation)
+
+The proposed full collapse needs a `coverage_mode` field to
+preserve the shortfall-ledger semantic that
+`PAY_FROM_RESERVE_INTEREST` currently encodes (decrements bond's
+`int_shortfall`, accumulates `opt_interest`).
+
+```python
+class CoverageMode(StrEnum):
+    NORMAL                 = "NORMAL"                  # default; bond receives current-period interest/principal
+    INTEREST_SHORTFALL     = "INTEREST_SHORTFALL"      # covers carryover; decrements bond.int_shortfall
+    PRINCIPAL_ACCELERATION = "PRINCIPAL_ACCELERATION"  # extra principal; same balance/principal accumulation as normal pay
+
+class RuleNode(BaseModel):
+    ...
+    coverage_mode: CoverageMode = CoverageMode.NORMAL
+```
+
+Then the migration:
+
+| Today | After |
+|---|---|
+| `PAY_FROM_RESERVE_INTEREST from=[Reserve] to=[A]` | `PAY_INTEREST from=[Reserve] to=[A] coverage_mode=INTEREST_SHORTFALL` |
+| `PAY_FROM_RESERVE_PRINCIPAL from=[Reserve] to=[A]` | `PAY_PRINCIPAL from=[Reserve] to=[A] coverage_mode=PRINCIPAL_ACCELERATION` |
+| `PAY_FROM_RESERVE from=[Reserve] to=[A]` | `PAY_INTEREST from=[Reserve] to=[A] coverage_mode=NORMAL` (default) |
+| `PAY_RECOURSE_INTEREST from=[RECOURSE_LINE] to=[A]` | `PAY_INTEREST from=[RECOURSE_LINE] to=[A] coverage_mode=INTEREST_SHORTFALL` (recourse pseudo-bonds work as account-like sources) |
+| `PAY_RECOURSE_PRINCIPAL from=[RECOURSE_LINE] to=[A]` | `PAY_PRINCIPAL from=[RECOURSE_LINE] to=[A] coverage_mode=PRINCIPAL_ACCELERATION` |
+| `PAY_TO_RESERVE from=[CASH] to=[Reserve]` | `PAY_TO_ACCOUNT from=[CASH] to=[Reserve]` |
+
+Net: -5 rule types, +1 rule type rename, +1 enum, +1 rule field.
+Phased migration recommended.
+
+---
+
+## R. Direct paired-cashflow input — invert the LDCMA adapter
+
+**Current state.** The deal runtime accepts an LDCMA-format
+`CollateralCashflows` Pydantic model (22 dict-keyed arrays:
+`balance`, `principal`, `interest`, `cashflow`, `loss`, `prepbal`,
+`defbal`, `recovery`, `principal_sched`, `principal_unsched`,
+`cpr`, `cdr`, `sev`, `dq`, `surv_fac`, `sched_coupon`,
+`sched_netcoupon`, `coupon`, `effcoupon`, `sched_balance`,
+`discount_factor`, `cfdate`).
+
+The BMA engine produces typed cashflow objects:
+
+- `BMAScheduledCashflow` (frozen dataclass) — scheduled cashflow under loan contract terms (no prepays, no defaults)
+- `BMAActualCashflow` (frozen dataclass) — performed cashflow with prepays + defaults applied
+- `CashFlowPair` — wraps `(scheduled, actual)` for the same loan
+- `PortfolioCashflow` in `PAIRED` mode — collection of pairs, the canonical multi-loan / portfolio form
+
+The current input flow is backwards from what the user wants:
+
+```
+BMA engine output                    CURRENT FLOW
+═════════════════                   ════════════
+BMAActualCashflow ─┐
+PortfolioCashflow ─┤── adapter ──→ CollateralCashflows ──→ runtime
+CashFlowPair      ─┘   (from_*)    (LDCMA dict-keyed)
+```
+
+The adapter is doing field-name translation (`perf_bal` →
+`balance`, `act_int` → `interest`, etc.) on every run.
+
+### Proposed flow (R)
+
+```
+BMA engine output                    NEW FLOW
+═════════════════                   ════════
+PortfolioCashflow (PAIRED) ─────→ runtime (consumes natively)
+                                   ↑
+                                   │
+                            (parity tests only)
+                                   │
+LDCMA collCF dict ──→ ldcma_to_paired ──→ PortfolioCashflow (PAIRED)
+```
+
+The deal accepts a `PortfolioCashflow` in `PAIRED` mode directly.
+LDCMA-format input becomes a parity-test artifact, reached through
+a small adapter `ldcma_to_paired(...)` that synthesizes a
+`PortfolioCashflow` from the LDCMA dict.
+
+### Decisions captured (May 2026 conversation)
+
+| Decision point | Resolution |
+|---|---|
+| Canonical input shape | `PortfolioCashflow` in `PAIRED` mode. Multi-group deals: one `PortfolioCashflow` per group (`GroupedPortfolioCashflowInput`). |
+| Use of the scheduled stream | Both — output / audit (scheduled-vs-actual decomposition) AND PAC/TAC schedule derivation. |
+| Internal naming convention | BMA native (`perf_bal`, `act_int`, `act_am`, `vol_prepay`, `prin_loss`, etc.). Runtime aligns with the engine vocabulary; LDCMA-format becomes parity-only. |
+| LDCMA support | Adapter (LDCMA → PAIRED) for parity tests against legacy LDCMA fixtures. Existing forward adapters (`from_actual_cashflow`, `from_portfolio_cashflow`, `from_collateral_dict`) become parity-only. |
+
+### Schema impact
+
+```python
+# New canonical input variants in schemas/input.py:
+
+class PairedCollateralInput(BaseModel):
+    """Single-pool deal: one PortfolioCashflow in PAIRED mode."""
+    mode: Literal[CollateralInputMode.PAIRED] = CollateralInputMode.PAIRED
+    cashflow: PortfolioCashflow  # arbitrary_types_allowed
+    model_config = {"arbitrary_types_allowed": True}
+
+class GroupedPairedCollateralInput(BaseModel):
+    """Multi-group deal: one PAIRED PortfolioCashflow per group."""
+    mode: Literal[CollateralInputMode.PAIRED_GROUPED] = CollateralInputMode.PAIRED_GROUPED
+    groups: dict[str, PortfolioCashflow]
+    model_config = {"arbitrary_types_allowed": True}
+
+# Old variants stay for parity testing but are deprecated:
+class PooledCollateralInput(BaseModel):  ...    # LDCMA-format
+class GroupedCollateralInput(BaseModel): ...    # LDCMA-format
+```
+
+Plus a new `CollateralInputMode.PAIRED` and `PAIRED_GROUPED`.
+
+### Runtime impact
+
+`_extract_collateral_arrays(run_input)` is rewritten to dispatch on `mode`:
+
+```python
+if mode == PAIRED:
+    cf = run_input.collateral.cashflow  # PortfolioCashflow
+    actual = cf.aggregate_actual()      # sum BMAActualCashflow across portfolio
+    sched  = cf.aggregate_scheduled()   # sum BMAScheduledCashflow across portfolio
+    return {
+        "perf_bal":   actual.perf_bal,    # was "balance"
+        "act_am":     actual.act_am,      # was "principal_sched"
+        "vol_prepay": actual.vol_prepay,  # was "principal_unsched"
+        "act_int":    actual.act_int,     # was "interest" (gross)
+        "svc_billed": actual.svc_billed,
+        "prin_loss":  actual.prin_loss,   # was "loss"
+        "prin_recov": actual.prin_recov,  # was "recovery"
+        "new_def":    actual.new_def,
+        "scheduled":  sched,              # available for derivation / output
+    }, ...
+elif mode == POOLED:                    # LDCMA legacy path
+    return _extract_legacy_ldcma_arrays(run_input.collateral.collateral)
+```
+
+The runtime's internal `cash_avail`, `interest_avail`,
+`principal_avail` arrays are populated from the BMA-native
+fields. The internal token names update accordingly under
+proposal N (`CASH_INT`, `CASH_PRIN`).
+
+### Adapter impact
+
+```python
+# New (parity tests only):
+def ldcma_to_paired(
+    coll: dict[str, Any],
+    *,
+    initial_balance: float,
+    wac_pct: float,
+    term_months: int,
+) -> PortfolioCashflow:
+    """Synthesize a PortfolioCashflow PAIRED from an LDCMA collCF dict.
+
+    Used to drive parity tests against LDCMA fixtures. The synthesized
+    BMAScheduledCashflow uses contract terms; the BMAActualCashflow
+    uses the LDCMA arrays. Fields the LDCMA dict doesn't provide
+    (svc_billed, fcl, exp_am separately) are stubbed at zero or
+    derived from available data.
+    """
+    ...
+
+# Drop / archive (no longer the primary input adapter):
+# - from_actual_cashflow
+# - from_portfolio_cashflow
+# - from_collateral_dict (becomes ldcma_to_paired's friend)
+```
+
+### Migration phases (R)
+
+1. Add the new `PairedCollateralInput` + `GroupedPairedCollateralInput` variants alongside the existing LDCMA variants. Tests pass.
+2. Add the `_extract_collateral_arrays` PAIRED-mode branch. Pin behavior with a parity test running the same FNR fixture through both PAIRED and LDCMA paths. Tests pass.
+3. Migrate the FNR 2006-018 fixture to PAIRED input (it already uses BMA `actual_cashflow_from_loan` as the upstream — switch the adapter call from `from_actual_cashflow` to `BMAActualCashflow → PortfolioCashflow PAIRED` directly). Tests pass.
+4. Migrate other fixtures and `deal_library.py` deals.
+5. Add `ldcma_to_paired` and write parity tests for the LDCMA fixtures (LDCMA → paired → runtime; produce identical bond cashflows to LDCMA → ldcma → runtime).
+6. Internal naming refresh: when proposal N renames `INT_CASH`/`PRIN_CASH` → `CASH_INT`/`CASH_PRIN`, also rename internal arrays `interest_avail`/`principal_avail` → `cash_int_avail`/`cash_prin_avail`. Or keep the internal names BMA-native: `act_int_avail`/`act_am_plus_vol_prepay_avail` (clunky) — pending discussion.
+7. Deprecate then drop `from_actual_cashflow`, `from_portfolio_cashflow`, `from_collateral_dict` after a clean grace period.
+
+### Open questions on R (need user feedback)
+
+The implementation plan needs answers to:
+
+1. **PortfolioCashflow API surface.** `PortfolioCashflow` in PAIRED mode holds `list[CashFlowPair]`. Does the runtime need per-loan resolution, or does it consume the aggregate (sum of all `actual` cashflows + sum of all `scheduled`)? My read: runtime needs the aggregate; per-loan is for engine-layer ops. Confirm or override.
+
+2. **Multi-group routing.** A grouped deal currently has `dict[str, CollateralCashflows]`. New form: `dict[str, PortfolioCashflow]`. Does each group's PortfolioCashflow stay independent (no cross-group ops in the engine), or do we need a higher-level `MultiGroupCashflow` that knows about both?
+
+3. **Internal field naming under N + R combined.** Two reasonable conventions:
+   - **BMA-native everywhere**: runtime arrays named `perf_bal`, `act_int`, `vol_prepay`, etc. Tokens are `CASH_INT` / `CASH_PRIN` (composed names that don't directly match BMA but mean "interest cash" / "principal cash").
+   - **Renamed / decoupled**: runtime uses `cash_int`, `cash_prin`, `loss`, `balance`. Tokens follow the same. BMA's native names appear only at the input boundary.
+   
+   Which do you prefer?
+
+4. **PAC/TAC re-derivation triggers in the structuring tool.** When does the structuring UI re-run `derive_pac_schedule(...)` to refresh `schedule_contract`?
+   - On any change to: speed band edges, PSA model, pool balance, pool WAC, pool term, bond size, support stack composition.
+   - Should it be eager (every keystroke updates the schedule) or batched (recompute on Save)?
 
 ---
 
