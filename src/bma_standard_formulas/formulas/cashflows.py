@@ -498,15 +498,34 @@ class BMAScheduledCashflow:
     bal_path_is_estimated: bool = field(default=False, metadata={"kind": FieldKind.META})  # True if BAL path uses estimated historical rates
     bal_path_note: str = field(default="", metadata={"kind": FieldKind.META})  # explanation when bal_path_is_estimated
 
-    def __post_init__(self) -> None:
-        """Auto-assign cf_id if not provided, then lock all arrays to read-only.
+    # --- Derived fields (computed in __post_init__; never passed to __init__) ---
+    # Convenience FLOW field combining the two primitive FLOW components
+    # (principal_paid + interest_paid). Pre-computed at construction so
+    # downstream consumers (deal runtime, analytics, reporting) don't
+    # recompute it every period. Linear under summation: the aggregator
+    # sums the primitives, then __post_init__ re-derives sched_cash on
+    # the new instance. The "derived" metadata flag tells the aggregator
+    # to skip this field when iterating FLOW fields by kind.
+    sched_cash: np.ndarray = field(
+        init=False,
+        default_factory=lambda: np.empty(0, dtype=np.float64),
+        metadata={"kind": FieldKind.FLOW, "derived": True},
+    )
 
-        Two responsibilities:
-          1. If cf_id is empty (default), generate a UUID4 automatically.
+    def __post_init__(self) -> None:
+        """Compute derived fields, auto-assign cf_id if needed, freeze all arrays.
+
+        Three responsibilities, in this order:
+          1. Derive ``sched_cash`` = ``principal_paid + interest_paid``.
+             Numpy ``+`` returns a new array, so we don't accidentally
+             mutate the inputs and the derived array is independent
+             memory ready to be frozen alongside the primitives.
+          2. If cf_id is empty (default), generate a UUID4 automatically.
              Uses object.__setattr__ to bypass frozen=True (same mechanism
              Python's own __init__ uses on frozen dataclasses).
-          2. Freeze all numpy array fields via _freeze_arrays() to prevent
-             element-level mutation (e.g. cf.ending_balance[5] = 0).
+          3. Freeze all numpy array fields via _freeze_arrays() to prevent
+             element-level mutation (e.g. cf.ending_balance[5] = 0). The
+             derived sched_cash array is included in this sweep.
 
         Args:
             None (called automatically by Python after __init__).
@@ -514,6 +533,7 @@ class BMAScheduledCashflow:
         Returns:
             None.
         """
+        object.__setattr__(self, "sched_cash", self.principal_paid + self.interest_paid)
         if not self.cf_id:
             object.__setattr__(self, "cf_id", _next_cf_id())
         _freeze_arrays(self)
@@ -1267,10 +1287,83 @@ class BMAActualCashflow:
     maturity_date: np.datetime64 | None = field(default=None, metadata={"kind": FieldKind.META})
     scheduled_loan_id: int | None = field(default=None, metadata={"kind": FieldKind.META})
 
-    def __post_init__(self) -> None:
-        """Auto-assign cf_id if not provided, then lock all arrays to read-only.
+    # --- Derived fields (computed in __post_init__; never passed to __init__) ---
+    # Pre-computed combinations of primitive flows / stocks that downstream
+    # consumers (deal runtime, analytics, reporting) reference directly.
+    # All are linear under summation, so the aggregator sums the primitives
+    # and the new aggregate's __post_init__ re-derives these on the
+    # constructed instance. The "derived" metadata flag tells the aggregator
+    # to skip them when iterating FLOW / STOCK fields by kind.
+    act_prin: np.ndarray = field(
+        init=False,
+        default_factory=lambda: np.empty(0, dtype=np.float64),
+        metadata={"kind": FieldKind.FLOW, "derived": True},
+    )
+    """Combined principal cash = act_am + vol_prepay.
 
-        See BMAScheduledCashflow.__post_init__ for full explanation.
+    Sum of scheduled-amortization and voluntary-prepayment dollars
+    delivered to the trust each period. ``act_am`` is what the contract
+    requires; ``vol_prepay`` is the voluntary excess. ``act_prin`` is
+    the per-period principal stream the deal waterfall consumes.
+    """
+    act_cash: np.ndarray = field(
+        init=False,
+        default_factory=lambda: np.empty(0, dtype=np.float64),
+        metadata={"kind": FieldKind.FLOW, "derived": True},
+    )
+    """Combined gross collateral cash = act_prin + act_int.
+
+    Total dollar cashflow the collateral generates each period BEFORE
+    any trust-level servicer fees, advances, pass-through splits, or
+    cross-collateralization. The trust waterfall (PortfolioCashflow's
+    _compute_waterfall) further decomposes this into svc_paid /
+    pt_principal / pt_interest, etc.
+    """
+    total_bal: np.ndarray = field(
+        init=False,
+        default_factory=lambda: np.empty(0, dtype=np.float64),
+        metadata={"kind": FieldKind.STOCK, "derived": True},
+    )
+    """Total outstanding balance = perf_bal + fcl.
+
+    The deal-mechanics "pool balance" — every dollar still owed by the
+    underlying loans to the trust, including loans in the foreclosure
+    pipeline that have defaulted but not yet liquidated. This is the
+    convention used by:
+
+      - Bond credit enhancement % calculations (CE = sub_bal / total_bal)
+      - Pool factor reporting (factor = total_bal[t] / total_bal[0])
+      - Reserve account minimums tied to COLLATERAL_BALANCE basis
+      - Step-down date tests comparing senior balance to pool balance
+      - Pro-rata share weights for cross-bond allocations
+
+    During the foreclosure pipeline (after default, before liquidation),
+    a defaulted loan's balance moves from ``perf_bal`` to ``fcl``. Bond
+    writedowns happen at LIQUIDATION (when ``prin_loss`` is realized),
+    not at default time, so the loan stays in ``total_bal`` while in
+    ``fcl`` and the bonds remain at their pre-loss balances.
+
+    Use ``perf_bal`` directly if the prospectus specifies "Performing
+    Balance" (rare, but agency CRT delinquency triggers sometimes do).
+    """
+
+    def __post_init__(self) -> None:
+        """Compute derived fields, auto-assign cf_id if needed, freeze all arrays.
+
+        Three responsibilities, in this order:
+          1. Derive the four cashflow shortcuts:
+                act_prin  = act_am + vol_prepay      (combined principal)
+                act_cash  = act_prin + act_int       (combined gross cash)
+                total_bal = perf_bal + fcl           (total outstanding)
+             Numpy ``+`` returns new arrays, so we don't accidentally
+             mutate the inputs and the derived arrays are independent
+             memory ready to be frozen alongside the primitives.
+          2. If cf_id is empty (default), generate a UUID4 automatically.
+             Uses object.__setattr__ to bypass frozen=True (same mechanism
+             Python's own __init__ uses on frozen dataclasses).
+          3. Freeze all numpy array fields via _freeze_arrays() to prevent
+             element-level mutation (e.g. cf.perf_bal[5] = 0). All four
+             derived arrays are included in this sweep.
 
         Args:
             None (called automatically by Python after __init__).
@@ -1278,6 +1371,9 @@ class BMAActualCashflow:
         Returns:
             None.
         """
+        object.__setattr__(self, "act_prin", self.act_am + self.vol_prepay)
+        object.__setattr__(self, "act_cash", self.act_prin + self.act_int)
+        object.__setattr__(self, "total_bal", self.perf_bal + self.fcl)
         if not self.cf_id:
             object.__setattr__(self, "cf_id", _next_cf_id())
         _freeze_arrays(self)

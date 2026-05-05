@@ -59,17 +59,27 @@ def _build_schema(cls: type) -> pa.Schema:
     """Build a PyArrow schema from a cashflow dataclass's FieldKind-tagged fields.
 
     Includes cf_id (string) and cf_type (string) as the first two columns,
-    then all array fields (FLOW, STOCK, RATIO) as float64 and period as int64.
+    then all primitive array fields (FLOW, STOCK, RATIO) as float64 and
+    period as int64. Derived fields (those tagged with metadata
+    ``"derived": True``) are EXCLUDED from the on-disk schema — they are
+    fully recomputed by the dataclass __post_init__ on read from the
+    primitive fields, so persisting them would be redundant storage and
+    would also break round-trip (init=False fields can't be passed to
+    __init__).
 
     Args:
         cls:  BMAScheduledCashflow or BMAActualCashflow.
 
     Returns:
-        pa.Schema with one column per array field plus cf_id and cf_type.
+        pa.Schema with one column per primitive array field plus cf_id
+        and cf_type.
     """
     columns = [("cf_id", pa.string()), ("cf_type", pa.string())]
     for f in dc_fields(cls):
         kind = f.metadata.get("kind")
+        if f.metadata.get("derived"):
+            # Derived fields are recomputed on read; never written to disk.
+            continue
         if f.name == "period":
             columns.append((f.name, pa.int64()))
         elif kind in (FieldKind.FLOW, FieldKind.STOCK, FieldKind.RATIO):
@@ -192,6 +202,9 @@ def _cf_to_arrow_table(cf, schema: pa.Schema, cf_type: str) -> pa.Table:
     }
     for f in dc_fields(type(cf)):
         kind = f.metadata.get("kind")
+        if f.metadata.get("derived"):
+            # Derived fields are recomputed by __post_init__ on read; never written.
+            continue
         if f.name == "period":
             arrays[f.name] = pa.array(getattr(cf, f.name), type=pa.int64())
         elif kind in (FieldKind.FLOW, FieldKind.STOCK, FieldKind.RATIO):
@@ -204,6 +217,20 @@ def _cf_to_arrow_table(cf, schema: pa.Schema, cf_type: str) -> pa.Table:
 def _arrow_table_to_cf(table: pa.Table, cls: type, meta: dict) -> object:
     """Convert a PyArrow Table back to a cashflow using direct numpy extraction.
 
+    Derived fields (those with metadata ``"derived": True``, e.g. act_prin,
+    act_cash, total_bal, sched_cash) are skipped on read for two reasons:
+
+      1. They are computed by the dataclass ``__post_init__`` from primitive
+         flows / stocks, so passing them as constructor kwargs is unnecessary.
+      2. They are declared with ``init=False``, so the constructor would
+         reject them as keyword arguments.
+
+    Defensively filtering on read keeps the path robust against older
+    Parquet files written before the derived fields existed (or by future
+    callers writing additional columns). The current write path
+    (``_cf_to_table``) also skips derived fields, so a fresh round-trip
+    never produces extra columns.
+
     Args:
         table:  Arrow table with array field columns (cf_id and cf_type excluded).
         cls:    BMAScheduledCashflow or BMAActualCashflow.
@@ -212,9 +239,12 @@ def _arrow_table_to_cf(table: pa.Table, cls: type, meta: dict) -> object:
     Returns:
         A new frozen cashflow instance.
     """
+    derived_field_names = {
+        f.name for f in dc_fields(cls) if f.metadata.get("derived")
+    }
     kwargs: dict = {}
     for col_name in table.column_names:
-        if col_name in ("cf_id", "cf_type"):
+        if col_name in ("cf_id", "cf_type") or col_name in derived_field_names:
             continue
         kwargs[col_name] = table.column(col_name).to_numpy()
     kwargs.update(meta)

@@ -246,10 +246,15 @@ def _aggregate_scheduled(cfs: list[BMAScheduledCashflow]) -> BMAScheduledCashflo
     # --- Sum FLOW fields across constituents (metadata-driven) ---
     # fields_by_kind queries the FieldKind.FLOW tag on each dataclass field,
     # so adding a new FLOW field to BMAScheduledCashflow automatically includes
-    # it in aggregation without changing this function.
+    # it in aggregation without changing this function. Derived FLOW fields
+    # (those tagged with metadata "derived": True, e.g. sched_cash) are
+    # skipped here — they are recomputed by the new aggregate's __post_init__
+    # from the summed primitives, so summing them across constituents would
+    # be redundant work and add no information.
     flow_sums: dict[str, np.ndarray] = {
         f.name: _pad_sum_field(cfs, f.name, n)
         for f in fields_by_kind(BMAScheduledCashflow, FieldKind.FLOW)
+        if not f.metadata.get("derived")
     }
 
     # STOCK fields (beginning_balance, ending_balance) are also directly summable
@@ -540,7 +545,13 @@ def _aggregate_actual(cfs: list[BMAActualCashflow]) -> BMAActualCashflow:
     #
     # Columns: all FLOW fields first (auto-discovered via FieldKind metadata),
     # then sch_am and adb (STOCK but directly additive at pool level).
-    flow_field_names = [f.name for f in fields_by_kind(BMAActualCashflow, FieldKind.FLOW)]
+    # Derived FLOW fields (metadata "derived": True, e.g. act_prin / act_cash)
+    # are skipped — they're recomputed on the new aggregate's __post_init__
+    # from the summed primitives, so summing them here would be redundant.
+    flow_field_names = [
+        f.name for f in fields_by_kind(BMAActualCashflow, FieldKind.FLOW)
+        if not f.metadata.get("derived")
+    ]
     all_names = flow_field_names + ["sch_am", "adb"]
     acc = np.zeros((len(all_names), n), dtype=np.float64)
     age_weighted = np.zeros(n, dtype=np.float64)
