@@ -22,8 +22,14 @@ from .ops import (
     update_bonds_post_ws,
     update_bonds_pre_ws,
 )
+from bma_standard_formulas.formulas.cashflows import (
+    BMAActualCashflow,
+    BMAScheduledCashflow,
+)
+
 from .schemas.common import MinimumBasis, RuleType, TriggerState
 from .schemas.input import (
+    CollateralCashflows,
     DealRunInput,
     GroupedCollateralInput,
     PairedCollateralInput,
@@ -120,21 +126,40 @@ class CompiledRulePlan:
 
 @dataclass
 class ExecutionContext:
-    """Mutable state for one scenario run."""
+    """Mutable state for one scenario run.
+
+    The runtime carries collateral cashflow data as typed BMA objects
+    (``BMAActualCashflow`` and optionally ``BMAScheduledCashflow``) rather
+    than dict-of-arrays. All read sites use attribute access
+    (``ctx.actual.perf_bal[i]``, ``ctx.actual.act_cash[i]``, etc.) so the
+    type checker can catch field-name typos at edit time and there's no
+    string-keyed indirection to maintain.
+
+    For PAIRED collateral inputs, ``actual`` and ``scheduled`` come
+    directly from ``portfolio.pool`` and ``portfolio.scheduled``. For
+    legacy LDCMA-format inputs, ``actual`` is synthesized at the input
+    boundary by ``_ldcma_to_bma_actual``; ``scheduled`` is None (LDCMA
+    inputs don't carry a paired scheduled stream).
+
+    The ``actual_by_group`` and ``scheduled_by_group`` dicts hold per-group
+    aggregates produced by Phase 0A's group-aware aggregation, used to
+    route ``GROUP_<id>_*`` source tokens to the right pool. Empty for
+    single-pool deals.
+    """
 
     scenario_name: str
-    collateral: dict[str, np.ndarray]
+    actual: BMAActualCashflow                                          # whole-pool actual cashflow
     bonds: dict[str, BondWorkspace]
     accounts: dict[str, AccountWorkspace]
     fee_defs_by_name: dict[str, Any]
     compiled_rules: list[CompiledRulePlan]
+    scheduled: BMAScheduledCashflow | None = None                      # whole-pool scheduled (PAIRED only; None for LDCMA)
     trigger_states: dict[str, bool] = field(default_factory=dict)
     calculation_values: dict[str, float] = field(default_factory=dict)
     virtual_sources: dict[str, np.ndarray] = field(default_factory=dict)
     cash_avail: np.ndarray | None = None
     # Independent pool-interest and pool-principal streams, populated each
-    # period from `collateral["act_int"]` and `collateral["principal"]`
-    # (the latter being the combined act_am + vol_prepay BMA-derived stream).
+    # period from ``actual.act_int`` and ``actual.act_prin`` respectively.
     # Rules that reference source key `INT_CASH` or `PRIN_CASH` draw from
     # these instead of the combined `CASH` stream, so PAY_INTEREST and
     # PAY_PRINCIPAL rules cannot accidentally cross-fund each other. Deals
@@ -143,20 +168,29 @@ class ExecutionContext:
     # cash because the streams are independent decrementable arrays.
     interest_avail: np.ndarray | None = None
     principal_avail: np.ndarray | None = None
+    # Loss source for PAY_WRITEDOWN rules (token: LOSS). Seeded each period
+    # from ``actual.prin_loss[i]`` (which is itself frozen read-only on the
+    # BMAActualCashflow). Held separately so PAY_WRITEDOWN can decrement
+    # the loss stream as bonds absorb writedowns without mutating the
+    # immutable source cashflow.
+    loss_avail: np.ndarray | None = None
     # Per-group collateral and cash arrays for multi-pool deals. When the
     # deal's `collateral_groups` is empty (single-pool deal), these are
     # left empty and rules use the bare `cash_avail` / `interest_avail`
-    # / `principal_avail` arrays. When the deal declares multiple
-    # groups, each group_id maps to its own decrementable arrays so
-    # `GROUP_<id>_CASH` / `GROUP_<id>_INT_CASH` / `GROUP_<id>_PRIN_CASH`
-    # source tokens route to the right pool. The single-pool primary
-    # arrays are populated as the *aggregate* across groups (sum of all
-    # group cashflows) so trigger metrics and account-level computations
-    # see the deal-wide totals; rule routing uses the per-group arrays.
-    collateral_by_group: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
+    # / `principal_avail` / `loss_avail` arrays. When the deal declares
+    # multiple groups, each group_id maps to its own decrementable arrays
+    # so `GROUP_<id>_CASH` / `GROUP_<id>_INT_CASH` / `GROUP_<id>_PRIN_CASH`
+    # / `GROUP_<id>_LOSS` source tokens route to the right pool. The
+    # whole-pool primary arrays are populated as the *aggregate* across
+    # groups (sum of all group cashflows) so trigger metrics and
+    # account-level computations see the deal-wide totals; rule routing
+    # uses the per-group arrays.
+    actual_by_group: dict[str, BMAActualCashflow] = field(default_factory=dict)
+    scheduled_by_group: dict[str, BMAScheduledCashflow] = field(default_factory=dict)
     cash_avail_by_group: dict[str, np.ndarray] = field(default_factory=dict)
     interest_avail_by_group: dict[str, np.ndarray] = field(default_factory=dict)
     principal_avail_by_group: dict[str, np.ndarray] = field(default_factory=dict)
+    loss_avail_by_group: dict[str, np.ndarray] = field(default_factory=dict)
     trace_buf: list[tuple] | None = None
     trigger_rows: list[TriggerStateRow] = field(default_factory=list)
     # Per-period dictionary of `cash_at_<rule_id>` snapshots so a later rule
@@ -552,399 +586,264 @@ def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
 
 
 # ---------------------------------------------------------------------------
-# Collateral array extraction (Phase 1b: BMA-native internal naming)
+# Collateral cashflow extraction (Phase 1b: typed BMA dataclass-direct)
 # ---------------------------------------------------------------------------
 #
-# The runtime keeps a single canonical set of per-period numpy arrays
-# representing the collateral cashflow stream, regardless of which input
-# variant produced it (PAIRED PortfolioCashflow, LDCMA-format
-# CollateralCashflows, etc.). Internally those arrays use BMA-native field
-# names — ``perf_bal``, ``act_int``, ``act_am``, ``vol_prepay``, ``prin_loss``,
-# ``prin_recov``, ``new_def``, ``mdr``, ``smm``, ``gross_rate``, ``net_rate``,
-# ``age``, plus a small set of scheduled-derived fields (``survival_factor``,
-# ``pool_factor``, ``amortized_balance_fraction``, ``payment_factor``,
-# ``sched_gross_rate``).
+# The runtime carries collateral cashflow as typed BMA objects:
 #
-# Combined streams (``ACT_PRIN`` = act_am + vol_prepay; ``CASH`` =
-# act_am + vol_prepay + act_int) are NOT pre-stored; the source-token
-# resolver computes them on demand from the canonical fields.
+#   ExecutionContext.actual: BMAActualCashflow
+#       Whole-pool actual cashflow stream. Read directly via attribute
+#       access — actual.perf_bal[i], actual.act_int[i], actual.act_cash[i],
+#       actual.total_bal[i], etc.
 #
-# Backward-compat aliases (``balance``, ``interest``, ``principal``,
-# ``cashflow``, ``loss``, ``recovery``, ``defbal``, ``prepbal``,
-# ``principal_sched``, ``principal_unsched``, ``surv_fac``,
-# ``sched_balance``, etc.) are exposed alongside the BMA-native keys so
-# existing fixtures and expression contexts continue to work without
-# migration. Phase 1c will deprecate these aliases at the IR-token level
-# (the runtime keeps them functional through the transition).
-
-# Set of LDCMA fields whose values are summable across groups (per-period
-# dollars or balances). Ratios and metadata fields don't aggregate cleanly
-# and are copied from the first group when building the multi-group
-# aggregate dict.
-_SUMMABLE_BMA_FIELDS = frozenset({
-    "perf_bal",
-    "act_int",
-    "act_am",
-    "vol_prepay",
-    "prin_loss",
-    "prin_recov",
-    "new_def",
-})
-
-# LDCMA aliases populated alongside BMA-native keys so the runtime's
-# expression context, current fixtures, and any user-authored expressions
-# continue to work without migration. These are derived from BMA-native
-# values (no independent state).
-_LDCMA_ALIASES: dict[str, str] = {
-    "balance": "perf_bal",
-    "interest": "act_int",
-    "principal": "act_prin",       # combined act_am + vol_prepay
-    "cashflow": "act_cash",        # combined act_prin + act_int
-    "principal_sched": "act_am",
-    "principal_unsched": "vol_prepay",
-    "prepbal": "vol_prepay",
-    "loss": "prin_loss",
-    "recovery": "prin_recov",
-    "defbal": "new_def",
-    "sched_balance": "perf_bal",
-    "coupon": "gross_rate",
-    "effcoupon": "gross_rate",
-    "sched_coupon": "gross_rate",
-    "sched_netcoupon": "net_rate",
-    "surv_fac": "survival_factor",
-}
+#   ExecutionContext.scheduled: BMAScheduledCashflow | None
+#       Whole-pool scheduled cashflow stream. Present in PAIRED mode for
+#       scheduled-vs-actual decomposition and PAC/TAC schedule re-derivation;
+#       None for legacy LDCMA-format inputs.
+#
+#   ExecutionContext.actual_by_group: dict[str, BMAActualCashflow]
+#   ExecutionContext.scheduled_by_group: dict[str, BMAScheduledCashflow]
+#       Per-group aggregates produced by Phase 0A's group-aware aggregation,
+#       used to route GROUP_<id>_* source tokens to the right pool.
+#
+# For PAIRED collateral inputs, the BMA objects come directly from
+# portfolio.pool / portfolio.scheduled / aggregate_actual_by_group() /
+# aggregate_scheduled_by_group(). For legacy LDCMA-format inputs
+# (POOLED / GROUPED / STRIP_PI), _ldcma_to_bma_actual synthesizes a
+# BMAActualCashflow at the boundary from the LDCMA dict-of-arrays. After
+# the boundary, the rest of the runtime is dataclass-direct.
+#
+# This eliminates the prior dict-of-arrays intermediate representation
+# and its alias map. Type checkers now catch field-name typos at edit
+# time; numpy arrays are not view-copied or pre-aliased; all four
+# derived shortcuts (act_prin, act_cash, total_bal, sched_cash) are
+# computed once at __post_init__ on the cashflow object.
 
 
-def _bma_actual_to_dict(actual: Any) -> dict[str, np.ndarray]:
-    """Pull canonical BMA-native fields off a BMAActualCashflow into a dict.
+def _ldcma_rate_monthly_from_annual(annual_rate: np.ndarray) -> np.ndarray:
+    """Convert an LDCMA-format annual rate (cpr/cdr) to a BMA-format monthly
+    rate (smm/mdr).
 
-    Captures every field the runtime needs from the actual stream, plus
-    the LDCMA aliases (computed views of the BMA-native arrays) for
-    backward compatibility with fixtures and expression contexts that
-    reference legacy names. ``cpr`` / ``cdr`` are derived from BMA's
-    ``smm`` / ``mdr`` (simple annualization, see the comments below).
-    Combined streams (``principal``, ``cashflow``) are computed once here
-    rather than per-period in the source resolver.
-
-    Args:
-        actual: A ``BMAActualCashflow`` (the ``portfolio.pool`` of an
-            ACTUAL_ONLY/PAIRED PortfolioCashflow, or one entry from
-            ``aggregate_actual_by_group()``).
-
-    Returns:
-        A dict mapping field name (BMA-native + LDCMA aliases) to a 1-D
-        numpy array of length ``len(actual.period)``.
+    Uses the standard 1 - (1 - annual)**(1/12) conversion. Negative
+    inputs are clamped to zero before the power so we never raise on
+    invalid rate data.
     """
-    out: dict[str, np.ndarray] = {}
-
-    # Canonical BMA-native fields (direct array copies)
-    for name in (
-        "perf_bal", "act_int", "act_am", "vol_prepay",
-        "prin_loss", "prin_recov", "new_def",
-        "mdr", "smm", "gross_rate", "net_rate", "age",
-    ):
-        arr = getattr(actual, name, None)
-        if isinstance(arr, np.ndarray):
-            out[name] = np.asarray(arr, dtype=float)
-
-    n = len(out.get("perf_bal", np.zeros(1)))
-
-    # Combined / derived streams (BMA-native naming convention):
-    #   act_prin = act_am + vol_prepay (combined principal cash)
-    #   act_cash = act_prin + act_int (combined gross collateral cash)
-    # Stored once so downstream readers don't recompute every period.
-    # ``principal`` and ``cashflow`` LDCMA aliases are populated via the
-    # alias dict at the end of this function.
-    out["act_prin"] = out.get("act_am", np.zeros(n)) + out.get("vol_prepay", np.zeros(n))
-    out["act_cash"] = out["act_prin"] + out.get("act_int", np.zeros(n))
-
-    # Annualized prepay and default rates (CPR, CDR) derived from monthly
-    # SMM/MDR using the standard 1 - (1 - x)**12 conversion. Cheap to compute
-    # eagerly so expression contexts can reference them under either name.
-    smm = out.get("smm")
-    mdr = out.get("mdr")
-    if smm is not None:
-        out["cpr"] = 1.0 - np.power(np.maximum(1.0 - smm, 0.0), 12)
-    if mdr is not None:
-        out["cdr"] = 1.0 - np.power(np.maximum(1.0 - mdr, 0.0), 12)
-
-    # Severity (sev) and delinquency rate (dq) are not present on
-    # BMAActualCashflow as outputs (severity is an INPUT curve;
-    # delinquency is an aggregate not produced at the leaf level). Zero
-    # placeholders preserve the LDCMA dict shape for any expression
-    # referencing them.
-    out["sev"] = np.zeros(n)
-    out["dq"] = np.zeros(n)
-    out["discount_factor"] = np.ones(n)
-
-    # LDCMA aliases as views (np.asarray copy=False) onto BMA-native
-    # storage. Aliases are read-only conceptually; we don't promise they
-    # remain in sync if a caller mutates them.
-    for alias, canonical in _LDCMA_ALIASES.items():
-        if canonical in out and alias not in out:
-            out[alias] = out[canonical]
-
-    return out
+    return 1.0 - np.power(np.maximum(1.0 - annual_rate, 0.0), 1.0 / 12.0)
 
 
-def _bma_scheduled_to_dict(scheduled: Any, n: int) -> dict[str, np.ndarray]:
-    """Pull canonical BMA scheduled fields into a dict, sized to ``n`` periods.
-
-    Used for the PAIRED-mode scheduled stream so the runtime can expose
-    ``survival_factor``, ``pool_factor``, ``amortized_balance_fraction``,
-    ``payment_factor``, and the scheduled ``gross_rate`` to triggers,
-    calculations, and expression contexts. Length is capped at ``n``
-    (the actual stream's length) so paired streams stay aligned.
-
-    Args:
-        scheduled: A ``BMAScheduledCashflow`` (e.g. ``portfolio.scheduled``
-            or one entry from ``aggregate_scheduled_by_group()``).
-        n: Period count from the actual stream — scheduled fields are
-            truncated to this length to maintain alignment.
-
-    Returns:
-        A dict mapping field name to a 1-D numpy array of length ``n``.
-    """
-    out: dict[str, np.ndarray] = {}
-    for name in ("survival_factor", "pool_factor", "amortized_balance_fraction", "payment_factor"):
-        arr = getattr(scheduled, name, None)
-        if isinstance(arr, np.ndarray):
-            out[name] = np.asarray(arr[:n], dtype=float)
-    gross_rate = getattr(scheduled, "gross_rate", None)
-    if isinstance(gross_rate, np.ndarray):
-        out["sched_gross_rate"] = np.asarray(gross_rate[:n], dtype=float)
-    return out
-
-
-def _ldcma_cashflow_to_bma_native(cf: Any) -> dict[str, np.ndarray]:
-    """Translate an LDCMA-format CollateralCashflows model into a BMA-native dict.
+def _ldcma_to_bma_actual(cf: CollateralCashflows) -> BMAActualCashflow:
+    """Synthesize a ``BMAActualCashflow`` from an LDCMA-format CollateralCashflows.
 
     Maps the LDCMA dict-of-arrays representation that legacy adapters
-    produce (``balance``, ``principal``, ``interest``, ``cashflow``, ...)
-    into the same canonical BMA-native keys the runtime uses internally
-    (``perf_bal``, ``act_int``, ``act_am``, ``vol_prepay``, ...).
+    produce into a canonical BMA-native cashflow object. The BMA dataclass's
+    ``__post_init__`` then computes the derived FLOW/STOCK shortcuts
+    (``act_prin``, ``act_cash``, ``total_bal``) automatically.
 
     Decomposition rules:
 
       - ``perf_bal`` <- ``balance``
-      - ``act_int`` <- ``interest``
-      - ``act_am`` <- ``principal_sched`` (LDCMA scheduled amortization)
+      - ``fcl``      zero-padded (LDCMA has no FCL pipeline; defaulting
+                     deals are not represented in the LDCMA shape)
+      - ``act_int``  <- ``interest``
+      - ``act_am``   <- ``principal_sched`` (LDCMA scheduled amortization)
       - ``vol_prepay`` <- ``principal_unsched`` (or ``prepbal`` as fallback)
       - ``prin_loss`` <- ``loss``
       - ``prin_recov`` <- ``recovery``
-      - ``new_def`` <- ``defbal``
-      - ``mdr`` <- ``cdr`` deannualized when ``cdr`` is the only available
-        rate; otherwise zero.
-      - ``smm`` <- ``cpr`` deannualized; otherwise zero.
+      - ``new_def``  <- ``defbal``
+      - ``mdr``      <- monthly_from_annual(``cdr``) when present, else zeros
+      - ``smm``      <- monthly_from_annual(``cpr``) when present, else zeros
       - ``gross_rate`` <- ``coupon`` (LDCMA loan-level rate)
       - ``net_rate`` <- ``sched_netcoupon``
-      - ``survival_factor`` <- ``surv_fac``
 
-    The combined streams (``principal``, ``cashflow``) and LDCMA aliases
-    are populated identically to ``_bma_actual_to_dict`` so the runtime
-    sees the same dict shape for every input variant.
+    BMA fields with no LDCMA equivalent (``exp_am``, ``am_def``, ``sch_am``,
+    ``adb``, ``adv_*``, ``svc_billed``, ``exp_int``, ``lost_int``) are
+    zero-padded — adequate for parity testing where the deal waterfall
+    doesn't reference these fields directly. The ``age`` ratio is also
+    zero-padded.
 
     When the LDCMA dict has only the combined ``principal`` field (no
     ``principal_sched`` / ``principal_unsched``), we treat the entire
-    principal as ``act_am`` and leave ``vol_prepay`` at zero — accurate
-    enough for parity testing on legacy LDCMA fixtures, but not a full
-    decomposition.
+    principal as ``act_am`` and leave ``vol_prepay`` at zero.
+
+    Args:
+        cf: A ``CollateralCashflows`` Pydantic model instance from an
+            LDCMA-format DealRunInput variant.
+
+    Returns:
+        A ``BMAActualCashflow`` with primitives populated from the LDCMA
+        fields and derived shortcuts (act_prin, act_cash, total_bal)
+        computed by ``__post_init__``.
     """
+    # Convert Pydantic list[float] fields to numpy arrays once.
     raw: dict[str, np.ndarray] = {
         fname: np.array(getattr(cf, fname), dtype=float)
         for fname in cf.__class__.model_fields
         if fname != "cfdate" and isinstance(getattr(cf, fname), list)
     }
-
-    out: dict[str, np.ndarray] = {}
     n = len(raw.get("balance", np.zeros(1)))
+    if n == 0:
+        # Defensive: an empty LDCMA dict -> empty cashflow object.
+        # __post_init__ will fail on BMAActualCashflow with len-0 arrays
+        # because of internal balance-identity checks elsewhere; for now
+        # we return the smallest valid shape (n=1) of zeros and let any
+        # downstream length checks surface the issue.
+        n = 1
 
-    # Direct LDCMA -> BMA-native mappings
-    out["perf_bal"] = raw.get("balance", np.zeros(n))
-    out["act_int"] = raw.get("interest", np.zeros(n))
-    out["prin_loss"] = raw.get("loss", np.zeros(n))
-    out["prin_recov"] = raw.get("recovery", np.zeros(n))
-    out["new_def"] = raw.get("defbal", np.zeros(n))
-
-    # Principal decomposition
+    # Principal decomposition: prefer scheduled / unsched split; fall back
+    # to prepbal; last resort is to treat the entire principal as scheduled.
     if "principal_sched" in raw and "principal_unsched" in raw:
-        out["act_am"] = raw["principal_sched"]
-        out["vol_prepay"] = raw["principal_unsched"]
+        act_am = raw["principal_sched"]
+        vol_prepay = raw["principal_unsched"]
     elif "principal_sched" in raw and "prepbal" in raw:
-        out["act_am"] = raw["principal_sched"]
-        out["vol_prepay"] = raw["prepbal"]
+        act_am = raw["principal_sched"]
+        vol_prepay = raw["prepbal"]
     else:
-        # Fallback: treat the entire LDCMA `principal` field as scheduled
-        # amortization. Voluntary prepay is then unobservable; downstream
-        # rules that distinguish PRIN_AM vs VOL_PREPAY won't get useful
-        # data, but combined ACT_PRIN / CASH still work.
-        out["act_am"] = raw.get("principal", np.zeros(n))
-        out["vol_prepay"] = np.zeros(n)
+        act_am = raw.get("principal", np.zeros(n))
+        vol_prepay = np.zeros(n)
 
-    # Annualized rates (LDCMA stores annualized cpr/cdr; BMA stores monthly
-    # smm/mdr). Convert: (1 - x)**(1/12) = 1 - monthly => monthly = 1 - (1-annual)**(1/12)
+    # Annualized -> monthly rate conversion for prepay / default.
     cpr = raw.get("cpr")
     cdr = raw.get("cdr")
-    if cpr is not None:
-        out["smm"] = 1.0 - np.power(np.maximum(1.0 - cpr, 0.0), 1.0 / 12.0)
-    else:
-        out["smm"] = np.zeros(n)
-    if cdr is not None:
-        out["mdr"] = 1.0 - np.power(np.maximum(1.0 - cdr, 0.0), 1.0 / 12.0)
-    else:
-        out["mdr"] = np.zeros(n)
+    smm = _ldcma_rate_monthly_from_annual(cpr) if cpr is not None else np.zeros(n)
+    mdr = _ldcma_rate_monthly_from_annual(cdr) if cdr is not None else np.zeros(n)
 
-    # Coupons
-    out["gross_rate"] = raw.get("coupon", np.zeros(n))
-    out["net_rate"] = raw.get("sched_netcoupon", np.zeros(n))
+    zeros = np.zeros(n)
 
-    # Survival factor (LDCMA `surv_fac`)
-    out["survival_factor"] = raw.get("surv_fac", np.ones(n))
-
-    # Aux fields preserved in case any expression touches them
-    out["sev"] = raw.get("sev", np.zeros(n))
-    out["dq"] = raw.get("dq", np.zeros(n))
-    out["discount_factor"] = raw.get("discount_factor", np.ones(n))
-    out["age"] = np.zeros(n)  # not present in LDCMA; left zero
-
-    # Combined streams (BMA-native names) — match _bma_actual_to_dict shape
-    out["act_prin"] = out["act_am"] + out["vol_prepay"]
-    out["act_cash"] = out["act_prin"] + out["act_int"]
-    out["cpr"] = cpr if cpr is not None else np.zeros(n)
-    out["cdr"] = cdr if cdr is not None else np.zeros(n)
-
-    for alias, canonical in _LDCMA_ALIASES.items():
-        if canonical in out and alias not in out:
-            out[alias] = out[canonical]
-
-    return out
-
-
-def _aggregate_bma_dicts(per_group: dict[str, dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
-    """Sum BMA-native dicts across groups for summable fields; copy the rest.
-
-    Used when building the whole-pool aggregate from a multi-group
-    ``aggregate_actual_by_group()`` result. Summable fields (perf_bal,
-    act_int, act_am, vol_prepay, prin_loss, prin_recov, new_def) are
-    summed period-wise across groups; all other fields (rates, ratios,
-    aliases) are copied from the first group, since they don't aggregate
-    cleanly under group-of-groups semantics.
-
-    Aliases and combined streams are recomputed at the end so they reflect
-    the aggregated FLOW fields rather than the first group's values.
-    """
-    if not per_group:
-        return {}
-
-    first = next(iter(per_group.values()))
-    n = max(len(first.get("perf_bal", np.zeros(1))), 1)
-
-    agg: dict[str, np.ndarray] = {}
-    # Sum FLOW fields; copy non-summable from first group as a placeholder.
-    for fname, arr in first.items():
-        if fname in _SUMMABLE_BMA_FIELDS:
-            acc = np.zeros(n)
-            for g in per_group.values():
-                aa = g[fname]
-                if len(aa) < n:
-                    padded = np.zeros(n)
-                    padded[: len(aa)] = aa
-                    acc = acc + padded
-                else:
-                    acc = acc + aa[:n]
-            agg[fname] = acc
-        else:
-            agg[fname] = np.asarray(arr[:n], dtype=float) if len(arr) >= n else np.pad(arr, (0, n - len(arr)))
-
-    # Recompute combined streams (BMA-native) + aliases from aggregated FLOW fields.
-    agg["act_prin"] = agg.get("act_am", np.zeros(n)) + agg.get("vol_prepay", np.zeros(n))
-    agg["act_cash"] = agg["act_prin"] + agg.get("act_int", np.zeros(n))
-    for alias, canonical in _LDCMA_ALIASES.items():
-        if canonical in agg:
-            agg[alias] = agg[canonical]
-    return agg
+    return BMAActualCashflow(
+        # FLOW fields
+        new_def=raw.get("defbal", zeros),
+        exp_am=zeros,
+        vol_prepay=vol_prepay,
+        am_def=zeros,
+        act_am=act_am,
+        exp_int=zeros,
+        lost_int=zeros,
+        act_int=raw.get("interest", zeros),
+        prin_recov=raw.get("recovery", zeros),
+        prin_loss=raw.get("loss", zeros),
+        svc_billed=zeros,
+        adv_prin=zeros,
+        adv_int=zeros,
+        adv_reimbursed_prin=zeros,
+        adv_reimbursed_int=zeros,
+        adv_unrecoverable=zeros,
+        # STOCK fields
+        period=np.arange(n),
+        perf_bal=raw.get("balance", zeros),
+        fcl=zeros,                      # LDCMA has no foreclosure pipeline representation
+        sch_am=zeros,
+        adb=zeros,
+        adv_prin_outstanding=zeros,
+        adv_int_outstanding=zeros,
+        adv_outstanding=zeros,
+        # RATIO fields
+        mdr=mdr,
+        smm=smm,
+        gross_rate=raw.get("coupon", zeros),
+        net_rate=raw.get("sched_netcoupon", zeros),
+        age=zeros,
+    )
 
 
 def _extract_collateral_arrays(
     run_input: DealRunInput,
-) -> tuple[dict[str, np.ndarray], dict[str, dict[str, np.ndarray]]]:
-    """Extract collateral arrays as (aggregate, per_group) in BMA-native form.
+) -> tuple[
+    BMAActualCashflow,
+    BMAScheduledCashflow | None,
+    dict[str, BMAActualCashflow],
+    dict[str, BMAScheduledCashflow],
+]:
+    """Extract collateral cashflows as typed BMA objects for the runtime.
 
-    Phase 1b (May 2026) refactor: the runtime now uses BMA-native field
-    names internally regardless of which input variant the caller provides.
-    PAIRED inputs read directly from ``portfolio.pool`` (and per-group via
-    Phase 0A's ``aggregate_actual_by_group()``); LDCMA-format inputs are
-    translated at the boundary by ``_ldcma_cashflow_to_bma_native``. The
-    rest of the runtime sees the same dict shape and key set in either
-    case, with LDCMA-style aliases (``balance``, ``interest``, etc.)
-    populated alongside the BMA-native keys for fixture compatibility.
+    Returns a 4-tuple ``(actual, scheduled, actual_by_group,
+    scheduled_by_group)`` where:
 
-    For single-pool inputs the aggregate is the only pool and per_group
-    is empty. For grouped inputs the aggregate is the period-wise sum
-    across all groups (used by triggers and pool-wide metrics) and
-    per_group maps each ``group_id`` to its own set of BMA-native arrays
-    (used by rule routing for ``GROUP_<id>_*`` source tokens).
+      - ``actual``: whole-pool ``BMAActualCashflow`` (always present)
+      - ``scheduled``: whole-pool ``BMAScheduledCashflow`` if available
+        (PAIRED inputs only); ``None`` otherwise
+      - ``actual_by_group``: per-group ``BMAActualCashflow`` dict for
+        multi-group deals (empty dict for single-pool)
+      - ``scheduled_by_group``: per-group ``BMAScheduledCashflow`` dict
+        (empty dict if not available)
 
-    For PAIRED inputs the scheduled stream is also extracted (one
-    aggregate dict + one per-group dict) and merged into the same
-    collateral dicts under the keys ``survival_factor``, ``pool_factor``,
-    ``amortized_balance_fraction``, ``payment_factor``, and
-    ``sched_gross_rate``.
+    Input variant dispatch:
+
+      PAIRED  -> portfolio.pool, portfolio.scheduled,
+                 aggregate_actual_by_group(), aggregate_scheduled_by_group()
+                 (Phase 0A primitives). The "_ungrouped" bucket from the
+                 group aggregation is filtered out so it doesn't show up
+                 as a routed group in rule resolution.
+
+      POOLED  -> _ldcma_to_bma_actual(coll.collateral). No scheduled
+                 stream available from LDCMA; scheduled = None.
+
+      GROUPED -> _ldcma_to_bma_actual on each per-group LDCMA cashflow,
+                 then PortfolioCashflow._aggregate_actual to produce the
+                 whole-pool aggregate. Reuses the engine's aggregation
+                 path so summable FLOW fields are summed correctly and
+                 STOCK / RATIO fields are reconstructed from primitives.
+
+      STRIP_PI -> _ldcma_to_bma_actual(coll.principal_strip). The interest
+                  strip is not currently consumed by the runtime; this
+                  variant is rarely exercised.
+
+    Raises:
+        TypeError: If the collateral input variant is unknown.
     """
+    from bma_standard_formulas.engine.portfolio import _aggregate_actual
+
     coll = run_input.collateral
 
-    # ── PAIRED: native PortfolioCashflow consumption (proposal R Phase 1b) ──
+    # ── PAIRED: native PortfolioCashflow consumption ───────────────────
     if isinstance(coll, PairedCollateralInput):
         portfolio = coll.portfolio
-        actual = portfolio.pool  # whole-pool BMAActualCashflow
-        agg = _bma_actual_to_dict(actual)
-        n = len(agg.get("perf_bal", np.zeros(1)))
+        actual = portfolio.pool                                 # BMAActualCashflow
+        scheduled: BMAScheduledCashflow | None = None
         try:
             scheduled = portfolio.scheduled
-            agg.update(_bma_scheduled_to_dict(scheduled, n))
         except (ValueError, AttributeError):
-            # PAIRED portfolios always have a scheduled stream; the guard
-            # is defensive. If extraction fails for any reason, we fall
-            # back to the actual-only fields and let downstream code handle
-            # missing scheduled metrics.
-            pass
+            scheduled = None
 
-        per_group: dict[str, dict[str, np.ndarray]] = {}
-        actuals_by_group = portfolio.aggregate_actual_by_group()
-        if actuals_by_group:
-            scheduleds_by_group: dict[str, Any] = {}
-            try:
-                scheduleds_by_group = portfolio.aggregate_scheduled_by_group()
-            except (ValueError, AttributeError):
-                scheduleds_by_group = {}
-            for gid, g_actual in actuals_by_group.items():
-                if gid == "_ungrouped":
-                    # Untagged constituents already contribute to the
-                    # aggregate; emitting them as a separate bucket would
-                    # confuse multi-group rule routing.
-                    continue
-                g_dict = _bma_actual_to_dict(g_actual)
-                g_n = len(g_dict.get("perf_bal", np.zeros(1)))
-                if gid in scheduleds_by_group:
-                    g_dict.update(_bma_scheduled_to_dict(scheduleds_by_group[gid], g_n))
-                per_group[gid] = g_dict
-
-        return agg, per_group
-
-    # ── POOLED: legacy LDCMA-format single pool ─────────────────────────
-    if isinstance(coll, PooledCollateralInput):
-        return _ldcma_cashflow_to_bma_native(coll.collateral), {}
-
-    # ── GROUPED: legacy LDCMA-format multi-group ───────────────────────
-    if isinstance(coll, GroupedCollateralInput):
-        per_group = {
-            gid: _ldcma_cashflow_to_bma_native(cf) for gid, cf in coll.groups.items()
+        actuals_by_group_raw = portfolio.aggregate_actual_by_group()
+        # Untagged constituents already contribute to the whole-pool
+        # aggregate; we don't surface "_ungrouped" as a routed group.
+        actuals_by_group: dict[str, BMAActualCashflow] = {
+            gid: g_actual
+            for gid, g_actual in actuals_by_group_raw.items()
+            if gid != "_ungrouped"
         }
-        return _aggregate_bma_dicts(per_group), per_group
+        try:
+            scheduleds_by_group_raw = portfolio.aggregate_scheduled_by_group()
+        except (ValueError, AttributeError):
+            scheduleds_by_group_raw = {}
+        scheduleds_by_group: dict[str, BMAScheduledCashflow] = {
+            gid: g_sched
+            for gid, g_sched in scheduleds_by_group_raw.items()
+            if gid != "_ungrouped"
+        }
+        return actual, scheduled, actuals_by_group, scheduleds_by_group
 
-    # ── STRIP_PI: legacy P/I strip (rare) ───────────────────────────────
+    # ── POOLED: legacy LDCMA-format single pool ────────────────────────
+    if isinstance(coll, PooledCollateralInput):
+        actual = _ldcma_to_bma_actual(coll.collateral)
+        return actual, None, {}, {}
+
+    # ── GROUPED: legacy LDCMA-format multi-group ──────────────────────
+    if isinstance(coll, GroupedCollateralInput):
+        per_group_actuals: dict[str, BMAActualCashflow] = {
+            gid: _ldcma_to_bma_actual(cf) for gid, cf in coll.groups.items()
+        }
+        # Whole-pool aggregate via the engine's existing aggregator. Single
+        # source of truth: same code path that aggregates multi-loan
+        # portfolios. _aggregate_actual returns the constituent itself
+        # for len-1 lists, which is correct.
+        agg_actual = _aggregate_actual(list(per_group_actuals.values()))
+        return agg_actual, None, per_group_actuals, {}
+
+    # ── STRIP_PI: legacy P/I strip (rare) ─────────────────────────────
     if isinstance(coll, StripCollateralInput):
-        return _ldcma_cashflow_to_bma_native(coll.principal_strip), {}
+        actual = _ldcma_to_bma_actual(coll.principal_strip)
+        return actual, None, {}, {}
 
     raise TypeError(f"Unknown collateral input type: {type(coll)}")
 
@@ -1002,7 +901,8 @@ def _safe_eval_expr(expr: str, values: dict[str, float]) -> float:
 def _build_expr_context(
     deal: DealDefinition,
     run_input: DealRunInput,
-    collateral: dict[str, np.ndarray],
+    actual: BMAActualCashflow,
+    scheduled: BMAScheduledCashflow | None,
     bonds: dict[str, BondWorkspace],
     accounts: dict[str, AccountWorkspace],
     trigger_states: dict[str, bool],
@@ -1012,26 +912,66 @@ def _build_expr_context(
     i: int,
     orig_collat_bal: float,
 ) -> dict[str, float]:
-    # BMA-native canonical reads. The collateral dict guarantees every
-    # BMA field plus its LDCMA alias is present (see _bma_actual_to_dict
-    # / _ldcma_cashflow_to_bma_native), so reads from "perf_bal" succeed
-    # for every input variant.
-    perf_bal = float(collateral["perf_bal"][i])
-    perf_bal_prev = float(collateral["perf_bal"][i - 1]) if i > 0 else perf_bal
+    """Build the per-period expression context dict.
 
-    def _safe_period(name: str, default: float = 0.0) -> float:
-        arr = collateral.get(name)
+    Reads collateral data via attribute access on the typed BMA cashflow
+    objects (``actual: BMAActualCashflow`` and ``scheduled:
+    BMAScheduledCashflow | None``), then exposes both BMA-native names and
+    legacy LDCMA-style aliases as expression-context keys for IR
+    expressions (fee ``amount_expr``, rule ``max_amount_expr``, trigger
+    threshold expressions, calculation node expressions).
+
+    Naming convention exposed to deal authors:
+
+      BMA-native (canonical, recommended for new IR expressions):
+        collateral_perf_bal, collateral_perf_bal_prev, collateral_total_bal,
+        collateral_act_int, collateral_act_am, collateral_vol_prepay,
+        collateral_prin_loss, collateral_prin_recov, collateral_new_def,
+        collateral_smm, collateral_mdr, collateral_gross_rate,
+        collateral_net_rate, survival_factor_prev.
+
+      LDCMA-style aliases (kept for fixture / deal_library backward compat):
+        collateral_balance (= perf_bal + fcl per deal-mechanics convention),
+        collateral_balance_prev, collateral_interest, collateral_principal
+        (combined act_am + vol_prepay), collateral_cashflow (combined),
+        collateral_loss, collateral_recovery, collateral_defbal,
+        collateral_cpr, collateral_cdr, surv_fac_prev.
+
+    The ``collateral_balance`` alias maps to ``actual.total_bal`` (=
+    perf_bal + fcl) because that is the deal-mechanics "pool balance"
+    used by CE %, pool factor, reserve floor, and step-down checks.
+    Use ``collateral_perf_bal`` directly if a prospectus specifically
+    says "Performing Balance" (rare).
+    """
+    # Fast attribute reads on the typed BMA cashflow objects.
+    perf_bal_arr = actual.perf_bal
+    perf_bal = float(perf_bal_arr[i])
+    perf_bal_prev = float(perf_bal_arr[i - 1]) if i > 0 else perf_bal
+    total_bal = float(actual.total_bal[i])
+    total_bal_prev = float(actual.total_bal[i - 1]) if i > 0 else total_bal
+
+    def _at(arr: np.ndarray, default: float = 0.0) -> float:
+        """Index *arr* at period i, defaulting if out of range."""
         if arr is None or i >= len(arr):
             return default
         return float(arr[i])
 
-    def _safe_period_prev(name: str, default: float = 0.0) -> float:
-        if i <= 0:
-            return default
-        arr = collateral.get(name)
-        if arr is None or (i - 1) >= len(arr):
+    def _at_prev(arr: np.ndarray | None, default: float = 0.0) -> float:
+        """Index *arr* at period i-1, defaulting if i<=0 or out of range."""
+        if i <= 0 or arr is None or (i - 1) >= len(arr):
             return default
         return float(arr[i - 1])
+
+    # Survival factor at the previous period — preferred from the scheduled
+    # stream's survival_factor (PAIRED only); fall back to the actual
+    # stream's perf_bal-based ratio otherwise. Defaults to 1.0 at period 0.
+    if scheduled is not None and i > 0:
+        sched_sf = getattr(scheduled, "survival_factor", None)
+        survival_factor_prev = _at_prev(sched_sf, default=1.0)
+    elif i > 0 and perf_bal_arr[0] > 0:
+        survival_factor_prev = float(perf_bal_arr[i - 1] / perf_bal_arr[0])
+    else:
+        survival_factor_prev = 1.0
 
     ctx: dict[str, float] = {
         "period": float(i),
@@ -1040,33 +980,43 @@ def _build_expr_context(
         "cash_available": float(cash_avail[i]) if cash_avail is not None else 0.0,
 
         # ── BMA-native names (canonical) ──────────────────────────────────
-        "collateral_perf_bal":     perf_bal,
+        "collateral_perf_bal":      perf_bal,
         "collateral_perf_bal_prev": perf_bal_prev,
-        "collateral_act_int":      _safe_period("act_int"),
-        "collateral_act_am":       _safe_period("act_am"),
-        "collateral_vol_prepay":   _safe_period("vol_prepay"),
-        "collateral_prin_loss":    _safe_period("prin_loss"),
-        "collateral_prin_recov":   _safe_period("prin_recov"),
-        "collateral_new_def":      _safe_period("new_def"),
-        "collateral_smm":          _safe_period("smm"),
-        "collateral_mdr":          _safe_period("mdr"),
-        "collateral_gross_rate":   _safe_period("gross_rate"),
-        "collateral_net_rate":     _safe_period("net_rate"),
-        "survival_factor_prev":    _safe_period_prev("survival_factor", default=1.0),
+        "collateral_total_bal":     total_bal,
+        "collateral_total_bal_prev": total_bal_prev,
+        "collateral_act_int":       _at(actual.act_int),
+        "collateral_act_am":        _at(actual.act_am),
+        "collateral_vol_prepay":    _at(actual.vol_prepay),
+        "collateral_act_prin":      _at(actual.act_prin),    # combined act_am + vol_prepay
+        "collateral_act_cash":      _at(actual.act_cash),    # combined act_prin + act_int
+        "collateral_prin_loss":     _at(actual.prin_loss),
+        "collateral_prin_recov":    _at(actual.prin_recov),
+        "collateral_new_def":       _at(actual.new_def),
+        "collateral_smm":           _at(actual.smm),
+        "collateral_mdr":           _at(actual.mdr),
+        "collateral_gross_rate":    _at(actual.gross_rate),
+        "collateral_net_rate":      _at(actual.net_rate),
+        "collateral_fcl":           _at(actual.fcl),
+        "survival_factor_prev":     survival_factor_prev,
 
         # ── LDCMA-style aliases (kept for fixture / IR-author backward
         # compatibility — populated from the BMA-native fields above) ──────
-        "collateral_balance":      perf_bal,
-        "collateral_balance_prev": perf_bal_prev,
-        "collateral_interest":     _safe_period("act_int"),
-        "collateral_principal":    _safe_period("principal"),  # combined act_am + vol_prepay
-        "collateral_cashflow":     _safe_period("cashflow"),   # combined principal + act_int
-        "collateral_loss":         _safe_period("prin_loss"),
-        "collateral_recovery":     _safe_period("prin_recov"),
-        "collateral_defbal":       _safe_period("new_def"),
-        "collateral_cpr":          _safe_period("cpr"),
-        "collateral_cdr":          _safe_period("cdr"),
-        "surv_fac_prev":           _safe_period_prev("survival_factor", default=1.0),
+        # NB: ``collateral_balance`` maps to total_bal (= perf_bal + fcl)
+        # per deal-mechanics convention — not just perf_bal — so CE % math,
+        # pool factors, reserve floors, etc. include foreclosure pipeline.
+        "collateral_balance":       total_bal,
+        "collateral_balance_prev":  total_bal_prev,
+        "collateral_interest":      _at(actual.act_int),
+        "collateral_principal":     _at(actual.act_prin),
+        "collateral_cashflow":      _at(actual.act_cash),
+        "collateral_loss":          _at(actual.prin_loss),
+        "collateral_recovery":      _at(actual.prin_recov),
+        "collateral_defbal":        _at(actual.new_def),
+        # cpr / cdr: annualized prepay / default rates derived from BMA's
+        # monthly smm / mdr at this period via 1 - (1 - x)**12.
+        "collateral_cpr":           1.0 - (1.0 - max(_at(actual.smm), 0.0)) ** 12,
+        "collateral_cdr":           1.0 - (1.0 - max(_at(actual.mdr), 0.0)) ** 12,
+        "surv_fac_prev":            survival_factor_prev,
     }
     for key, value in (deal.deal_knobs or {}).items():
         if isinstance(value, (int, float)) and key.isidentifier():
@@ -1128,9 +1078,9 @@ def _resolve_source_arrays(ctx: ExecutionContext, source_keys: tuple[str, ...]) 
         # bonds) route every collateral-touching rule through these
         # so cashflows stay segregated by group. Match longest group
         # id first to avoid ambiguity if group ids share prefixes.
-        if key.startswith("GROUP_") and ctx.collateral_by_group:
+        if key.startswith("GROUP_") and ctx.actual_by_group:
             matched = False
-            sorted_gids = sorted(ctx.collateral_by_group.keys(), key=len, reverse=True)
+            sorted_gids = sorted(ctx.actual_by_group.keys(), key=len, reverse=True)
             for gid in sorted_gids:
                 prefix = f"GROUP_{gid}_"
                 if key.startswith(prefix):
@@ -1142,7 +1092,7 @@ def _resolve_source_arrays(ctx: ExecutionContext, source_keys: tuple[str, ...]) 
                     elif suffix in ("CASH", "COLLATERAL"):
                         arrays.append(ctx.cash_avail_by_group[gid])
                     elif suffix == "LOSS":
-                        arrays.append(ctx.collateral_by_group[gid]["prin_loss"])
+                        arrays.append(ctx.loss_avail_by_group[gid])
                     matched = True
                     break
             if matched:
@@ -1160,8 +1110,9 @@ def _resolve_source_arrays(ctx: ExecutionContext, source_keys: tuple[str, ...]) 
         if key in ("CASH", "COLLATERAL") and ctx.cash_avail is not None:
             arrays.append(ctx.cash_avail)
             continue
-        if key == "LOSS" and "prin_loss" in ctx.collateral:
-            arrays.append(ctx.collateral["prin_loss"])
+        if key == "LOSS" and ctx.loss_avail is not None:
+            arrays.append(ctx.loss_avail)
+            continue
             continue
         acct = ctx.accounts.get(key)
         if acct is not None:
@@ -1192,7 +1143,8 @@ def _update_virtual_sources(
     expr_ctx = _build_expr_context(
         deal,
         run_input,
-        ctx.collateral,
+        ctx.actual,
+        ctx.scheduled,
         ctx.bonds,
         ctx.accounts,
         ctx.trigger_states,
@@ -1227,7 +1179,8 @@ def _apply_balance_trackers(
     expr_ctx = _build_expr_context(
         deal,
         run_input,
-        ctx.collateral,
+        ctx.actual,
+        ctx.scheduled,
         ctx.bonds,
         ctx.accounts,
         ctx.trigger_states,
@@ -1458,7 +1411,7 @@ def _evaluate_triggers(
             if cum_loss_cache is not None:
                 metric = cum_loss_cache[i] / orig_collat_bal if orig_collat_bal > 0 else 0.0
             else:
-                metric = float(np.sum(ctx.collateral["prin_loss"][: i + 1])) / orig_collat_bal if orig_collat_bal > 0 else 0.0
+                metric = float(np.sum(ctx.actual.prin_loss[: i + 1])) / orig_collat_bal if orig_collat_bal > 0 else 0.0
 
         threshold = trigger.threshold_value or 0.0
         if trigger.threshold_schedule and i < len(trigger.threshold_schedule):
@@ -1495,21 +1448,20 @@ def run_deal(
     collect_trace: bool = True,
 ) -> ScenarioOutputBundle:
     """Execute a deal waterfall and return the full output bundle for one scenario."""
-    collateral, collateral_by_group = _extract_collateral_arrays(run_input)
-    cf_len = len(collateral["perf_bal"])
-    collat_bal_0 = float(collateral["perf_bal"][0])
+    actual, scheduled, actual_by_group, scheduled_by_group = _extract_collateral_arrays(run_input)
+    cf_len = len(actual.perf_bal)
+    collat_bal_0 = float(actual.perf_bal[0])
     declared_groups = [g.group_id for g in deal.collateral_groups]
     if declared_groups:
         # Multi-pool deal: each declared group must appear in the
-        # GroupedCollateralInput.groups dict so per-group routing can
-        # populate its arrays.
-        missing = [gid for gid in declared_groups if gid not in collateral_by_group]
+        # per-group dict so per-group routing can populate its arrays.
+        missing = [gid for gid in declared_groups if gid not in actual_by_group]
         if missing:
             raise ValueError(
                 f"DealDefinition declares collateral_groups {declared_groups!r} "
                 f"but DealRunInput.collateral is missing groups: {missing!r}. "
-                f"Provide a GroupedCollateralInput with one entry per declared "
-                f"group_id."
+                f"Provide a GroupedCollateralInput or a PortfolioCashflow with "
+                f"per-loan group_id tags covering each declared group_id."
             )
     orig_override = deal.deal_knobs.get("orig_collat_bal_override")
     orig_collat_bal = float(orig_override) if isinstance(orig_override, (int, float)) else float(run_input.original_collateral_balance or collat_bal_0)
@@ -1548,14 +1500,14 @@ def run_deal(
             account_def,
             cf_len,
             collat_bal_0,
-            collateral["perf_bal"],
+            actual.perf_bal,
             initial_note_balance,
         )
         for account_def in deal.accounts
     }
     compiled = _compile_rules(deal)
     fee_defs_by_name = {fee.name: fee for fee in deal.fees}
-    cum_loss_cache = np.cumsum(collateral["prin_loss"]) if deal.triggers else None
+    cum_loss_cache = np.cumsum(actual.prin_loss) if deal.triggers else None
     trace_buf: list[tuple] | None = [] if collect_trace else None
     cash_avail = np.zeros(cf_len)
     # First-class split-stream sources: always populated so deal definitions
@@ -1565,22 +1517,31 @@ def run_deal(
     # (mixing CASH and INT/PRIN double-counts cash).
     interest_avail = np.zeros(cf_len)
     principal_avail = np.zeros(cf_len)
+    # Loss stream for PAY_WRITEDOWN rules — writeable copy of
+    # ``actual.prin_loss`` because the BMA cashflow's prin_loss array is
+    # frozen read-only by ``__post_init__``. Decrementing happens here
+    # so the source cashflow remains immutable.
+    loss_avail = np.zeros(cf_len)
     # Multi-pool deals: allocate parallel per-group cash arrays. Source
     # tokens like ``GROUP_<id>_INT_CASH`` route to these so a Group-1
     # interest waterfall draws only from Group 1's pool. The single-pool
-    # ``cash_avail``/``interest_avail``/``principal_avail`` arrays still
-    # carry the deal-wide aggregate so triggers and pool-level metrics
-    # see totals. Single-pool deals leave these dicts empty.
+    # ``cash_avail``/``interest_avail``/``principal_avail``/``loss_avail``
+    # arrays still carry the deal-wide aggregate so triggers and
+    # pool-level metrics see totals. Single-pool deals leave these dicts
+    # empty.
     cash_avail_by_group: dict[str, np.ndarray] = {}
     interest_avail_by_group: dict[str, np.ndarray] = {}
     principal_avail_by_group: dict[str, np.ndarray] = {}
+    loss_avail_by_group: dict[str, np.ndarray] = {}
     for gid in declared_groups:
         cash_avail_by_group[gid] = np.zeros(cf_len)
         interest_avail_by_group[gid] = np.zeros(cf_len)
         principal_avail_by_group[gid] = np.zeros(cf_len)
+        loss_avail_by_group[gid] = np.zeros(cf_len)
     ctx = ExecutionContext(
         scenario_name=scenario_name,
-        collateral=collateral,
+        actual=actual,
+        scheduled=scheduled,
         bonds=bonds,
         accounts=accounts,
         fee_defs_by_name=fee_defs_by_name,
@@ -1588,10 +1549,13 @@ def run_deal(
         cash_avail=cash_avail,
         interest_avail=interest_avail,
         principal_avail=principal_avail,
-        collateral_by_group=collateral_by_group,
+        loss_avail=loss_avail,
+        actual_by_group=actual_by_group,
+        scheduled_by_group=scheduled_by_group,
         cash_avail_by_group=cash_avail_by_group,
         interest_avail_by_group=interest_avail_by_group,
         principal_avail_by_group=principal_avail_by_group,
+        loss_avail_by_group=loss_avail_by_group,
         trace_buf=trace_buf,
     )
     # Pre-allocate any virtual streams declared by SPLIT_CASH targets that are
@@ -1624,24 +1588,26 @@ def run_deal(
         # period-`i` bond balances reflect amortization, but before rules
         # consult the account floors.
         _refresh_note_balance_minimums(deal, accounts, bonds, i)
-        # Combined and split cash streams (BMA-native naming):
-        #   act_cash = act_am + vol_prepay + act_int  (combined gross collateral cash)
+        # Per-period cash decrement seeds. The cash_avail / interest_avail /
+        # principal_avail arrays back the IR's CASH / INT_CASH / PRIN_CASH
+        # source tokens; values come from the BMA-native combined streams
+        # on the actual cashflow object:
+        #   act_cash = act_am + vol_prepay + act_int  (combined collateral cash)
         #   act_int  = direct interest stream
         #   act_prin = act_am + vol_prepay            (combined principal cash)
-        # The cash_avail / interest_avail / principal_avail arrays remain
-        # named for their CASH / INT_CASH / PRIN_CASH IR-token roles; the
-        # underlying values are the BMA-native combined streams.
-        cash_avail[i] = collateral["act_cash"][i]
-        interest_avail[i] = collateral["act_int"][i]
-        principal_avail[i] = collateral["act_prin"][i]
+        cash_avail[i] = actual.act_cash[i]
+        interest_avail[i] = actual.act_int[i]
+        principal_avail[i] = actual.act_prin[i]
+        loss_avail[i] = actual.prin_loss[i]
         # Per-group cash arrays mirror the same period-fill pattern so
         # rules that route via ``GROUP_<id>_*`` source tokens see the
         # right group's cashflow stream and never cross-feed each other.
-        for gid, gcoll in ctx.collateral_by_group.items():
-            if i < len(gcoll["act_cash"]):
-                ctx.cash_avail_by_group[gid][i] = gcoll["act_cash"][i]
-                ctx.interest_avail_by_group[gid][i] = gcoll["act_int"][i]
-                ctx.principal_avail_by_group[gid][i] = gcoll["act_prin"][i]
+        for gid, g_actual in ctx.actual_by_group.items():
+            if i < len(g_actual.act_cash):
+                ctx.cash_avail_by_group[gid][i] = g_actual.act_cash[i]
+                ctx.interest_avail_by_group[gid][i] = g_actual.act_int[i]
+                ctx.principal_avail_by_group[gid][i] = g_actual.act_prin[i]
+                ctx.loss_avail_by_group[gid][i] = g_actual.prin_loss[i]
 
         # Z-bond accrual pre-waterfall step: capitalize unpaid coupon into Z balance
         # and pay an equal amount as principal to the support tranche stack. This
@@ -1652,7 +1618,8 @@ def run_deal(
         expr_ctx = _build_expr_context(
             deal,
             run_input,
-            collateral,
+            actual,
+            scheduled,
             bonds,
             accounts,
             ctx.trigger_states,
@@ -1669,7 +1636,8 @@ def run_deal(
         expr_ctx = _build_expr_context(
             deal,
             run_input,
-            collateral,
+            actual,
+            scheduled,
             bonds,
             accounts,
             ctx.trigger_states,
@@ -1709,7 +1677,8 @@ def run_deal(
             rule_expr_ctx = _build_expr_context(
                 deal,
                 run_input,
-                collateral,
+                actual,
+                scheduled,
                 bonds,
                 accounts,
                 ctx.trigger_states,
@@ -1977,7 +1946,7 @@ def run_deal(
                             allow_negative=allow_negative_cash_math,
                         )
                     elif rule.tag == _OP_FEE:
-                        collateral_balance_start = collateral["perf_bal"][i - 1] if i > 0 else collateral["perf_bal"][0]
+                        collateral_balance_start = float(actual.perf_bal[i - 1]) if i > 0 else float(actual.perf_bal[0])
                         fee_due = _resolve_fee_due_amount(
                             fee_defs_by_name.get(tgt_name),
                             run_input,

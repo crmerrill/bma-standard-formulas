@@ -4,29 +4,31 @@ Validates that ``run_deal`` accepts a ``PairedCollateralInput`` payload and
 produces results equivalent to feeding the same engine output through the
 legacy LDCMA-format adapter (``from_actual_cashflow``).
 
-The runtime now uses BMA-native field names internally (``perf_bal``,
-``act_int``, ``act_am``, ``vol_prepay``, ``prin_loss``, ``prin_recov``,
-``new_def``, plus combined ``act_prin`` and ``act_cash``), with LDCMA
-aliases (``balance``, ``interest``, ``principal``, ``cashflow``, ``loss``,
-...) populated as views onto the BMA-native arrays for backward
-compatibility with existing fixtures and IR expressions.
+The runtime carries collateral cashflows as typed BMA objects:
+``ExecutionContext.actual: BMAActualCashflow`` and (optionally)
+``ExecutionContext.scheduled: BMAScheduledCashflow``. All read sites use
+attribute access (``actual.perf_bal[i]``, ``actual.act_cash[i]``,
+``actual.total_bal[i]``) — no dict-of-arrays indirection. LDCMA-format
+inputs are translated at the boundary by ``_ldcma_to_bma_actual``.
 
 What's covered:
-  1. PAIRED input parity: a deal run via PAIRED produces bond cashflows
+  1. The boundary helper ``_ldcma_to_bma_actual`` produces a properly-formed
+     BMAActualCashflow from a CollateralCashflows Pydantic model.
+  2. PAIRED input parity: a deal run via PAIRED produces bond cashflows
      identical to the same deal run via the legacy LDCMA path.
-  2. Multi-group PAIRED: the runtime extracts per-group BMA-native arrays
-     via ``portfolio.aggregate_actual_by_group()`` and
-     ``aggregate_scheduled_by_group()`` (Phase 0A) so ``GROUP_<id>_*``
-     source tokens route correctly.
-  3. Internal BMA-native naming: the collateral dict carries both the
-     BMA-native canonical keys and the LDCMA aliases.
+  3. Multi-group PAIRED: ``ExecutionContext.actual_by_group`` carries one
+     BMAActualCashflow per group_id; the runtime routes ``GROUP_<id>_*``
+     source tokens correctly.
+  4. ``actual.total_bal`` (= perf_bal + fcl) is the deal-mechanics
+     "balance" — exposed in the expression context as
+     ``collateral_balance`` per deal-mechanics convention.
 
 Why this matters:
   Pre-Phase-1b the deal runtime accepted only LDCMA-format collateral
   feeds, forcing every BMA engine output through a translation adapter
-  on every run. PAIRED input lets the runtime consume PortfolioCashflow
-  natively with full per-loan visibility (the ``portfolio.constituents``
-  list is preserved through the runtime context for Phase 1d).
+  on every run, then a dict-of-arrays representation internally. PAIRED
+  input lets the runtime consume PortfolioCashflow natively with full
+  per-loan visibility and BMA-native typed access throughout.
 """
 from __future__ import annotations
 
@@ -38,8 +40,8 @@ import pytest
 from bma_standard_formulas.deals.adapters import from_actual_cashflow
 from bma_standard_formulas.deals.deal_library import passthrough_deal
 from bma_standard_formulas.deals.runtime import (
-    _bma_actual_to_dict,
-    _ldcma_cashflow_to_bma_native,
+    _extract_collateral_arrays,
+    _ldcma_to_bma_actual,
     run_deal,
 )
 from bma_standard_formulas.deals.schemas.input import (
@@ -54,7 +56,11 @@ from bma_standard_formulas.engine.loan import (
 )
 from bma_standard_formulas.engine.portfolio import PortfolioMode
 from bma_standard_formulas.formulas import generate_smm_curve_from_psa
-from bma_standard_formulas.formulas.cashflows import CashFlowPair
+from bma_standard_formulas.formulas.cashflows import (
+    BMAActualCashflow,
+    BMAScheduledCashflow,
+    CashFlowPair,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -99,88 +105,123 @@ def _build_paired_portfolio(loans: list[Loan], psa_speed: float = 100.0) -> Port
 
 
 # ---------------------------------------------------------------------------
-# 1. BMA-native dict shape
+# 1. Boundary helper: _ldcma_to_bma_actual
 # ---------------------------------------------------------------------------
 
 
-class TestBMAActualToDict:
-    """The BMA-native dict carries both canonical names and LDCMA aliases."""
+class TestLDCMAtoBMAActual:
+    """The boundary helper synthesizes a BMAActualCashflow from an LDCMA dict."""
 
-    def test_canonical_bma_keys_present(self):
-        loan = _build_loan(1)
-        actual, _ = _build_actual_and_scheduled(loan)
-        out = _bma_actual_to_dict(actual)
-
-        # Canonical BMA-native FLOW + STOCK + RATIO fields
-        for key in (
-            "perf_bal", "act_int", "act_am", "vol_prepay",
-            "prin_loss", "prin_recov", "new_def",
-            "mdr", "smm", "gross_rate", "net_rate", "age",
-        ):
-            assert key in out, f"missing canonical BMA key {key!r}"
-
-    def test_combined_streams_are_correct_sums(self):
-        loan = _build_loan(1)
-        actual, _ = _build_actual_and_scheduled(loan)
-        out = _bma_actual_to_dict(actual)
-
-        # act_prin = act_am + vol_prepay
-        np.testing.assert_allclose(
-            out["act_prin"], out["act_am"] + out["vol_prepay"],
-            rtol=0, atol=1e-9,
-        )
-        # act_cash = act_prin + act_int
-        np.testing.assert_allclose(
-            out["act_cash"], out["act_prin"] + out["act_int"],
-            rtol=0, atol=1e-9,
-        )
-
-    def test_ldcma_aliases_match_canonical(self):
-        loan = _build_loan(1)
-        actual, _ = _build_actual_and_scheduled(loan)
-        out = _bma_actual_to_dict(actual)
-
-        # Aliases point at the same arrays as the BMA canonical names
-        assert out["balance"] is out["perf_bal"] or np.array_equal(out["balance"], out["perf_bal"])
-        assert out["interest"] is out["act_int"] or np.array_equal(out["interest"], out["act_int"])
-        assert out["loss"] is out["prin_loss"] or np.array_equal(out["loss"], out["prin_loss"])
-        np.testing.assert_array_equal(out["principal"], out["act_prin"])
-        np.testing.assert_array_equal(out["cashflow"], out["act_cash"])
-
-    def test_cpr_cdr_derived_from_smm_mdr(self):
-        loan = _build_loan(1)
-        actual, _ = _build_actual_and_scheduled(loan, psa_speed=100.0)
-        out = _bma_actual_to_dict(actual)
-
-        # cpr = 1 - (1 - smm)**12
-        expected_cpr = 1.0 - np.power(np.maximum(1.0 - out["smm"], 0.0), 12)
-        np.testing.assert_allclose(out["cpr"], expected_cpr, rtol=1e-12)
-
-
-# ---------------------------------------------------------------------------
-# 2. LDCMA -> BMA-native translation
-# ---------------------------------------------------------------------------
-
-
-class TestLDCMAtoBMANative:
-    """LDCMA-format inputs translate to the same BMA-native dict shape."""
-
-    def test_ldcma_dict_produces_bma_native_keys(self):
-        # Build an LDCMA-format DealRunInput via the legacy adapter, then
-        # translate the inner CollateralCashflows back to BMA-native.
-        loan = _build_loan(1)
+    def test_returns_bma_actual_cashflow(self):
+        loan = _build_loan(1, group_id=None)
         actual, _ = _build_actual_and_scheduled(loan)
         run_input = from_actual_cashflow(actual, horizon=361, initial_balance=1_000_000.0)
-        out = _ldcma_cashflow_to_bma_native(run_input.collateral.collateral)
 
-        for key in (
-            "perf_bal", "act_int", "act_am", "vol_prepay",
-            "prin_loss", "prin_recov", "new_def",
-            "act_prin", "act_cash",
-            # aliases populated alongside
-            "balance", "interest", "principal", "cashflow", "loss",
-        ):
-            assert key in out, f"missing BMA-native key {key!r} after LDCMA translation"
+        synth = _ldcma_to_bma_actual(run_input.collateral.collateral)
+
+        assert isinstance(synth, BMAActualCashflow)
+        # Primitive BMA fields populated from LDCMA equivalents
+        assert synth.perf_bal[0] == pytest.approx(1_000_000.0)
+        assert len(synth.act_int) == 361
+        assert len(synth.act_am) == 361
+
+    def test_derived_fields_populated_after_construction(self):
+        """__post_init__ on the BMA dataclass populates act_prin / act_cash /
+        total_bal automatically once the synthesized object is constructed."""
+        loan = _build_loan(1, group_id=None)
+        actual, _ = _build_actual_and_scheduled(loan)
+        run_input = from_actual_cashflow(actual, horizon=361, initial_balance=1_000_000.0)
+        synth = _ldcma_to_bma_actual(run_input.collateral.collateral)
+
+        np.testing.assert_array_equal(synth.act_prin, synth.act_am + synth.vol_prepay)
+        np.testing.assert_array_equal(synth.act_cash, synth.act_prin + synth.act_int)
+        np.testing.assert_array_equal(synth.total_bal, synth.perf_bal + synth.fcl)
+
+    def test_fcl_is_zero_for_ldcma_input(self):
+        """LDCMA dicts have no foreclosure pipeline representation, so the
+        synthesized BMAActualCashflow has fcl = 0 everywhere. This means
+        total_bal == perf_bal for any LDCMA-sourced run."""
+        loan = _build_loan(1, group_id=None)
+        actual, _ = _build_actual_and_scheduled(loan)
+        run_input = from_actual_cashflow(actual, horizon=361, initial_balance=1_000_000.0)
+        synth = _ldcma_to_bma_actual(run_input.collateral.collateral)
+
+        np.testing.assert_array_equal(synth.fcl, np.zeros(361))
+        np.testing.assert_array_equal(synth.total_bal, synth.perf_bal)
+
+
+# ---------------------------------------------------------------------------
+# 2. _extract_collateral_arrays returns typed BMA objects
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCollateralArrays:
+    """The runtime extractor returns typed BMA cashflow objects."""
+
+    def test_paired_input_returns_typed_objects(self):
+        loan = _build_loan(1, group_id=None)
+        portfolio = _build_paired_portfolio([loan])
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            loan_count=1,
+            original_collateral_balance=1_000_000.0,
+        )
+        actual, scheduled, actual_by_group, scheduled_by_group = _extract_collateral_arrays(run_input)
+
+        assert isinstance(actual, BMAActualCashflow)
+        assert isinstance(scheduled, BMAScheduledCashflow)
+        assert actual_by_group == {}        # single-pool: untagged loans skipped
+        assert scheduled_by_group == {}
+
+    def test_paired_multi_group_returns_per_group_dicts(self):
+        loans = [
+            _build_loan(1, group_id="GROUP_1", balance=1_000_000),
+            _build_loan(2, group_id="GROUP_2", balance=500_000),
+        ]
+        portfolio = _build_paired_portfolio(loans)
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            loan_count=2,
+            original_collateral_balance=1_500_000.0,
+        )
+        actual, scheduled, actual_by_group, scheduled_by_group = _extract_collateral_arrays(run_input)
+
+        assert isinstance(actual, BMAActualCashflow)
+        assert set(actual_by_group.keys()) == {"GROUP_1", "GROUP_2"}
+        for gid, g_actual in actual_by_group.items():
+            assert isinstance(g_actual, BMAActualCashflow)
+        assert set(scheduled_by_group.keys()) == {"GROUP_1", "GROUP_2"}
+
+    def test_pooled_ldcma_input_returns_actual_only(self):
+        loan = _build_loan(1, group_id=None)
+        actual, _ = _build_actual_and_scheduled(loan)
+        run_input = from_actual_cashflow(actual, horizon=361, initial_balance=1_000_000.0)
+
+        a, s, abg, sbg = _extract_collateral_arrays(run_input)
+
+        assert isinstance(a, BMAActualCashflow)
+        assert s is None              # LDCMA inputs have no scheduled stream
+        assert abg == {} and sbg == {}
+
+    def test_paired_aggregate_perf_bal_sums_per_group(self):
+        loans = [
+            _build_loan(1, "GROUP_1", balance=1_000_000),
+            _build_loan(2, "GROUP_2", balance=500_000),
+        ]
+        portfolio = _build_paired_portfolio(loans)
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            loan_count=2,
+            original_collateral_balance=1_500_000.0,
+        )
+        actual, _, actual_by_group, _ = _extract_collateral_arrays(run_input)
+
+        # Linearity property: aggregate perf_bal == sum of per-group perf_bal
+        np.testing.assert_allclose(
+            actual.perf_bal,
+            actual_by_group["GROUP_1"].perf_bal + actual_by_group["GROUP_2"].perf_bal,
+            rtol=1e-10, atol=1e-6,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -189,12 +230,12 @@ class TestLDCMAtoBMANative:
 
 
 class TestPairedDealRunParity:
-    """Running a deal via PAIRED input produces the same bond cashflows
-    as running it via the legacy LDCMA path."""
+    """A deal run via PAIRED input produces the same bond cashflows as the
+    same deal run via the legacy LDCMA path."""
 
     @pytest.fixture(scope="class")
     def paired_run_result(self):
-        loan = _build_loan(1, group_id=None)  # passthrough_deal has no groups
+        loan = _build_loan(1, group_id=None)
         portfolio = _build_paired_portfolio([loan])
         run_input = DealRunInput(
             collateral=PairedCollateralInput(portfolio=portfolio),
@@ -216,7 +257,6 @@ class TestPairedDealRunParity:
         ldcma_r = [r for r in ldcma_run_result.bond_cashflows if r.tranche_id == "R"]
         assert len(paired_r) == len(ldcma_r)
 
-        # Compare key flow fields period-by-period
         for p, l in zip(paired_r, ldcma_r):
             assert p.period == l.period
             assert p.cashflow_total == pytest.approx(l.cashflow_total, rel=1e-9, abs=1e-6), (
@@ -224,7 +264,6 @@ class TestPairedDealRunParity:
             )
 
     def test_account_artifacts_match(self, paired_run_result, ldcma_run_result):
-        """Account balances should also match between PAIRED and LDCMA paths."""
         paired_acc = {(r.account_id, r.period): r for r in paired_run_result.deal_accounts}
         ldcma_acc = {(r.account_id, r.period): r for r in ldcma_run_result.deal_accounts}
         assert paired_acc.keys() == ldcma_acc.keys()
@@ -233,67 +272,3 @@ class TestPairedDealRunParity:
             assert paired_row.end_balance == pytest.approx(
                 ldcma_row.end_balance, rel=1e-9, abs=1e-6,
             )
-
-
-# ---------------------------------------------------------------------------
-# 4. Multi-group PAIRED: per-group routing via aggregate_actual_by_group()
-# ---------------------------------------------------------------------------
-
-
-class TestPairedMultiGroup:
-    """Multi-group PAIRED inputs: per-group BMA-native arrays in collateral_by_group."""
-
-    def test_per_group_arrays_available_in_runtime(self):
-        from bma_standard_formulas.deals.runtime import _extract_collateral_arrays
-
-        loans_g1 = [_build_loan(1, "GROUP_1", balance=1_000_000)]
-        loans_g2 = [_build_loan(2, "GROUP_2", balance=500_000)]
-        portfolio = _build_paired_portfolio(loans_g1 + loans_g2)
-        run_input = DealRunInput(
-            collateral=PairedCollateralInput(portfolio=portfolio),
-            loan_count=2,
-            original_collateral_balance=1_500_000.0,
-        )
-        agg, per_group = _extract_collateral_arrays(run_input)
-
-        # Aggregate carries BMA-native keys + LDCMA aliases
-        assert "perf_bal" in agg
-        assert "act_int" in agg
-        assert "balance" in agg
-
-        # Per-group dict has both groups
-        assert set(per_group.keys()) == {"GROUP_1", "GROUP_2"}
-
-        # Per-group arrays have BMA-native keys
-        for gid, g in per_group.items():
-            assert "perf_bal" in g
-            assert "act_int" in g
-            assert "act_am" in g
-            assert "vol_prepay" in g
-            assert "prin_loss" in g
-
-        # Linearity: aggregate perf_bal = sum of per-group perf_bal at every period
-        np.testing.assert_allclose(
-            agg["perf_bal"],
-            per_group["GROUP_1"]["perf_bal"] + per_group["GROUP_2"]["perf_bal"],
-            rtol=1e-10, atol=1e-6,
-        )
-
-    def test_paired_input_includes_scheduled_fields(self):
-        from bma_standard_formulas.deals.runtime import _extract_collateral_arrays
-
-        loan = _build_loan(1)
-        portfolio = _build_paired_portfolio([loan])
-        run_input = DealRunInput(
-            collateral=PairedCollateralInput(portfolio=portfolio),
-            loan_count=1,
-            original_collateral_balance=1_000_000.0,
-        )
-        agg, _ = _extract_collateral_arrays(run_input)
-
-        # Scheduled-derived fields populated in PAIRED mode
-        assert "survival_factor" in agg
-        assert "pool_factor" in agg
-        assert "amortized_balance_fraction" in agg
-        assert "payment_factor" in agg
-        assert "sched_gross_rate" in agg
