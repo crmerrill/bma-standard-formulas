@@ -112,16 +112,25 @@ def from_collateral_dict(
     )
 
 
-def from_portfolio_cashflow(
-    portfolio_df: Any,
-    *,
-    loan_count: int | None = None,
-    market_date: str | None = None,
-) -> DealRunInput:
-    """Convert a BMA PortfolioCashflow DataFrame to DealRunInput.
+def _portfolio_df_to_cf_dict(portfolio_df: Any) -> tuple[dict[str, Any], int]:
+    """Translate a BMA PortfolioCashflow-shaped DataFrame to an LDCMA-style cf_dict.
 
-    Maps BMA engine output columns to the LDCMA-style CollateralCashflows
-    field names expected by the waterfall runtime.
+    Internal helper shared by :func:`from_portfolio_cashflow` and
+    :func:`from_grouped_portfolio_cashflows`. Encapsulates the BMA → LDCMA
+    field-name mapping so callers (single-pool vs multi-group) build the
+    same dict shape from the same DataFrame columns.
+
+    Args:
+        portfolio_df: A pandas DataFrame with BMA engine output columns
+            (perf_bal, act_am, vol_prepay, act_int, new_def, prin_recov,
+            prin_loss; optionally gross_rate).
+
+    Returns:
+        A tuple ``(cf_dict, n)`` where ``cf_dict`` is in the shape expected
+        by :func:`_build_cf_from_dict` and ``n`` is the period count.
+
+    Raises:
+        TypeError: If ``portfolio_df`` is not a pandas DataFrame.
     """
     import pandas as pd
 
@@ -129,17 +138,6 @@ def from_portfolio_cashflow(
         raise TypeError(f"Expected DataFrame, got {type(portfolio_df)}")
 
     n = len(portfolio_df)
-
-    col_map = {
-        "perf_bal": "balance",
-        "act_am": "principal_sched",
-        "vol_prepay": "principal_unsched",
-        "act_int": "interest",
-        "new_def": "defbal",
-        "prin_recov": "recovery",
-        "prin_loss": "loss",
-    }
-
     cf_dict: dict[str, Any] = {
         "cfdate": list(range(n)),
         "balance": _to_list(portfolio_df.get("perf_bal", np.zeros(n))),
@@ -176,11 +174,78 @@ def from_portfolio_cashflow(
         cf_dict["coupon"] = _to_list(portfolio_df["gross_rate"])
         cf_dict["effcoupon"] = _to_list(portfolio_df["gross_rate"])
 
+    return cf_dict, n
+
+
+def from_portfolio_cashflow(
+    portfolio_df: Any,
+    *,
+    loan_count: int | None = None,
+    market_date: str | None = None,
+) -> DealRunInput:
+    """Convert a BMA PortfolioCashflow DataFrame to a single-pool DealRunInput.
+
+    Maps BMA engine output columns to the LDCMA-style CollateralCashflows
+    field names expected by the waterfall runtime, then wraps the result
+    as a ``PooledCollateralInput``.
+    """
+    cf_dict, n = _portfolio_df_to_cf_dict(portfolio_df)
     cf = _build_cf_from_dict(cf_dict, n)
     orig_bal = float(cf_dict["balance"][0]) if n > 0 else 0.0
 
     return DealRunInput(
         collateral=PooledCollateralInput(collateral=cf),
+        loan_count=loan_count,
+        original_collateral_balance=orig_bal,
+        market_date=market_date,
+    )
+
+
+def from_grouped_portfolio_cashflows(
+    group_dfs: dict[str, Any],
+    *,
+    loan_count: int | None = None,
+    market_date: str | None = None,
+) -> DealRunInput:
+    """Convert per-group BMA PortfolioCashflow DataFrames to a multi-group DealRunInput.
+
+    Each entry in ``group_dfs`` (keyed by ``group_id``) becomes one
+    ``CollateralCashflows`` instance inside a ``GroupedCollateralInput``.
+    The deal runtime then routes ``GROUP_<id>_*`` source tokens to the
+    matching group's stream.
+
+    The orchestrator (Phase 0B) emits per-group portfolio artifacts whose
+    DataFrames have the same shape as the whole-pool aggregate; this adapter
+    turns that on-disk representation into the runtime's grouped input form
+    without re-running the engine.
+
+    Args:
+        group_dfs: Mapping ``group_id`` -> BMA-shaped DataFrame.  Group IDs
+            are stringified consistently with
+            :func:`_partition_by_group_id` and the deal IR's
+            ``CollateralGroupDef.group_id``.
+        loan_count: Total loan count across all groups (informational).
+        market_date: Market / settlement date string (informational).
+
+    Returns:
+        DealRunInput with a ``GroupedCollateralInput`` collateral payload.
+
+    Raises:
+        ValueError: If ``group_dfs`` is empty.
+    """
+    if not group_dfs:
+        raise ValueError("from_grouped_portfolio_cashflows requires at least one group")
+
+    groups: dict[str, CollateralCashflows] = {}
+    orig_bal = 0.0
+    for gid, df in group_dfs.items():
+        cf_dict, n = _portfolio_df_to_cf_dict(df)
+        groups[str(gid)] = _build_cf_from_dict(cf_dict, n)
+        if n > 0:
+            orig_bal += float(cf_dict["balance"][0])
+
+    return DealRunInput(
+        collateral=GroupedCollateralInput(groups=groups),
         loan_count=loan_count,
         original_collateral_balance=orig_bal,
         market_date=market_date,

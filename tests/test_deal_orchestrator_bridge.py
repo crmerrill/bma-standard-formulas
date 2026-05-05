@@ -59,6 +59,129 @@ def test_bridge_builds_runsetup_ref_inputs(monkeypatch, tmp_path):
     assert built["Base Case"].collateral.mode == "POOLED"
 
 
+def test_bridge_reads_per_group_artifacts_for_grouped_run(monkeypatch, tmp_path):
+    """Phase 0C: when the source run has group_names, the bridge produces
+    a GroupedCollateralInput by reading the per-group portfolio artifacts.
+
+    Pre-Phase-0C the bridge silently fell back to the aggregate-only
+    PooledCollateralInput regardless of grouping configuration, leaving
+    multi-group deal runs unable to receive per-group cashflows from
+    Run-Setup-driven portfolio runs.
+    """
+    _use_tmp_workspace(monkeypatch, tmp_path)
+    run_id = "run_grouped"
+
+    # Manifest mirrors what run_service writes for a grouped completed run:
+    # group_names list + per-scenario per-group artifact keys live alongside
+    # the aggregate artifact key under the same scenario prefix.
+    run_store.save_manifest(
+        run_id,
+        {
+            "status": "completed",
+            "scenario_names": ["Base Case"],
+            "loan_count": 4,
+            "group_names": ["GROUP_1", "GROUP_2"],
+            "group_artifacts": {
+                "GROUP_1": "Base_Case_group_GROUP_1_actual",
+                "GROUP_2": "Base_Case_group_GROUP_2_actual",
+            },
+        },
+    )
+
+    # Aggregate artifact (would be the fallback if per-group artifacts go missing)
+    agg_df = pd.DataFrame(
+        {
+            "perf_bal": [300.0, 270.0, 240.0],
+            "act_am": [0.0, 30.0, 30.0],
+            "vol_prepay": [0.0, 0.0, 0.0],
+            "act_int": [0.0, 3.0, 2.4],
+            "new_def": [0.0, 0.0, 0.0],
+            "prin_recov": [0.0, 0.0, 0.0],
+            "prin_loss": [0.0, 0.0, 0.0],
+        }
+    )
+    run_store.save_artifact(run_id, "Base_Case_portfolio_actual", agg_df)
+
+    # Per-group artifacts — the bridge should pick THESE up under proposal
+    # 0C, in preference to the aggregate.
+    g1_df = pd.DataFrame(
+        {
+            "perf_bal": [200.0, 180.0, 160.0],
+            "act_am": [0.0, 20.0, 20.0],
+            "vol_prepay": [0.0, 0.0, 0.0],
+            "act_int": [0.0, 2.0, 1.6],
+            "new_def": [0.0, 0.0, 0.0],
+            "prin_recov": [0.0, 0.0, 0.0],
+            "prin_loss": [0.0, 0.0, 0.0],
+        }
+    )
+    g2_df = pd.DataFrame(
+        {
+            "perf_bal": [100.0, 90.0, 80.0],
+            "act_am": [0.0, 10.0, 10.0],
+            "vol_prepay": [0.0, 0.0, 0.0],
+            "act_int": [0.0, 1.0, 0.8],
+            "new_def": [0.0, 0.0, 0.0],
+            "prin_recov": [0.0, 0.0, 0.0],
+            "prin_loss": [0.0, 0.0, 0.0],
+        }
+    )
+    run_store.save_artifact(run_id, "Base_Case_group_GROUP_1_actual", g1_df)
+    run_store.save_artifact(run_id, "Base_Case_group_GROUP_2_actual", g2_df)
+
+    built = build_from_runsetup_ref(run_id, scenario_names=["Base Case"])
+
+    assert "Base Case" in built
+    deal_input = built["Base Case"]
+    assert deal_input.collateral.mode == "GROUPED"
+    assert set(deal_input.collateral.groups.keys()) == {"GROUP_1", "GROUP_2"}
+
+    # The per-group CollateralCashflows should reflect the per-group artifacts,
+    # not the aggregate (period-0 balance is 200 / 100, not 300).
+    g1 = deal_input.collateral.groups["GROUP_1"]
+    g2 = deal_input.collateral.groups["GROUP_2"]
+    assert g1.balance[0] == 200.0
+    assert g2.balance[0] == 100.0
+
+    # Original collateral balance is the sum of per-group initial balances.
+    assert deal_input.original_collateral_balance == 300.0
+
+
+def test_bridge_falls_back_to_aggregate_when_per_group_artifacts_missing(monkeypatch, tmp_path):
+    """If a grouped run has missing per-group artifacts (e.g. workspace
+    corruption), the bridge falls back to the aggregate-only path so the
+    deal can still be wired up with a degraded representation."""
+    _use_tmp_workspace(monkeypatch, tmp_path)
+    run_id = "run_grouped_partial"
+    run_store.save_manifest(
+        run_id,
+        {
+            "status": "completed",
+            "scenario_names": ["Base Case"],
+            "loan_count": 4,
+            "group_names": ["GROUP_1", "GROUP_2"],
+        },
+    )
+    agg_df = pd.DataFrame(
+        {
+            "perf_bal": [300.0, 270.0],
+            "act_am": [0.0, 30.0],
+            "vol_prepay": [0.0, 0.0],
+            "act_int": [0.0, 3.0],
+            "new_def": [0.0, 0.0],
+            "prin_recov": [0.0, 0.0],
+            "prin_loss": [0.0, 0.0],
+        }
+    )
+    run_store.save_artifact(run_id, "Base_Case_portfolio_actual", agg_df)
+    # Per-group artifacts intentionally missing.
+
+    built = build_from_runsetup_ref(run_id, scenario_names=["Base Case"])
+
+    # Falls back to the single-pool path.
+    assert built["Base Case"].collateral.mode == "POOLED"
+
+
 def test_bridge_builds_deal_native_inputs():
     payload = {
         "scenario_name": "Base Case",
