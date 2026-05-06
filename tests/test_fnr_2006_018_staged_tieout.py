@@ -155,7 +155,7 @@ class TestStage3DealEngineConservation:
     def test_pool_inflow_equals_bond_outflow_plus_residual(self, psa: int):
         """Cash conservation under split interest/principal stream semantics.
 
-        With `INT_CASH` and `PRIN_CASH` as explicit independent source
+        With `ACT_INT` and `ACT_PRIN` as explicit independent source
         streams, Z accrual is simply pool interest re-routed to support
         principal: every dollar that flows into the deal is either pool
         principal or pool interest, and every dollar that flows out is

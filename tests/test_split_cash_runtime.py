@@ -3,7 +3,7 @@
 `SPLIT_CASH` is the cash-plumbing Lego block: it drains cash from one or
 more input streams (`from_sources`) and writes it into one or more named
 target streams (`to_targets`) according to per-target weights. Targets
-that are not built-in stream names (CASH/INT_CASH/PRIN_CASH) are virtual
+that are not built-in stream names (CASH/ACT_INT/ACT_PRIN) are virtual
 streams that subsequent rules can reference via `from_sources`.
 
 These tests verify three usage shapes:
@@ -122,19 +122,19 @@ def _two_zero_coupon_bonds(
 
 
 class TestSplitOneToMany:
-    """Drain PRIN_CASH into two virtual buckets in 60/40 ratio, pay bonds from each."""
+    """Drain ACT_PRIN into two virtual buckets in 60/40 ratio, pay bonds from each."""
 
     def _build_deal(self) -> DealDefinition:
         return DealDefinition(
             deal_name="split_1_to_N",
             bonds=_two_zero_coupon_bonds(),
             waterfall_rules=[
-                # Step 1: split PRIN_CASH 60/40 into two named buckets.
+                # Step 1: split ACT_PRIN 60/40 into two named buckets.
                 RuleNode(
                     rule_id="r_split",
                     rule_type=RuleType.SPLIT_CASH,
                     order=0,
-                    from_sources=["PRIN_CASH"],
+                    from_sources=["ACT_PRIN"],
                     to_targets=["BUCKET_A", "BUCKET_B"],
                     target_weights=[0.60, 0.40],
                 ),
@@ -155,28 +155,28 @@ class TestSplitOneToMany:
                     to_targets=["B"],
                     cap_mode=CapMode.NONE,
                 ),
-                # Step 3: residual sweeps any unsplit cash from PRIN_CASH/INT_CASH
+                # Step 3: residual sweeps any unsplit cash from ACT_PRIN/ACT_INT
                 # plus anything left in the buckets via N->1 merge.
                 RuleNode(
                     rule_id="r_sweep_back",
                     rule_type=RuleType.SPLIT_CASH,
                     order=3,
                     from_sources=["BUCKET_A", "BUCKET_B"],
-                    to_targets=["PRIN_CASH"],
+                    to_targets=["ACT_PRIN"],
                     target_weights=[1.0],
                 ),
                 RuleNode(
                     rule_id="r_resid_prin",
                     rule_type=RuleType.PAY_RESIDUAL,
                     order=4,
-                    from_sources=["PRIN_CASH"],
+                    from_sources=["ACT_PRIN"],
                     to_targets=["R"],
                 ),
                 RuleNode(
                     rule_id="r_resid_int",
                     rule_type=RuleType.PAY_RESIDUAL,
                     order=5,
-                    from_sources=["INT_CASH"],
+                    from_sources=["ACT_INT"],
                     to_targets=["R"],
                 ),
             ],
@@ -257,7 +257,7 @@ class TestSplitManyToOne:
                     rule_id="r_split",
                     rule_type=RuleType.SPLIT_CASH,
                     order=0,
-                    from_sources=["PRIN_CASH"],
+                    from_sources=["ACT_PRIN"],
                     to_targets=["BUCKET_A", "BUCKET_B"],
                     target_weights=[weight_a, weight_b],
                 ),
@@ -292,14 +292,14 @@ class TestSplitManyToOne:
                     rule_id="r_resid_prin",
                     rule_type=RuleType.PAY_RESIDUAL,
                     order=4,
-                    from_sources=["PRIN_CASH", "BUCKET_A", "BUCKET_B"],
+                    from_sources=["ACT_PRIN", "BUCKET_A", "BUCKET_B"],
                     to_targets=["R"],
                 ),
                 RuleNode(
                     rule_id="r_resid_int",
                     rule_type=RuleType.PAY_RESIDUAL,
                     order=5,
-                    from_sources=["INT_CASH"],
+                    from_sources=["ACT_INT"],
                     to_targets=["R"],
                 ),
             ],

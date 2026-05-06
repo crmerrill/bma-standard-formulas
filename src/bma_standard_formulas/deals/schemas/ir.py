@@ -40,13 +40,12 @@ class CollateralGroupDef(BaseModel):
     REMIC trust groups) carry multiple collateral pools whose cashflows
     are *segregated*: Group 1 collateral pays only Group-1-tagged bonds
     via Group-1-tagged waterfall rules. Each group has its own
-    ``GROUP_<id>_CASH`` / ``GROUP_<id>_INT_CASH`` / ``GROUP_<id>_PRIN_CASH``
-    source tokens and a parallel ``GROUP_<id>_LOSS`` / ``GROUP_<id>_COLLATERAL``
-    pair. Bonds and rules tagged with a ``group_id`` are scoped to that
-    group.
+    ``GROUP_<id>_CASH`` / ``GROUP_<id>_ACT_INT`` / ``GROUP_<id>_ACT_PRIN``
+    source tokens and a parallel ``GROUP_<id>_LOSS`` stream. Bonds and
+    rules tagged with a ``group_id`` are scoped to that group.
 
     Single-pool deals leave ``DealDefinition.collateral_groups`` empty;
-    the legacy ``CASH`` / ``INT_CASH`` / ``PRIN_CASH`` tokens then refer
+    the bare ``CASH`` / ``ACT_INT`` / ``ACT_PRIN`` tokens then refer
     to the single pool unchanged.
     """
 
@@ -211,7 +210,7 @@ class RuleNode(BaseModel):
     group_id: str | None = Field(
         default=None,
         description="Collateral group this rule operates on. When set, the "
-                    "bare 'CASH'/'INT_CASH'/'PRIN_CASH' tokens in "
+                    "bare 'CASH'/'ACT_INT'/'ACT_PRIN' tokens in "
                     "from_sources/to_targets are scoped to this group's "
                     "cash streams; equivalent to writing "
                     "'GROUP_<id>_CASH' explicitly. Single-pool deals leave "
@@ -276,7 +275,7 @@ class DealDefinition(BaseModel):
         default_factory=list,
         description="Collateral groups for multi-pool deals. Empty list "
                     "(default) means the deal has a single, unnamed pool "
-                    "and the bare 'CASH'/'INT_CASH'/'PRIN_CASH' tokens "
+                    "and the bare 'CASH'/'ACT_INT'/'ACT_PRIN' tokens "
                     "refer to it. When non-empty, every BondDef and "
                     "RuleNode that touches collateral cash MUST be tagged "
                     "with a `group_id` matching one of these entries.",
@@ -299,16 +298,17 @@ class DealDefinition(BaseModel):
             source_formula_names = {str(k) for k in raw_source_formulas.keys()}
 
         # Per-group cashflow stream tokens. For each declared collateral
-        # group, the runtime exposes 5 well-known sources/targets:
-        #   GROUP_<id>_CASH       - combined principal + interest + recovery
-        #   GROUP_<id>_INT_CASH   - interest only
-        #   GROUP_<id>_PRIN_CASH  - principal only
-        #   GROUP_<id>_COLLATERAL - alias of CASH (forward compat)
-        #   GROUP_<id>_LOSS       - loss stream for writedowns
+        # group, the runtime exposes four well-known sources/targets:
+        #   GROUP_<id>_CASH      - combined gross collateral cashflow
+        #                          (= act_prin + act_int)
+        #   GROUP_<id>_ACT_INT   - pool interest only (BMA act_int)
+        #   GROUP_<id>_ACT_PRIN  - pool principal only (act_am + vol_prepay)
+        #   GROUP_<id>_LOSS      - loss stream for writedowns (BMA prin_loss)
         # Validator accepts any of these as a from_source or to_target.
+        BUILTIN_STREAMS = {"CASH", "ACT_INT", "ACT_PRIN", "LOSS"}
         group_stream_names: set[str] = set()
         for gid in group_ids:
-            for suffix in ("CASH", "INT_CASH", "PRIN_CASH", "COLLATERAL", "LOSS"):
+            for suffix in BUILTIN_STREAMS:
                 group_stream_names.add(f"GROUP_{gid}_{suffix}")
         # Virtual streams declared via SPLIT_CASH targets become valid
         # sources/targets for any subsequent rule. The validator walks the
@@ -323,24 +323,26 @@ class DealDefinition(BaseModel):
                         tgt not in bond_names
                         and tgt not in account_names
                         and tgt not in fee_names
-                        and tgt not in {"CASH", "COLLATERAL", "LOSS",
-                                        "INT_CASH", "PRIN_CASH"}
+                        and tgt not in BUILTIN_STREAMS
                         and tgt not in source_formula_names
                     ):
                         split_streams.add(tgt)
 
         all_targets = bond_names | account_names | fee_names | {"CASH"}
-        # Built-in source keys: CASH/COLLATERAL = combined pool cashflow,
-        # INT_CASH = pool interest only, PRIN_CASH = pool principal only,
-        # LOSS = pool loss stream. INT_CASH/PRIN_CASH let MBS structures
-        # express the standard "interest waterfall + principal waterfall"
-        # split without conflating bond cash interest with the principal
-        # cascade. Streams declared by SPLIT_CASH `to_targets` are added to
-        # both the source and target sets so downstream rules can route
-        # cash through them.
+        # Built-in source keys (BMA-native naming):
+        #   CASH     = combined gross collateral cashflow (act_prin + act_int)
+        #   ACT_INT  = pool interest stream only (BMA act_int)
+        #   ACT_PRIN = pool principal stream only (act_am + vol_prepay)
+        #   LOSS     = pool loss stream for writedowns (BMA prin_loss)
+        # ACT_INT / ACT_PRIN let MBS structures express the standard
+        # "interest waterfall + principal waterfall" split without
+        # conflating bond cash interest with the principal cascade.
+        # Streams declared by SPLIT_CASH `to_targets` are added to both the
+        # source and target sets so downstream rules can route cash through
+        # them.
         valid_sources = (
             all_targets
-            | {"COLLATERAL", "LOSS", "INT_CASH", "PRIN_CASH"}
+            | BUILTIN_STREAMS
             | group_stream_names
             | source_formula_names
             | split_streams
@@ -348,7 +350,7 @@ class DealDefinition(BaseModel):
         valid_targets = (
             all_targets
             | split_streams
-            | {"INT_CASH", "PRIN_CASH", "COLLATERAL"}
+            | BUILTIN_STREAMS
             | group_stream_names
         )
 

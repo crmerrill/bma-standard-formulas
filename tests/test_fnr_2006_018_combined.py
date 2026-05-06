@@ -14,7 +14,7 @@ What this validates:
     5 Group 2) tagged with their group_id.
   - The runtime allocates per-group `cash_avail_by_group`,
     `interest_avail_by_group`, `principal_avail_by_group` arrays and
-    routes `INT_CASH` / `PRIN_CASH` source tokens through the right
+    routes `ACT_INT` / `ACT_PRIN` source tokens through the right
     pool.
   - Every Group 1 tranche's WAL and final balance match the
     Group-1-only deal at the same PSA speed (no cross-feeding from

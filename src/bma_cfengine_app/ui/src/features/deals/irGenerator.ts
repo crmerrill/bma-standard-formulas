@@ -136,7 +136,7 @@ const RULE_SOURCE_MAP: Record<string, string> = {
   SWAP_HEDGE: "CASH",
   ESCROW: "CASH",
   YIELD_SUPPLEMENT: "CASH",
-  COLLATERAL: "COLLATERAL",
+  COLLATERAL: "CASH",
   CASH: "CASH",
 };
 

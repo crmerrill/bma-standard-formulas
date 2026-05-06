@@ -91,9 +91,9 @@ def _make_test_deal(
         ],
         waterfall_rules=[
             RuleNode(rule_id="r_int", rule_type=RuleType.PAY_INTEREST,
-                     order=0, from_sources=["INT_CASH"], to_targets=["A"]),
+                     order=0, from_sources=["ACT_INT"], to_targets=["A"]),
             RuleNode(rule_id="r_prin", rule_type=RuleType.PAY_PRINCIPAL,
-                     order=1, from_sources=["PRIN_CASH"], to_targets=["A"]),
+                     order=1, from_sources=["ACT_PRIN"], to_targets=["A"]),
             RuleNode(rule_id="r_resid", rule_type=RuleType.PAY_RESIDUAL,
                      order=2, from_sources=["CASH"], to_targets=["R"]),
         ],

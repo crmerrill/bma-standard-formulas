@@ -160,11 +160,11 @@ class ExecutionContext:
     cash_avail: np.ndarray | None = None
     # Independent pool-interest and pool-principal streams, populated each
     # period from ``actual.act_int`` and ``actual.act_prin`` respectively.
-    # Rules that reference source key `INT_CASH` or `PRIN_CASH` draw from
+    # Rules that reference source key `ACT_INT` or `ACT_PRIN` draw from
     # these instead of the combined `CASH` stream, so PAY_INTEREST and
     # PAY_PRINCIPAL rules cannot accidentally cross-fund each other. Deals
     # are responsible for picking one convention (combined `CASH` *or* split
-    # `INT_CASH` + `PRIN_CASH`) per scenario; mixing the two double-counts
+    # `ACT_INT` + `ACT_PRIN`) per scenario; mixing the two double-counts
     # cash because the streams are independent decrementable arrays.
     interest_avail: np.ndarray | None = None
     principal_avail: np.ndarray | None = None
@@ -179,7 +179,7 @@ class ExecutionContext:
     # left empty and rules use the bare `cash_avail` / `interest_avail`
     # / `principal_avail` / `loss_avail` arrays. When the deal declares
     # multiple groups, each group_id maps to its own decrementable arrays
-    # so `GROUP_<id>_CASH` / `GROUP_<id>_INT_CASH` / `GROUP_<id>_PRIN_CASH`
+    # so `GROUP_<id>_CASH` / `GROUP_<id>_ACT_INT` / `GROUP_<id>_ACT_PRIN`
     # / `GROUP_<id>_LOSS` source tokens route to the right pool. The
     # whole-pool primary arrays are populated as the *aggregate* across
     # groups (sum of all group cashflows) so trigger metrics and
@@ -516,7 +516,7 @@ def _scope_sources_to_group(keys: tuple[str, ...], group_id: str | None) -> tupl
     scoped to the rule's collateral group.
 
     When a rule declares ``group_id="GROUP_1"``, the runtime treats its
-    bare ``CASH`` / ``INT_CASH`` / ``PRIN_CASH`` / ``COLLATERAL`` /
+    bare ``CASH`` / ``ACT_INT`` / ``ACT_PRIN`` /
     ``LOSS`` tokens as shorthand for ``GROUP_GROUP_1_CASH`` etc. This
     keeps deal definitions readable: instead of typing the prefixed
     form everywhere, the IR author tags the rule once with its group
@@ -526,7 +526,7 @@ def _scope_sources_to_group(keys: tuple[str, ...], group_id: str | None) -> tupl
     """
     if not group_id:
         return keys
-    SCOPED = {"CASH", "INT_CASH", "PRIN_CASH", "COLLATERAL", "LOSS"}
+    SCOPED = {"CASH", "ACT_INT", "ACT_PRIN", "LOSS"}
     out: list[str] = []
     for key in keys:
         if key in SCOPED:
@@ -1072,8 +1072,8 @@ def _evaluate_calculations(deal: DealDefinition, base_ctx: dict[str, float]) -> 
 def _resolve_source_arrays(ctx: ExecutionContext, source_keys: tuple[str, ...]) -> list[np.ndarray]:
     arrays: list[np.ndarray] = []
     for key in source_keys:
-        # Per-group cash streams: GROUP_<id>_(CASH|INT_CASH|PRIN_CASH|
-        # COLLATERAL|LOSS). Multi-pool deals (e.g. Fannie Mae REMIC
+        # Per-group cash streams: GROUP_<id>_(CASH|ACT_INT|ACT_PRIN|LOSS).
+        # Multi-pool deals (e.g. Fannie Mae REMIC
         # trusts with Group 1 + Group 2 separately-collateralized
         # bonds) route every collateral-touching rule through these
         # so cashflows stay segregated by group. Match longest group
@@ -1085,11 +1085,11 @@ def _resolve_source_arrays(ctx: ExecutionContext, source_keys: tuple[str, ...]) 
                 prefix = f"GROUP_{gid}_"
                 if key.startswith(prefix):
                     suffix = key[len(prefix):]
-                    if suffix == "INT_CASH":
+                    if suffix == "ACT_INT":
                         arrays.append(ctx.interest_avail_by_group[gid])
-                    elif suffix == "PRIN_CASH":
+                    elif suffix == "ACT_PRIN":
                         arrays.append(ctx.principal_avail_by_group[gid])
-                    elif suffix in ("CASH", "COLLATERAL"):
+                    elif suffix == "CASH":
                         arrays.append(ctx.cash_avail_by_group[gid])
                     elif suffix == "LOSS":
                         arrays.append(ctx.loss_avail_by_group[gid])
@@ -1097,22 +1097,23 @@ def _resolve_source_arrays(ctx: ExecutionContext, source_keys: tuple[str, ...]) 
                     break
             if matched:
                 continue
-        # Split-stream sources: INT_CASH = pool interest, PRIN_CASH = pool
-        # principal. Independent arrays, so rules that draw from these do not
-        # interfere with the combined `CASH` stream (which still carries
-        # principal + interest combined). A deal should pick one convention.
-        if key == "INT_CASH" and ctx.interest_avail is not None:
+        # Split-stream sources (BMA-native naming): ACT_INT = pool interest
+        # only, ACT_PRIN = pool principal only (act_am + vol_prepay).
+        # Independent arrays, so rules that draw from these do not interfere
+        # with the combined `CASH` stream (which carries the gross collateral
+        # cashflow = act_prin + act_int). A deal should pick one convention
+        # per scenario; mixing CASH and ACT_INT/ACT_PRIN double-counts cash.
+        if key == "ACT_INT" and ctx.interest_avail is not None:
             arrays.append(ctx.interest_avail)
             continue
-        if key == "PRIN_CASH" and ctx.principal_avail is not None:
+        if key == "ACT_PRIN" and ctx.principal_avail is not None:
             arrays.append(ctx.principal_avail)
             continue
-        if key in ("CASH", "COLLATERAL") and ctx.cash_avail is not None:
+        if key == "CASH" and ctx.cash_avail is not None:
             arrays.append(ctx.cash_avail)
             continue
         if key == "LOSS" and ctx.loss_avail is not None:
             arrays.append(ctx.loss_avail)
-            continue
             continue
         acct = ctx.accounts.get(key)
         if acct is not None:
@@ -1373,8 +1374,8 @@ def _apply_z_accrual(ctx: ExecutionContext, period: int) -> None:
             accrual_paid_to_supports += pmt
 
         # Z accrual is pool interest re-routed to support principal. Decrement
-        # the explicit `INT_CASH` stream so a deal that runs interest rules
-        # against `INT_CASH` does not double-fund the accrual amount. The
+        # the explicit `ACT_INT` stream so a deal that runs interest rules
+        # against `ACT_INT` does not double-fund the accrual amount. The
         # combined `CASH` stream is left alone because deals using it have
         # opted into combined-stream semantics by their rule definitions.
         if accrual_paid_to_supports > 0.0 and ctx.interest_avail is not None:
@@ -1512,9 +1513,9 @@ def run_deal(
     cash_avail = np.zeros(cf_len)
     # First-class split-stream sources: always populated so deal definitions
     # can choose between the combined `CASH` stream (legacy) or the explicit
-    # `INT_CASH` + `PRIN_CASH` streams. The streams are independent
+    # `ACT_INT` + `ACT_PRIN` streams. The streams are independent
     # decrementable arrays; deals should pick one convention per rule chain
-    # (mixing CASH and INT/PRIN double-counts cash).
+    # (mixing CASH and ACT_INT/ACT_PRIN double-counts cash).
     interest_avail = np.zeros(cf_len)
     principal_avail = np.zeros(cf_len)
     # Loss stream for PAY_WRITEDOWN rules — writeable copy of
@@ -1523,7 +1524,7 @@ def run_deal(
     # so the source cashflow remains immutable.
     loss_avail = np.zeros(cf_len)
     # Multi-pool deals: allocate parallel per-group cash arrays. Source
-    # tokens like ``GROUP_<id>_INT_CASH`` route to these so a Group-1
+    # tokens like ``GROUP_<id>_ACT_INT`` route to these so a Group-1
     # interest waterfall draws only from Group 1's pool. The single-pool
     # ``cash_avail``/``interest_avail``/``principal_avail``/``loss_avail``
     # arrays still carry the deal-wide aggregate so triggers and
@@ -1562,7 +1563,7 @@ def run_deal(
     # not already bonds/accounts/fees/built-ins/source_formulas. These streams
     # are decrementable per-period arrays just like the built-in cash streams.
     _builtin_stream_names = {
-        "CASH", "COLLATERAL", "LOSS", "INT_CASH", "PRIN_CASH",
+        "CASH", "LOSS", "ACT_INT", "ACT_PRIN",
     }
     _known_account_or_bond_or_fee = (
         set(bonds.keys()) | set(accounts.keys()) | set(fee_defs_by_name.keys())
@@ -1589,7 +1590,7 @@ def run_deal(
         # consult the account floors.
         _refresh_note_balance_minimums(deal, accounts, bonds, i)
         # Per-period cash decrement seeds. The cash_avail / interest_avail /
-        # principal_avail arrays back the IR's CASH / INT_CASH / PRIN_CASH
+        # principal_avail arrays back the IR's CASH / ACT_INT / ACT_PRIN
         # source tokens; values come from the BMA-native combined streams
         # on the actual cashflow object:
         #   act_cash = act_am + vol_prepay + act_int  (combined collateral cash)
@@ -1657,8 +1658,8 @@ def run_deal(
             # rule executes so later rules can reference it in their
             # `max_amount_expr`. The exposed identifiers are:
             #   `cash_at_<rule_id>`       - combined CASH stream
-            #   `prin_cash_at_<rule_id>`  - PRIN_CASH stream (pool principal)
-            #   `int_cash_at_<rule_id>`   - INT_CASH stream (pool interest)
+            #   `act_prin_at_<rule_id>`   - ACT_PRIN stream (pool principal)
+            #   `act_int_at_<rule_id>`    - ACT_INT stream (pool interest)
             # Face-weighted percentage splits (e.g., FNR 2006-018 supports
             # 95.65 / 4.35) anchor against the same stream they actually
             # draw from so the cap proportions and the consumed cash refer
@@ -1690,13 +1691,13 @@ def run_deal(
             )
             for snap_rule_id, snap_value in ctx.rule_cash_snapshots.items():
                 # Snapshot identifiers are namespaced: bare rule_id → CASH,
-                # `__prin__:<rule_id>` → PRIN_CASH, `__int__:<rule_id>` → INT_CASH.
+                # `__prin__:<rule_id>` → ACT_PRIN, `__int__:<rule_id>` → ACT_INT.
                 if snap_rule_id.startswith("__prin__:"):
                     base = snap_rule_id[len("__prin__:"):]
-                    key = f"prin_cash_at_{base}"
+                    key = f"act_prin_at_{base}"
                 elif snap_rule_id.startswith("__int__:"):
                     base = snap_rule_id[len("__int__:"):]
-                    key = f"int_cash_at_{base}"
+                    key = f"act_int_at_{base}"
                 else:
                     key = f"cash_at_{snap_rule_id}"
                 if key.isidentifier():
@@ -1762,16 +1763,16 @@ def run_deal(
                 # Allocate to targets by weight. Targets are virtual streams
                 # (already pre-allocated in ctx.virtual_sources for SPLIT_CASH
                 # outputs). For convenience also support targets that are
-                # built-in streams (CASH/INT_CASH/PRIN_CASH) so a sweep-back
+                # built-in streams (CASH / ACT_INT / ACT_PRIN) so a sweep-back
                 # can return cash to a built-in source.
                 for tgt_name, w in zip(rule.target_names, weights):
                     out = float(w * total_in)
                     target_arr: np.ndarray | None
-                    if tgt_name == "CASH" or tgt_name == "COLLATERAL":
+                    if tgt_name == "CASH":
                         target_arr = ctx.cash_avail
-                    elif tgt_name == "INT_CASH":
+                    elif tgt_name == "ACT_INT":
                         target_arr = ctx.interest_avail
-                    elif tgt_name == "PRIN_CASH":
+                    elif tgt_name == "ACT_PRIN":
                         target_arr = ctx.principal_avail
                     elif tgt_name in ctx.virtual_sources:
                         target_arr = ctx.virtual_sources[tgt_name]

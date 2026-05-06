@@ -38,9 +38,11 @@ and auto), and the **authoring practice** of fragmenting waterfall
 steps into one rule per bond (a fixture / generator issue, not an
 IR limitation).
 
-**Asset classes still to cover** (not yet in sample): credit card
-master trusts, CLOs (managed), marketplace consumer (SoFi /
-LendingClub / Affirm), equipment ABS, aircraft ABS, solar ABS.
+**Asset classes still to cover** (not yet in sample): CLOs (managed),
+marketplace consumer (SoFi / LendingClub / Affirm), equipment ABS,
+aircraft ABS, solar ABS. Credit card master trusts now covered in
+Round 3 research (May 2026, see "Credit card master trusts" section
+in Part 1).
 
 ---
 
@@ -460,7 +462,7 @@ mode gated by a deal-state trigger.
 | Feature | Agency MBS | Non-Agency RMBS | Prime Auto |
 |---|---|---|---|
 | Distinct collateral groups | YES (1-9 per deal) | YES (typically 1-2) | NO |
-| Separate INT/PRIN sub-streams | YES (INT_CASH/PRIN_CASH) | YES (Interest Remittance Amount + Principal Remittance Amount) | NO (combined Available Funds) |
+| Separate INT/PRIN sub-streams | YES (`ACT_INT`/`ACT_PRIN`) | YES (Interest Remittance Amount + Principal Remittance Amount) | NO (combined Available Funds) |
 | Group-aware allocation | YES | YES (Group 1 Certs, Group 2 Certs) | N/A |
 | PAC / TAC / Z behavior | YES | NO | NO |
 | Stepdown date gate | NO | YES | NO |
@@ -478,7 +480,7 @@ mode gated by a deal-state trigger.
    supported in IR. **Use it more** in the FNR fixture and the
    irGenerator.
 2. **Named distribution amounts** — referenced by name in rule
-   sources. Currently the IR has `INT_CASH` / `PRIN_CASH` as built-in
+   sources. Currently the IR has `ACT_INT` / `ACT_PRIN` as built-in
    streams and `SPLIT_CASH` to create new ones; this generalizes to
    "any named formula". Need a `CalculationNode`-style
    "ComputedAmount" object that produces a per-period scalar usable
@@ -550,7 +552,7 @@ class ComputedAmountNode(BaseModel):
 ```
 
 Rules can reference `ComputedAmountNode` names in `from_sources` the
-same way they reference `INT_CASH`/`PRIN_CASH`. The runtime resolves
+same way they reference `ACT_INT`/`ACT_PRIN`. The runtime resolves
 the name to the per-period scalar.
 
 ### C. WaterfallBranch — `if / elif / else` over rule blocks
@@ -1059,25 +1061,53 @@ rule's effect, not its type — e.g., a `tracks_carryover_for: str`
 field on the rule that names which bond's interest-shortfall ledger
 to update. This needs runtime verification before code change.
 
-### N. Drop alias tokens; rename INT_CASH / PRIN_CASH
+### N. Drop alias tokens; rename INT_CASH / PRIN_CASH — LANDED (Phase 1c, May 2026), superseded by COLL_*
 
-**Current built-in tokens** (some redundant):
+**Original proposal (preserved for history):** rename
+`INT_CASH` → `CASH_INT` and `PRIN_CASH` → `CASH_PRIN` for prefix
+consistency, drop `COLLATERAL` and `GROUP_<id>_COLLATERAL` aliases.
 
-| Token | Status |
-|---|---|
-| `CASH` | keep (canonical pool cashflow) |
-| `COLLATERAL` | **drop** — alias for `CASH`, doesn't add anything |
-| `INT_CASH` | **rename to `CASH_INT`** for prefix consistency |
-| `PRIN_CASH` | **rename to `CASH_PRIN`** for prefix consistency |
-| `LOSS` | keep |
-| `GROUP_<id>_CASH` | keep |
-| `GROUP_<id>_COLLATERAL` | **drop** — alias |
-| `GROUP_<id>_INT_CASH` | rename to `GROUP_<id>_CASH_INT` |
-| `GROUP_<id>_PRIN_CASH` | rename to `GROUP_<id>_CASH_PRIN` |
-| `GROUP_<id>_LOSS` | keep |
+**What actually landed (Phase 1c, May 2026):** the user's explicit
+"full BMA-native across the board" directive shifted the rename
+target to match `BMAActualCashflow` field names directly:
 
-The `CASH_*` prefix pattern reads better and groups the cashflow
-streams as siblings under a parent `CASH` concept.
+| Token | Original proposal | Landed in Phase 1c |
+|---|---|---|
+| `CASH` | keep | keep (= `BMAActualCashflow.act_cash`) |
+| `COLLATERAL` | drop | dropped |
+| `INT_CASH` | rename to `CASH_INT` | renamed to **`ACT_INT`** (= `BMAActualCashflow.act_int`) |
+| `PRIN_CASH` | rename to `CASH_PRIN` | renamed to **`ACT_PRIN`** (= `BMAActualCashflow.act_prin`) |
+| `LOSS` | keep | keep (= `BMAActualCashflow.prin_loss`) |
+| `GROUP_<id>_CASH` | keep | keep |
+| `GROUP_<id>_COLLATERAL` | drop | dropped |
+| `GROUP_<id>_INT_CASH` | rename to `GROUP_<id>_CASH_INT` | renamed to `GROUP_<id>_ACT_INT` |
+| `GROUP_<id>_PRIN_CASH` | rename to `GROUP_<id>_CASH_PRIN` | renamed to `GROUP_<id>_ACT_PRIN` |
+| `GROUP_<id>_LOSS` | keep | keep |
+
+Rationale for the BMA-native naming over `CASH_*`: every token now
+maps to exactly one named field on the cashflow dataclass — no
+translation layer between IR vocabulary and the engine's data model.
+
+**Forward direction — `COLL_*` taxonomy (proposed Phase 2):** after
+the CC research validated the need for finer-grained cashflow
+decomposition (servicer advances, recoveries, loss decomposition,
+balance refs), the user agreed to advance to a full `COLL_*` prefix
+scheme that:
+
+- Re-prefixes the four core streams: `CASH` → `COLL_CASH`,
+  `ACT_INT` → `COLL_INT`, `ACT_PRIN` → `COLL_PRIN`,
+  `LOSS` → `COLL_LOSS`.
+- Adds 11 decomposition tokens (`COLL_PRIN_SCH`, `COLL_PRIN_PPAY`,
+  `COLL_PRIN_REC`, `COLL_PRIN_ADV`, `COLL_PRIN_ADV_REIMB`,
+  `COLL_INT_ADV`, `COLL_INT_ADV_REIMB`, `COLL_LOSS_PRIN`,
+  `COLL_LOSS_INT`, `COLL_LOSS_ADV`, `COLL_SVC`).
+- Adds 3 read-only balance refs (`COLL_PERF_BAL`, `COLL_FCL_BAL`,
+  `COLL_TOTAL_BAL`).
+
+See "Built-in source/target tokens" in Part 2 for the full
+vocabulary. Phase 1c stops at the BMA-native rename; the `COLL_*`
+forward step is sequenced after the Proposal R PAIRED-input
+migration (Phases 1d–1h) lands.
 
 ### O. AccountType is a label, not runtime semantics
 
@@ -1287,7 +1317,7 @@ Test coverage in `tests/test_account_minimum_basis.py`:
 | `RuleType.PAY_TO_RESERVE` | `PAY_TO_ACCOUNT` | Accounts are not just reserves |
 | Built-in token `COLLATERAL` | (deleted) | Alias for `CASH` |
 | Built-in token `GROUP_<id>_COLLATERAL` | (deleted) | Alias for `GROUP_<id>_CASH` |
-| `INT_CASH` / `PRIN_CASH` (and group variants) | `CASH_INT` / `CASH_PRIN` (and group variants) | Prefix consistency |
+| `INT_CASH` / `PRIN_CASH` (and group variants) | **Phase 1c (May 2026):** `ACT_INT` / `ACT_PRIN`. **Phase 2 (planned):** `COLL_INT` / `COLL_PRIN` under the full `COLL_*` taxonomy | Phase 1c aligns IR with `BMAActualCashflow` field names; Phase 2 adds 11 decomposition tokens + 3 balance refs. See proposal N updates and Part 2 "Built-in source/target tokens" |
 | `AccountType` enum (treated as runtime-significant) | `AccountCategory` (UI label only) | **Verified**: runtime never branches on `account_type` |
 | ~~`minimum_basis` and `starting_basis` ignored by runtime~~ | Per-period recomputation honoring the enum value | **FIXED (May 2026)** — proposal Q. `_allocate_account_workspace` + `_refresh_note_balance_minimums` in runtime.py; covered by `tests/test_account_minimum_basis.py` (9 tests, all passing). |
 
@@ -1330,7 +1360,7 @@ against the actual runtime + schemas. Findings:
 | K | Two-phase derivation; drop `schedule_speed_target` | **Confirmed AND already implemented** | `schedule_derivation.py` already exists at `src/bma_cfengine_app/orchestrator/deals/` with `derive_pac_schedule(...)` (lower envelope of two PSA projections) and `derive_tac_schedule(...)`. Runtime never reads speeds — only `schedule_contract`. Proposal collapses to just dropping the redundant `schedule_speed_target` field. |
 | **L** | **Drop `PaymentStyle.CONCURRENT`** | **DOC WAS WRONG** | The current enum has only `SEQUENTIAL \| PRO_RATA`. `CONCURRENT` was never in the code. **No code change needed.** |
 | M | Reserve / recourse rule consolidation | Confirmed with refinement | `PAY_FROM_RESERVE_INTEREST` decrements bond's `int_shortfall` ledger and accumulates `opt_interest` (`runtime.py:1635-1642`). `PAY_FROM_RESERVE_PRINCIPAL` increments bond principal/balance. `PAY_RECOURSE_*` draws against pseudo-bond capacity. **Full collapse needs a `coverage_mode: NORMAL \| INTEREST_SHORTFALL \| PRINCIPAL_ACCELERATION` field** to preserve the shortfall-ledger semantics. Recourse pseudo-bonds are also valid `from_sources` since they have a balance to decrement. Recommend phased migration. |
-| N | Drop `COLLATERAL` aliases; rename `INT_CASH`/`PRIN_CASH` → `CASH_INT`/`CASH_PRIN` | Confirmed | Runtime token resolver has explicit `if key == "INT_CASH"` checks; rename touches `runtime.py:765-787` plus every fixture. The `COLLATERAL` alias is checked at `runtime.py:769, 787, 1421` and is not used by any current fixture. |
+| N | Drop `COLLATERAL` aliases; rename `INT_CASH`/`PRIN_CASH` | **SHIPPED Phase 1c (May 2026)** | Renamed to `ACT_INT`/`ACT_PRIN` (BMA-native) per user directive, not `CASH_INT`/`CASH_PRIN`. `COLLATERAL` aliases dropped. Phase 2 will advance to full `COLL_*` taxonomy with decomposition tokens (post-CC research May 2026). |
 | O | Rename `AccountType` → `AccountCategory` | Confirmed | Already verified to be a passthrough label only. |
 | Q | Implement `minimum_basis`/`starting_basis` per-period | **SHIPPED** (May 2026) | Done. |
 
@@ -1532,8 +1562,9 @@ elif mode == POOLED:                    # LDCMA legacy path
 
 The runtime's internal `cash_avail`, `interest_avail`,
 `principal_avail` arrays are populated from the BMA-native
-fields. The internal token names update accordingly under
-proposal N (`CASH_INT`, `CASH_PRIN`).
+fields. Phase 1c (shipped May 2026) updated the user-facing
+token vocabulary to `ACT_INT` / `ACT_PRIN` matching
+`BMAActualCashflow.act_int` / `act_prin` exactly.
 
 ### Adapter impact
 
@@ -1569,7 +1600,7 @@ def ldcma_to_paired(
 3. Migrate the FNR 2006-018 fixture to PAIRED input (it already uses BMA `actual_cashflow_from_loan` as the upstream — switch the adapter call from `from_actual_cashflow` to `BMAActualCashflow → PortfolioCashflow PAIRED` directly). Tests pass.
 4. Migrate other fixtures and `deal_library.py` deals.
 5. Add `ldcma_to_paired` and write parity tests for the LDCMA fixtures (LDCMA → paired → runtime; produce identical bond cashflows to LDCMA → ldcma → runtime).
-6. Internal naming refresh: when proposal N renames `INT_CASH`/`PRIN_CASH` → `CASH_INT`/`CASH_PRIN`, also rename internal arrays `interest_avail`/`principal_avail` → `cash_int_avail`/`cash_prin_avail`. Or keep the internal names BMA-native: `act_int_avail`/`act_am_plus_vol_prepay_avail` (clunky) — pending discussion.
+6. Internal naming refresh: Phase 1c (May 2026) renamed `INT_CASH`/`PRIN_CASH` → `ACT_INT`/`ACT_PRIN` (BMA-native). Internal arrays `interest_avail`/`principal_avail` were left as-is for now; any future rename would target `act_int_avail`/`act_prin_avail` for consistency. Phase 2 (planned, post-CC research) advances to the full `COLL_*` taxonomy.
 7. Deprecate then drop `from_actual_cashflow`, `from_portfolio_cashflow`, `from_collateral_dict` after a clean grace period.
 
 ### Open questions on R (need user feedback)
@@ -1580,11 +1611,7 @@ The implementation plan needs answers to:
 
 2. **Multi-group routing.** A grouped deal currently has `dict[str, CollateralCashflows]`. New form: `dict[str, PortfolioCashflow]`. Does each group's PortfolioCashflow stay independent (no cross-group ops in the engine), or do we need a higher-level `MultiGroupCashflow` that knows about both?
 
-3. **Internal field naming under N + R combined.** Two reasonable conventions:
-   - **BMA-native everywhere**: runtime arrays named `perf_bal`, `act_int`, `vol_prepay`, etc. Tokens are `CASH_INT` / `CASH_PRIN` (composed names that don't directly match BMA but mean "interest cash" / "principal cash").
-   - **Renamed / decoupled**: runtime uses `cash_int`, `cash_prin`, `loss`, `balance`. Tokens follow the same. BMA's native names appear only at the input boundary.
-   
-   Which do you prefer?
+3. **Internal field naming under N + R combined. RESOLVED Phase 1c (May 2026)**: BMA-native everywhere. Runtime arrays named `perf_bal`, `act_int`, `vol_prepay`, etc. Tokens renamed to `ACT_INT` / `ACT_PRIN` to match `BMAActualCashflow` field names exactly. No translation layer. Phase 2 will advance the user-facing tokens to `COLL_*` (semantic prefix) but keep internal arrays BMA-native.
 
 4. **PAC/TAC re-derivation triggers in the structuring tool.** When does the structuring UI re-run `derive_pac_schedule(...)` to refresh `schedule_contract`?
    - On any change to: speed band edges, PSA model, pool balance, pool WAC, pool term, bond size, support stack composition.
@@ -1837,6 +1864,102 @@ Adding the new patterns from round 2:
 
 ---
 
+## Credit card master trusts (round 3 research, May 2026)
+
+Reviewed prospectuses across 5 issuers to validate / extend the
+collateral-stream taxonomy and IR design before locking in Phase 1c
+(`COLL_*` token rename) and forward phases:
+
+- **Capital One COMET** (Card series 2002-CC supplement; SF-3
+  registration statement)
+- **Chase Issuance Trust** (CHASEseries A-2024-2, A-2025-1, indenture
+  exhibit 4.3)
+- **Citibank Credit Card Issuance Trust** (Citiseries 2023-A2 plus
+  earlier 424B5 filings)
+- **Discover Card Execution Note Trust** (DCENT Class A 2022-2)
+- **American Express Credit Account Master Trust** (Series 2025-4)
+
+The structures are highly consistent — sponsor differences are mostly
+cosmetic. What differs from RMBS / auto are the **structural
+mechanics**, not the cashflow vocabulary.
+
+### Stream taxonomy alignment
+
+| RMBS / auto | Credit card master trust |
+|---|---|
+| `act_int` = pool interest | **Finance Charge Collections** = periodic finance charges + annual membership fees + cash-advance fees + late charges + interchange + recoveries on charged-off receivables + investment earnings + (optional) discount-option amounts |
+| `act_prin` = scheduled + voluntary prepay | **Principal Collections** = scheduled + unscheduled principal repayments allocated at the master-trust level |
+| `prin_recov` = post-FCL liquidation recovery (a *principal* stream) | Recoveries flow into Finance Charge Collections — NOT principal |
+| `prin_loss` = realized principal loss | **Defaulted Amount** / **Investor Charge-Offs** — drives reductions to the per-bond Nominal Liquidation Amount (see gap #2 below) |
+
+**Token implication:** the `COLL_*` taxonomy proposed in proposal N
+(see Phase 1c) handles all 5 CC issuers without modification. The
+4-primitive core (`COLL_CASH`, `COLL_PRIN`, `COLL_INT`, `COLL_LOSS`)
+plus the 11-token decomposition is sufficient.
+
+The role of *recoveries* flips between RMBS and CC: in RMBS recoveries
+fold into `COLL_PRIN_REC` (principal stream); in CC they fold into
+`COLL_INT` (finance-charge stream). This is a loan-level engine
+concern (CC needs a different cashflow generator than RMBS), not a
+waterfall-token concern. The token vocabulary is asset-class neutral.
+
+### Structural mechanics not yet in IR (8 gaps)
+
+These are *architectural* gaps surfaced by the CC research, separate
+from naming. Each is orthogonal to the `COLL_*` token discussion;
+adding them does not require new tokens.
+
+| # | Gap | Severity | Examples | Suggested approach |
+|---|---|---|---|---|
+| 1 | **Discount Option** — pre-waterfall reclassification of a % of newly-generated principal as finance charges | MEDIUM | Chase, Capital One, Citi all reference; Chase shows it currently inactive (yield factor = 0) | `deal_knobs.discount_factor` applied by the runtime *before* rule dispatch, OR top-of-waterfall `SPLIT_CASH from=[COLL_PRIN] to=[COLL_PRIN, COLL_INT] weights=[1−d, d]` (requires relaxing the SPLIT_CASH built-in-target rule) |
+| 2 | **Nominal Liquidation Amount (NLA)** — per-tranche virtual balance, distinct from `BondDef.balance`; reduced by charge-offs and principal-to-interest reallocations, reimbursed by excess spread, caps future allocations | **HIGH** — required for any CC fixture | universal across CC issuers | New `BondDef.nla` field tracked alongside `balance`; runtime decrements/reimburses via dedicated rules |
+| 3 | **Required / Available Subordinated Amount** — senior-class subordination requirement expressed as % of senior outstanding; "available" = remaining subordinated NLA minus already-used reallocations | HIGH | universal | First-class concept (`required_subordination` per senior bond) OR expression-driven cap. First-class cleaner because every reallocation rule needs to consult it |
+| 4 | **Multi-series in a master trust** with cross-series sharing (Shared Excess Finance Charge / Shared Excess Principal) — distinct from `collateral_groups` | HIGH | universal | Either each series is its own `DealDefinition` with an inter-deal sharing layer, OR add a `series` concept to `DealDefinition` parallel to `collateral_groups`. Both are major efforts |
+| 5 | **Funding-account accumulation periods** — Principal Funding Account, Interest Funding Account; bonds receive cash only via these intermediaries; controlled accumulation deposits 1/12 of expected outstanding for the 12 months before bullet payment | MEDIUM | universal (PFA/IFA), AmEx-specific (collateral interest accumulation) | Existing `AccountDef` with `cap_mode=PLANNED` plus a derived "1/N of expected outstanding" schedule. Missing: explicit "accumulation period start" trigger that switches behavior. Could be implemented via existing trigger machinery |
+| 6 | **Reallocation of Principal Collections to cover senior Interest** — diverts subordinated principal to pay senior interest; reduces subordinate NLA; capped by available subordination | HIGH (ties to #2 + #3) | universal | Falls out from #2 + #3. Express as `PAY_INTEREST from=[COLL_PRIN] to=[A_X]` with a `max_amount_expr` against subordinated NLA |
+| 7 | **Three-month rolling-average triggers** — excess-spread trigger, portfolio-yield trigger, base-rate trigger, pay-rate trigger | MEDIUM | universal (early-amortization triggers) | Extend `TriggerMetricType` with `*_3MO_AVG`, `*_NMO_AVG` rolling-window variants |
+| 8 | **Pay-out / Early Amortization deal-state machine** — deal switches from revolving / accumulation mode to early-amortization mode on event triggers; principal then pays directly to bonds in priority | MEDIUM | universal | Either a deal-state enum with transitions OR a single `EARLY_AMORTIZATION` flag computed via `DealCalculation` and gated through every relevant rule's trigger. Verbose but expressible today |
+
+### Cross-issuer stylistic differences (minor, no IR impact)
+
+| Feature | COMET | Chase | Citi | Discover | AmEx |
+|---|---|---|---|---|---|
+| Class structure | A/B/C/D | A/B/C | A/B/C | A/B/C/D | A/B + collateral interest |
+| Interchange separated from finance charges | Folded | Folded | Folded | Sometimes | **Yes** |
+| Discount option | Available | **Active** | Available | Available | Available |
+| Multiple tranches per class | Yes | Yes | Yes | Yes | Single-issuance series |
+| Cross-series sharing groups | Yes | Yes | Yes | Yes | Yes |
+| Class C reserve (excess spread driven) | Yes | Yes | Yes | Yes | Different mechanism (collateral interest) |
+| Subordination via separate notes vs internal interest | Notes | Notes | Notes | Notes | **Collateral interest** (legally a residual position) |
+
+AmEx's "collateral interest" is functionally equivalent to a Class C/D
+note — just structured legally as a depositor-held residual position
+rather than a securitized note. Renames the role; doesn't change IR
+mechanics.
+
+### Implications for phase plan
+
+CC fixtures cannot be modeled at the *waterfall* level until at least
+gaps 2, 3, 6 land (NLA + required subordination + reallocation
+machinery). Gap 4 (multi-series) blocks fully realistic master-trust
+modelling but a single-series CC deal is buildable without it.
+
+Suggested phase additions (defer until after Phase 5):
+
+- **Phase 6** — NLA + Required/Available Subordinated Amount + P-to-I
+  reallocation (gaps 2, 3, 6 cluster naturally)
+- **Phase 7** — Discount Option + Funding Account accumulation period
+  semantics (gaps 1, 5)
+- **Phase 8** — Multi-series master trusts with cross-series sharing
+  (gap 4) — major effort
+- **Phase 9** — Rolling-window triggers + pay-out events / early
+  amortization deal state (gaps 7, 8)
+
+These replace the "credit card master trusts" entry under "Asset
+classes still to cover" at the top of this doc.
+
+---
+
 # Part 2 — IR reference: the schema and how to write a deal
 
 This second half of the document covers the IR itself. Goal: make
@@ -1898,7 +2021,7 @@ gets injected into expression-evaluation context.
 
 | Key | Type | Purpose |
 |---|---|---|
-| `source_formulas` | `dict[str, str]` | Named per-period expressions that become first-class `from_source` tokens. Example: `{"NET_EXCESS": "INT_CASH - bond_coupon_total"}` makes `NET_EXCESS` referenceable in any rule's `from_sources`. |
+| `source_formulas` | `dict[str, str]` | Named per-period expressions that become first-class `from_source` tokens. Example: `{"NET_EXCESS": "ACT_INT - bond_coupon_total"}` makes `NET_EXCESS` referenceable in any rule's `from_sources`. |
 | `balance_trackers` | `dict[str, str]` | Maps a residual / pseudo bond's name to a runtime quantity it should mirror. Example: `{"R": "collateral_balance"}` makes residual `R` carry a balance equal to outstanding pool balance each period. Used when a residual interest's economics track a non-bond quantity. |
 | `orig_collat_bal_override` | `float` | Override for the original collateral balance used in trigger denominator calculations (when the natural pool balance differs from the trigger reference balance, e.g., tape excludes some loans). |
 | `allow_negative_cashflow_math` | `bool` | Permit transient negative intermediate cash states during rule execution. Used for deals with negative-amortization streams (HECM, certain ARM cases) where cash conservation invariants need temporary relaxation. |
@@ -2051,7 +2174,7 @@ class RuleNode(BaseModel):
     rule_type: RuleType                   # PAY_INTEREST | PAY_PRINCIPAL | ...
     order: int                            # 0, 1, 2 ... priority
 
-    from_sources: list[str]               # ["CASH_INT"] or ["GROUP_1_CASH_PRIN"] or ["ReserveAcct"]
+    from_sources: list[str]               # ["ACT_INT"] or ["GROUP_GROUP_1_ACT_PRIN"] or ["ReserveAcct"]
     to_targets: list[str]                 # ["PA", "PB", "PC", "PD", "EO"] (bonds, accounts, named streams)
     payment_style: PaymentStyle           # SEQUENTIAL | PRO_RATA  (Round 3: CONCURRENT alias dropped)
     cap_mode: CapMode | None              # PLANNED | SCHEDULED | TARGETED | NONE
@@ -2085,9 +2208,9 @@ flag).
 
 | RuleType | Cash moved | Typical sources | Typical targets |
 |---|---|---|---|
-| `PAY_INTEREST` | Bond cash interest | typically `CASH_INT` or `CASH`; can be any account or stream | One or more bonds |
-| `PAY_INTEREST_SHORTFALL` | Catch-up of unpaid interest | typically `CASH_INT`; can be any account | Bonds with unpaid coupon |
-| `PAY_PRINCIPAL` | Principal | typically `CASH_PRIN` or `CASH`; can be any account or stream | One or more bonds |
+| `PAY_INTEREST` | Bond cash interest | typically `ACT_INT` or `CASH`; can be any account or stream | One or more bonds |
+| `PAY_INTEREST_SHORTFALL` | Catch-up of unpaid interest | typically `ACT_INT`; can be any account | Bonds with unpaid coupon |
+| `PAY_PRINCIPAL` | Principal | typically `ACT_PRIN` or `CASH`; can be any account or stream | One or more bonds |
 | `PAY_WRITEDOWN` | Loss allocation | `LOSS` | Bonds (reverse seniority) |
 | `PAY_FEE` | Fee | any account or stream | One fee payee |
 | `PAY_TO_RESERVE` | Deposit to an account | any source | Any account |
@@ -2139,34 +2262,98 @@ been removed; older code referencing it should migrate to
 ## Built-in source/target tokens (reusable across asset classes)
 
 Tokens that any rule's `from_sources` / `to_targets` can reference
-without explicit declaration:
+without explicit declaration. These are the canonical names enforced
+by `_validate_references` in `schemas/ir.py`.
 
-| Token | Meaning |
-|---|---|
-| `CASH` | Combined pool cashflow (interest + principal + recovery) |
-| `CASH_INT` | Pool interest stream only (separated from principal) |
-| `CASH_PRIN` | Pool principal stream only |
-| `LOSS` | Pool loss stream (for writedown rules) |
-| `GROUP_<id>_CASH` | Combined cashflow for collateral group `<id>` |
-| `GROUP_<id>_CASH_INT` | Interest stream for collateral group `<id>` |
-| `GROUP_<id>_CASH_PRIN` | Principal stream for collateral group `<id>` |
-| `GROUP_<id>_LOSS` | Loss stream for collateral group `<id>` |
+### Current vocabulary (post Phase 1c, May 2026)
+
+| Token | Meaning | BMA field |
+|---|---|---|
+| `CASH` | Combined gross collateral cashflow | `act_cash` (= `act_prin + act_int`) |
+| `ACT_INT` | Pool interest stream only | `act_int` |
+| `ACT_PRIN` | Pool principal stream only | `act_prin` (= `act_am + vol_prepay`) |
+| `LOSS` | Pool loss stream (for writedown rules) | `prin_loss` |
+| `GROUP_<id>_CASH` | Combined cashflow for collateral group `<id>` | per-group `act_cash` |
+| `GROUP_<id>_ACT_INT` | Interest stream for collateral group `<id>` | per-group `act_int` |
+| `GROUP_<id>_ACT_PRIN` | Principal stream for collateral group `<id>` | per-group `act_prin` |
+| `GROUP_<id>_LOSS` | Loss stream for collateral group `<id>` | per-group `prin_loss` |
 
 When a rule declares `group_id`, the bare tokens (`CASH`,
-`CASH_INT`, `CASH_PRIN`, `LOSS`) are auto-prefixed with
+`ACT_INT`, `ACT_PRIN`, `LOSS`) are auto-prefixed with
 `GROUP_<id>_` at compile time. So a multi-group rule can write
-`from_sources: ["CASH_INT"]` and have it resolve to the right
+`from_sources: ["ACT_INT"]` and have it resolve to the right
 group automatically.
 
 (Round 3 cleanup notes:
-- The `COLLATERAL` and `GROUP_<id>_COLLATERAL` aliases for `CASH`
-  have been dropped — they didn't add expressiveness and
-  duplicated the canonical name.
-- The previous tokens `INT_CASH` / `PRIN_CASH` (and group variants)
-  have been renamed to `CASH_INT` / `CASH_PRIN` for prefix
-  consistency. Existing IR documents using the old names should
-  be migrated; the validator can accept both names during a
-  transition period.)
+- Phase 1c (May 2026) renamed `INT_CASH` → `ACT_INT` and
+  `PRIN_CASH` → `ACT_PRIN` to align IR vocabulary with the
+  BMA-native cashflow field names (`BMAActualCashflow.act_int`,
+  `act_prin`). The `COLLATERAL` and `GROUP_<id>_COLLATERAL`
+  aliases for `CASH` were dropped; they were redundant.
+- The validator does NOT accept old names — the rename is hard.
+  All in-tree fixtures, tests, and frontend code were migrated in
+  the same commit.)
+
+### Planned forward direction — `COLL_*` taxonomy (see proposal below)
+
+The CC research (Round 3) and the user-driven taxonomy review
+(May 2026) converged on a more granular `COLL_*` naming scheme
+that exposes finer-grained BMA cashflow primitives:
+
+| Token | Meaning | BMA field |
+|---|---|---|
+| **Combined streams (most common)** | | |
+| `COLL_CASH` | Combined gross collateral cashflow | `act_cash` |
+| `COLL_PRIN` | All principal cash | `act_prin` |
+| `COLL_INT` | Gross interest collected (before servicing) | `act_int` |
+| `COLL_LOSS` | Realized principal loss (default) | `prin_loss` |
+| **Principal decomposition** | | |
+| `COLL_PRIN_SCH` | Contractual amortization | `act_am` |
+| `COLL_PRIN_PPAY` | Voluntary prepayments | `vol_prepay` |
+| `COLL_PRIN_REC` | Liquidation recoveries (RMBS) | `prin_recov` |
+| `COLL_PRIN_ADV` | Servicer principal advances (in) | `adv_prin` |
+| `COLL_PRIN_ADV_REIMB` | Reimbursement (out) | `adv_reimbursed_prin` |
+| **Interest decomposition** | | |
+| `COLL_INT_ADV` | Servicer interest advances (in) | `adv_int` |
+| `COLL_INT_ADV_REIMB` | Reimbursement (out) | `adv_reimbursed_int` |
+| **Loss decomposition** | | |
+| `COLL_LOSS_PRIN` | Realized principal loss | `prin_loss` |
+| `COLL_LOSS_INT` | Interest lost to defaults | `lost_int` |
+| `COLL_LOSS_ADV` | Unreimbursable advances | `adv_unrecoverable` |
+| **Fee streams (rare)** | | |
+| `COLL_SVC` | Servicing fee accrued | `svc_billed` |
+| **Balance references (read-only, not waterfall sources)** | | |
+| `COLL_PERF_BAL` | Performing balance | `perf_bal` |
+| `COLL_FCL_BAL` | Foreclosure balance | `fcl` |
+| `COLL_TOTAL_BAL` | Total outstanding | `total_bal` (= `perf_bal + fcl`) |
+
+Key naming decisions:
+
+1. **`COLL_*` everywhere.** Single prefix; per-group form reads
+   `GROUP_<id>_COLL_PRIN`. Asset-class neutral (RMBS, CC, auto, CRT
+   all use the same prefix).
+2. **Bare form means total.** No `_TOT` suffix. `COLL_PRIN` is the
+   total; `COLL_PRIN_SCH` / `COLL_PRIN_PPAY` are decompositions.
+3. **`COLL_LOSS` defaults to principal loss.** Most waterfalls only
+   trigger writedowns from realized principal losses; explicit
+   `COLL_LOSS_INT` / `COLL_LOSS_ADV` for the rarer cases.
+4. **`COLL_INT` is gross of servicing.** Servicing is paid via a
+   `PAY_FEE` rule from `COLL_INT`, mirroring prospectus language
+   ("the trust receives X% interest and pays the master servicer Y
+   bps"). This matches both RMBS and CC waterfall conventions.
+5. **Balance tokens are read-only.** Reference them in
+   `max_amount_expr`, trigger metrics, fee bases — but the
+   validator should reject them as `from_sources` / `to_targets`
+   on cash-moving rules.
+6. **Asset-class neutrality of decomposition tokens.** Recoveries
+   in RMBS are principal (`COLL_PRIN_REC`); recoveries in CC fold
+   into finance charges (`COLL_INT`). The token vocabulary doesn't
+   change — only which tokens are populated by the loan-level
+   engine.
+
+This rename is the proposed Phase 2 of the IR cleanup
+(post-Phase 1f migration). Until then, the current `ACT_*`
+vocabulary stays canonical.
 
 ## Other elements
 
@@ -2319,7 +2506,7 @@ waterfall_rules:
     rule_type: PAY_INTEREST
     order: 0
     group_id: GROUP_1
-    from_sources: [INT_CASH]
+    from_sources: [ACT_INT]
     to_targets: [PA, PB, PC, PD, TA, TB, EI, WA, WB, WC, WD, WE, WG]
     payment_style: SEQUENTIAL
     description: "Pay accrued bond coupon. Z is PIK; its coupon is capitalized."
@@ -2329,7 +2516,7 @@ waterfall_rules:
     rule_type: PAY_PRINCIPAL
     order: 1
     group_id: GROUP_1
-    from_sources: [PRIN_CASH]
+    from_sources: [ACT_PRIN]
     to_targets: [PA, PB, PC, PD, EO]
     payment_style: SEQUENTIAL
     cap_mode: PLANNED
@@ -2340,7 +2527,7 @@ waterfall_rules:
     rule_type: PAY_PRINCIPAL
     order: 2
     group_id: GROUP_1
-    from_sources: [PRIN_CASH]
+    from_sources: [ACT_PRIN]
     to_targets: [TA, TB]
     payment_style: SEQUENTIAL
     cap_mode: PLANNED
@@ -2351,7 +2538,7 @@ waterfall_rules:
     rule_type: PAY_PRINCIPAL
     order: 3
     group_id: GROUP_1
-    from_sources: [PRIN_CASH]
+    from_sources: [ACT_PRIN]
     to_targets: [Z]
     payment_style: SEQUENTIAL
     description: "Z to zero"
@@ -2361,7 +2548,7 @@ waterfall_rules:
     rule_type: SPLIT_CASH
     order: 4
     group_id: GROUP_1
-    from_sources: [PRIN_CASH]
+    from_sources: [ACT_PRIN]
     to_targets: [WAWG_BUCKET, PO_BUCKET]
     target_weights: [0.956521694276, 0.043478305724]
     description: "Face-weighted split of remaining principal: 95.65% to WA-WG, 4.35% to PO"
@@ -2383,13 +2570,13 @@ waterfall_rules:
     from_sources: [PO_BUCKET]
     to_targets: [PO]
 
-  # Step 5d — Sweep leftover bucket cash back into PRIN_CASH
+  # Step 5d — Sweep leftover bucket cash back into ACT_PRIN
   - rule_id: r_supp_sweep_back
     rule_type: SPLIT_CASH
     order: 7
     group_id: GROUP_1
     from_sources: [WAWG_BUCKET, PO_BUCKET]
-    to_targets: [PRIN_CASH]
+    to_targets: [ACT_PRIN]
     target_weights: [1.0]
 
   # Step 6 — PAC II cleanup
@@ -2397,7 +2584,7 @@ waterfall_rules:
     rule_type: PAY_PRINCIPAL
     order: 8
     group_id: GROUP_1
-    from_sources: [PRIN_CASH]
+    from_sources: [ACT_PRIN]
     to_targets: [TA, TB]
     payment_style: SEQUENTIAL
     cap_mode: NONE
@@ -2408,7 +2595,7 @@ waterfall_rules:
     rule_type: PAY_PRINCIPAL
     order: 9
     group_id: GROUP_1
-    from_sources: [PRIN_CASH]
+    from_sources: [ACT_PRIN]
     to_targets: [PA, PB, PC, PD, EO]
     payment_style: SEQUENTIAL
     cap_mode: NONE
@@ -2418,7 +2605,7 @@ waterfall_rules:
     rule_type: PAY_PRINCIPAL
     order: 10
     group_id: GROUP_1
-    from_sources: [PRIN_CASH]
+    from_sources: [ACT_PRIN]
     to_targets: [WA, WB, WC, WD, WE, WG, PO]
     payment_style: SEQUENTIAL
     cap_mode: NONE
@@ -2428,7 +2615,7 @@ waterfall_rules:
     rule_type: PAY_RESIDUAL
     order: 11
     group_id: GROUP_1
-    from_sources: [INT_CASH]
+    from_sources: [ACT_INT]
     to_targets: [R]
     payment_style: SEQUENTIAL
 
@@ -2436,7 +2623,7 @@ waterfall_rules:
     rule_type: PAY_RESIDUAL
     order: 12
     group_id: GROUP_1
-    from_sources: [PRIN_CASH]
+    from_sources: [ACT_PRIN]
     to_targets: [R]
     payment_style: SEQUENTIAL
 ```
@@ -2473,8 +2660,8 @@ prospectus paragraphs.
    `to_targets: [PA, PB, PC, PD, EO]` and `cap_mode: PLANNED`. Do
    NOT fragment it into 5 rules.
 
-4. **Built-in tokens are reused everywhere.** `CASH` / `INT_CASH` /
-   `PRIN_CASH` / `LOSS` are universal. Multi-group deals add
+4. **Built-in tokens are reused everywhere.** `CASH` / `ACT_INT` /
+   `ACT_PRIN` / `LOSS` are universal. Multi-group deals add
    `GROUP_<id>_*` prefixes which the runtime auto-resolves when
    `group_id` is set on the rule.
 

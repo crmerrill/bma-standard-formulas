@@ -142,7 +142,7 @@ const PAY_TYPE_INVERSE: Record<string, string> = {
  * the prefix at compile time when the rule has a group_id set).
  */
 function _stripGroupPrefix(key: string): string {
-  const m = /^GROUP_(.+?)_(CASH|INT_CASH|PRIN_CASH|COLLATERAL|LOSS)$/.exec(key);
+  const m = /^GROUP_(.+?)_(CASH|ACT_INT|ACT_PRIN|COLLATERAL|LOSS)$/.exec(key);
   return m ? m[2] : key;
 }
 
@@ -154,9 +154,12 @@ function _stripGroupPrefix(key: string): string {
 function ruleSourceForUI(source: string): string {
   const stripped = _stripGroupPrefix(source);
   if (stripped === "CASH") return "COLLECTION";
-  if (stripped === "INT_CASH") return "INT_COLLECTION";
-  if (stripped === "PRIN_CASH") return "PRIN_COLLECTION";
-  if (stripped === "COLLATERAL") return "COLLATERAL";
+  if (stripped === "ACT_INT") return "INT_COLLECTION";
+  if (stripped === "ACT_PRIN") return "PRIN_COLLECTION";
+  // Legacy alias: old IRs that pre-date the BMA-native token rename
+  // may carry a bare `COLLATERAL` token. Map it to the canonical CASH
+  // dropdown value so legacy fixtures still round-trip correctly.
+  if (stripped === "COLLATERAL") return "COLLECTION";
   return stripped;
 }
 
@@ -497,7 +500,7 @@ function splitCashRuleToBlock(rule: IRRule): BlocklyBlock | null {
 
 const RESIDUAL_TYPES = new Set(["RESIDUAL"]);
 const ACCOUNT_LIKE_TARGETS = new Set([
-  "WAWG_BUCKET", "PO_BUCKET", "INT_CASH", "PRIN_CASH", "COLLATERAL",
+  "WAWG_BUCKET", "PO_BUCKET", "ACT_INT", "ACT_PRIN", "CASH",
 ]);
 
 function targetToBlock(
@@ -525,7 +528,7 @@ function targetToBlock(
     }
     return _bondTargetBlock(bond);
   }
-  // Group-scoped sources like INT_CASH/PRIN_CASH and SPLIT_CASH virtual
+  // Group-scoped sources like ACT_INT/ACT_PRIN and SPLIT_CASH virtual
   // streams (e.g. WAWG_BUCKET) aren't bond targets; render them as
   // account_target blocks so they have a place on the canvas. The
   // underlying IR distinction is preserved on the block's data field.
