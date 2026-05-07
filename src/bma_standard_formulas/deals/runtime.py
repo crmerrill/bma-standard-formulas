@@ -845,9 +845,14 @@ def _extract_collateral_arrays(run_input: DealRunInput) -> CollateralExtractionR
         portfolio = coll.portfolio
         actual = portfolio.pool                                 # BMAActualCashflow
         scheduled: BMAScheduledCashflow | None = None
+        # ACTUAL_ONLY portfolios have no scheduled stream; ``.scheduled``
+        # raises TypeError when iterating constituents that are
+        # BMAActualCashflow rather than CashFlowPair / BMAScheduledCashflow.
+        # ValueError covers the "no scheduled cashflows to aggregate" path.
+        # The runtime degrades cleanly: scheduled-stream consumers see None.
         try:
             scheduled = portfolio.scheduled
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, TypeError):
             scheduled = None
 
         actuals_by_group_raw = portfolio.aggregate_actual_by_group()
@@ -860,7 +865,7 @@ def _extract_collateral_arrays(run_input: DealRunInput) -> CollateralExtractionR
         }
         try:
             scheduleds_by_group_raw = portfolio.aggregate_scheduled_by_group()
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, TypeError):
             scheduleds_by_group_raw = {}
         scheduleds_by_group: dict[str, BMAScheduledCashflow] = {
             gid: g_sched

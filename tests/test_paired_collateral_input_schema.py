@@ -1,10 +1,14 @@
-"""Schema tests for PairedCollateralInput (Phase 1a).
+"""Schema tests for PairedCollateralInput (Phase 1a + 1e).
 
 Validates:
   - PAIRED mode is recognized as a CollateralInputMode discriminator.
   - PairedCollateralInput rejects non-PortfolioCashflow payloads.
-  - PairedCollateralInput rejects PortfolioCashflows with the wrong mode
-    (SCHEDULED_ONLY / ACTUAL_ONLY) — only PAIRED mode is allowed.
+  - PairedCollateralInput accepts PAIRED and ACTUAL_ONLY PortfolioMode
+    values (Phase 1e: ACTUAL_ONLY supports the ldcma_to_paired adapter
+    that routes legacy LDCMA fixtures through the PAIRED runtime branch
+    for parity testing).
+  - PairedCollateralInput rejects SCHEDULED_ONLY portfolios — the runtime
+    requires actual cashflow data via portfolio.pool.
   - DealRunInput round-trips a valid PAIRED payload (the discriminated
     union resolves to PairedCollateralInput).
 
@@ -81,12 +85,13 @@ def test_paired_input_rejects_non_portfolio():
     assert "PortfolioCashflow" in str(exc_info.value)
 
 
-def test_paired_input_rejects_actual_only_portfolio():
-    """SCHEDULED_ONLY / ACTUAL_ONLY portfolios cannot be used as PAIRED input.
+def test_paired_input_accepts_actual_only_portfolio():
+    """ACTUAL_ONLY portfolios are accepted (Phase 1e).
 
-    The PAIRED mode is required because the runtime needs both the actual
-    and scheduled streams (e.g. for scheduled-vs-actual decompositions in
-    outputs and for PAC/TAC schedule re-derivation).
+    The ``ldcma_to_paired`` adapter produces ACTUAL_ONLY portfolios (LDCMA
+    inputs have no scheduled stream). The runtime degrades gracefully —
+    ``portfolio.scheduled`` raises and is caught, scheduled-stream
+    consumers see ``None``, and the loans accessor still works.
     """
     loan = Loan(
         loan_id=1,
@@ -110,9 +115,32 @@ def test_paired_input_rejects_actual_only_portfolio():
     )
     actual_only_portfolio = PortfolioCashflow([actual], mode=PortfolioMode.ACTUAL_ONLY)
 
+    payload = PairedCollateralInput(portfolio=actual_only_portfolio)
+    assert payload.mode == CollateralInputMode.PAIRED
+    assert payload.portfolio.mode == PortfolioMode.ACTUAL_ONLY
+
+
+def test_paired_input_rejects_scheduled_only_portfolio():
+    """SCHEDULED_ONLY portfolios cannot be used because the runtime needs
+    actual cashflow data via ``portfolio.pool``.
+    """
+    loan = Loan(
+        loan_id=1,
+        origination_date=date(2024, 1, 1),
+        asof_date=date(2024, 1, 1),
+        original_balance=1_000_000.0,
+        current_balance=1_000_000.0,
+        rate_margin=6.0,
+        original_term=360,
+        remaining_term=360,
+        group_id="GROUP_1",
+    )
+    sched = scheduled_cashflow_from_loan(loan)
+    scheduled_only_portfolio = PortfolioCashflow([sched], mode=PortfolioMode.SCHEDULED_ONLY)
+
     with pytest.raises(Exception) as exc_info:
-        PairedCollateralInput(portfolio=actual_only_portfolio)
-    assert "PAIRED" in str(exc_info.value)
+        PairedCollateralInput(portfolio=scheduled_only_portfolio)
+    assert "SCHEDULED_ONLY" in str(exc_info.value)
 
 
 def test_deal_run_input_with_paired_collateral():

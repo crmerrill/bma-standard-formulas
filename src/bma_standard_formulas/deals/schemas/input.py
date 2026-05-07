@@ -121,17 +121,19 @@ class StripCollateralInput(BaseModel):
 
 
 class PairedCollateralInput(BaseModel):
-    """Direct BMA PortfolioCashflow (PAIRED mode) input — proposal R Phase 1.
+    """Direct BMA PortfolioCashflow input — proposal R Phase 1.
 
-    Wraps a ``bma_standard_formulas.engine.PortfolioCashflow`` in PAIRED
-    mode. The deal runtime consumes the payload natively without going
-    through the LDCMA-format adapter chain:
+    Wraps a ``bma_standard_formulas.engine.PortfolioCashflow`` so the
+    deal runtime can consume the payload natively without going through
+    the LDCMA-format adapter chain:
 
       - Whole-pool aggregate fields come from ``portfolio.pool``
-        (``BMAActualCashflow``).
+        (``BMAActualCashflow``). Required.
       - Whole-pool scheduled stream comes from ``portfolio.scheduled``
-        (``BMAScheduledCashflow``) — used for scheduled-vs-actual
-        decompositions in outputs and for PAC/TAC schedule re-derivation.
+        (``BMAScheduledCashflow``) when present (PAIRED mode) — used for
+        scheduled-vs-actual decompositions in outputs and for PAC/TAC
+        schedule re-derivation. Optional: ACTUAL_ONLY portfolios have no
+        scheduled stream and the runtime degrades gracefully.
       - Per-group aggregates come from
         ``portfolio.aggregate_actual_by_group()`` and
         ``aggregate_scheduled_by_group()`` (Phase 0A primitives), keyed by
@@ -139,8 +141,22 @@ class PairedCollateralInput(BaseModel):
         group_id; the runtime routes ``GROUP_<id>_*`` source tokens to the
         matching aggregate.
       - Per-loan resolution (Phase 1d) is available via
-        ``portfolio.constituents`` for triggers, calculations, and per-loan
-        analytics.
+        ``portfolio.actual_constituents()`` for triggers, calculations,
+        and per-loan analytics.
+
+    Accepted PortfolioMode values:
+
+      - ``PAIRED`` — has both scheduled and actual per loan. Full
+        runtime fidelity (PAC/TAC re-derivation, scheduled-vs-actual,
+        per-loan visibility).
+      - ``ACTUAL_ONLY`` — actual cashflows only, no scheduled stream.
+        Used by the ``ldcma_to_paired`` parity-testing adapter (Phase 1e)
+        to route legacy LDCMA fixtures through the PAIRED runtime branch.
+        Scheduled-stream consumers see ``None``; the loans accessor still
+        works.
+
+      ``SCHEDULED_ONLY`` is rejected — the runtime requires actual
+      cashflow data via ``portfolio.pool``.
 
     Pydantic note: the underlying PortfolioCashflow is not a Pydantic model
     (it's a mutable engine object holding numpy arrays). The schema accepts
@@ -165,11 +181,13 @@ class PairedCollateralInput(BaseModel):
                 f"PairedCollateralInput.portfolio must be a PortfolioCashflow, "
                 f"got {type(self.portfolio).__name__}"
             )
-        if self.portfolio.mode != PortfolioMode.PAIRED:
+        if self.portfolio.mode == PortfolioMode.SCHEDULED_ONLY:
             raise ValueError(
-                f"PairedCollateralInput requires PortfolioMode.PAIRED, got "
-                f"{self.portfolio.mode.name}. Build the portfolio with "
-                f"run_paired_portfolio() or with mode=PortfolioMode.PAIRED."
+                "PairedCollateralInput rejects SCHEDULED_ONLY portfolios — "
+                "the deal runtime requires actual cashflow data via "
+                "portfolio.pool. Use PortfolioMode.PAIRED (full fidelity) "
+                "or PortfolioMode.ACTUAL_ONLY (no scheduled stream, used by "
+                "the ldcma_to_paired parity adapter)."
             )
         return self
 

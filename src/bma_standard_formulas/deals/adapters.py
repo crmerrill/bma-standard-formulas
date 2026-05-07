@@ -4,7 +4,10 @@ Adapters convert:
 - PortfolioCashflow / BMAActualCashflow → PooledCollateralInput
 - Multiple PortfolioCashflows (grouped) → GroupedCollateralInput
 - P/I strip arrays → StripCollateralInput
+- Legacy LDCMA-format collateral → PairedCollateralInput (Phase 1e
+  parity-testing adapter, ``ldcma_to_paired``)
 """
+from dataclasses import replace
 from datetime import date
 from typing import Any
 
@@ -15,6 +18,7 @@ from .schemas.input import (
     CollateralCashflows,
     DealRunInput,
     GroupedCollateralInput,
+    PairedCollateralInput,
     PooledCollateralInput,
     StripCollateralInput,
 )
@@ -415,4 +419,202 @@ def from_pi_strips(
         loan_count=loan_count,
         original_collateral_balance=orig_bal,
         market_date=market_date,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1e parity adapter: legacy LDCMA → BMA-native PAIRED input
+# ---------------------------------------------------------------------------
+#
+# Why this exists:
+#
+#   The deal runtime now consumes BMA PortfolioCashflow natively via the
+#   PairedCollateralInput branch (proposal R, Phase 1b). Before migrating
+#   each fixture in Phase 1f / 1g we want to verify the PAIRED runtime
+#   branch produces identical bond cashflows to the legacy LDCMA branch
+#   on the SAME source data. This adapter routes a legacy LDCMA payload
+#   through the PAIRED branch so a parity test can compare bond outputs
+#   side-by-side.
+#
+# Caveats (documented at the function level too):
+#
+#   - Per-loan visibility is NOT recovered. The synthesized PortfolioCashflow
+#     contains exactly ONE constituent per LDCMA group (the whole-pool
+#     aggregate). Calculation expressions iterating ``loans`` see one
+#     element per group, not the original loan count.
+#   - The portfolio is in ACTUAL_ONLY mode (LDCMA has no scheduled stream
+#     to pair with). Scheduled-stream consumers see ``None``.
+#   - Use this adapter ONLY for parity testing the actual cashflow
+#     waterfall against legacy LDCMA fixtures. For new code paths use
+#     ``run_paired_portfolio()`` directly to get a true PAIRED portfolio.
+
+
+def ldcma_to_paired(
+    coll: (
+        DealRunInput
+        | PooledCollateralInput
+        | GroupedCollateralInput
+        | dict[str, dict[str, Any]]
+    ),
+    *,
+    loan_count: int | None = None,
+    original_collateral_balance: float | None = None,
+    market_date: str | None = None,
+) -> DealRunInput:
+    """Convert legacy LDCMA-format collateral into a BMA PAIRED-form ``DealRunInput``.
+
+    Routes a legacy LDCMA payload (single-pool ``PooledCollateralInput`` or
+    multi-group ``GroupedCollateralInput``) through ``_ldcma_to_bma_actual``
+    to synthesize one ``BMAActualCashflow`` per group, wraps the synthesized
+    cashflow(s) in a ``PortfolioCashflow`` (ACTUAL_ONLY mode), and returns
+    a ``DealRunInput`` whose collateral is a ``PairedCollateralInput``.
+
+    The resulting input runs through the runtime's PAIRED branch identically
+    to a legacy LDCMA input (the runtime auto-handles the missing scheduled
+    stream). Bond cashflows must match — that's the parity contract.
+
+    **Caveats:**
+
+      - **Per-loan visibility is not recovered.** Each LDCMA group becomes
+        one ``BMAActualCashflow`` constituent in the synthesized portfolio
+        (the whole-pool aggregate at the group level). Expressions
+        iterating ``loans`` see one element per group, not per original
+        loan.
+      - **No scheduled stream.** The portfolio is in ``ACTUAL_ONLY`` mode.
+        Consumers that need scheduled data (PAC/TAC schedule re-derivation,
+        scheduled-vs-actual decompositions) must use a true PAIRED
+        portfolio built via ``run_paired_portfolio()`` instead.
+      - **Loss of metadata.** ``original_balance``, ``loan_id`` etc. on
+        the synthesized ``BMAActualCashflow`` come from the LDCMA aggregate
+        (loan_id=0, original_balance=balance[0]) — they don't reflect the
+        original underlying loans.
+
+    Args:
+        coll: One of:
+
+          - ``DealRunInput`` whose ``.collateral`` is ``PooledCollateralInput``
+            or ``GroupedCollateralInput``. Other fields (loan_count,
+            market_date, etc.) are propagated unless overridden.
+          - A bare ``PooledCollateralInput`` or ``GroupedCollateralInput``.
+          - An LDCMA ``collCF`` dict (the same shape consumed by
+            :func:`from_collateral_dict`).
+
+        loan_count: Override the output's ``loan_count``. Defaults to the
+            value carried on the input (or ``None``).
+        original_collateral_balance: Override. Defaults to the value on the
+            input, or — when the input is a bare collateral payload — the
+            sum of period-0 ``perf_bal`` across constituents.
+        market_date: Override. Defaults to the value on the input.
+
+    Returns:
+        ``DealRunInput`` with ``PairedCollateralInput`` populated. The wrapped
+        ``PortfolioCashflow`` has one constituent per LDCMA group (or one
+        constituent for single-pool inputs).
+
+    Raises:
+        TypeError: If ``coll`` is not a recognized LDCMA input shape.
+        ValueError: If the input has no usable LDCMA data (e.g. an empty
+            grouped input).
+    """
+    # Lazy imports: keep adapters.py free of engine imports at module load
+    # time (the engine pulls numba / pyarrow etc.); only import when the
+    # parity adapter is actually called.
+    from bma_standard_formulas.engine.portfolio import (
+        PortfolioCashflow,
+        PortfolioMode,
+    )
+
+    from .runtime import _ldcma_to_bma_actual
+
+    # ── Normalize to (groups_dict, source_run_input) ───────────────────
+    # ``groups`` maps group_id -> CollateralCashflows. For single-pool
+    # input we use the synthetic group_id "_pooled" so the synthesized
+    # constituent stays untagged (group_id=None on the cashflow).
+    source_run_input: DealRunInput | None = None
+    groups: dict[str, CollateralCashflows]
+
+    if isinstance(coll, DealRunInput):
+        source_run_input = coll
+        inner = coll.collateral
+        if isinstance(inner, PooledCollateralInput):
+            groups = {"_pooled": inner.collateral}
+        elif isinstance(inner, GroupedCollateralInput):
+            groups = dict(inner.groups)
+        else:
+            raise TypeError(
+                f"ldcma_to_paired only accepts LDCMA-format inputs "
+                f"(PooledCollateralInput / GroupedCollateralInput); got "
+                f"{type(inner).__name__}"
+            )
+    elif isinstance(coll, PooledCollateralInput):
+        groups = {"_pooled": coll.collateral}
+    elif isinstance(coll, GroupedCollateralInput):
+        groups = dict(coll.groups)
+    elif isinstance(coll, dict):
+        # LDCMA collCF shape — convert via from_collateral_dict first
+        # (preserves the multi-group routing logic centralized there).
+        source_run_input = from_collateral_dict(
+            coll,
+            loan_count=loan_count,
+            market_date=market_date,
+        )
+        inner = source_run_input.collateral
+        if isinstance(inner, PooledCollateralInput):
+            groups = {"_pooled": inner.collateral}
+        elif isinstance(inner, GroupedCollateralInput):
+            groups = dict(inner.groups)
+        else:  # pragma: no cover  (from_collateral_dict only emits these)
+            raise TypeError(
+                f"from_collateral_dict produced unexpected variant: "
+                f"{type(inner).__name__}"
+            )
+    else:
+        raise TypeError(
+            "ldcma_to_paired accepts a DealRunInput, PooledCollateralInput, "
+            f"GroupedCollateralInput, or LDCMA dict; got {type(coll).__name__}"
+        )
+
+    if not groups:
+        raise ValueError("ldcma_to_paired received empty collateral input")
+
+    # ── Synthesize one BMAActualCashflow per group ─────────────────────
+    # _ldcma_to_bma_actual is the same boundary helper the runtime's
+    # PAIRED branch uses internally for LDCMA inputs (single source of
+    # truth for the field mapping). For multi-group payloads we tag each
+    # synthesized cashflow with its group_id via dataclasses.replace
+    # (BMAActualCashflow is frozen). The "_pooled" sentinel from the
+    # single-pool path leaves group_id=None.
+    constituents: list = []
+    for group_id, cf in groups.items():
+        bma_actual = _ldcma_to_bma_actual(cf)
+        if group_id != "_pooled":
+            bma_actual = replace(bma_actual, group_id=str(group_id))
+        constituents.append(bma_actual)
+
+    portfolio = PortfolioCashflow(constituents, mode=PortfolioMode.ACTUAL_ONLY)
+
+    # ── Resolve output metadata ────────────────────────────────────────
+    out_loan_count = loan_count
+    if out_loan_count is None and source_run_input is not None:
+        out_loan_count = source_run_input.loan_count
+
+    out_market_date = market_date
+    if out_market_date is None and source_run_input is not None:
+        out_market_date = source_run_input.market_date
+
+    out_orig_bal = original_collateral_balance
+    if out_orig_bal is None and source_run_input is not None:
+        out_orig_bal = source_run_input.original_collateral_balance
+    if out_orig_bal is None:
+        # Fallback: sum period-0 perf_bal across constituents (matches the
+        # convention used by from_grouped_portfolio_cashflows).
+        out_orig_bal = float(
+            sum(float(c.perf_bal[0]) for c in constituents if len(c.perf_bal) > 0)
+        )
+
+    return DealRunInput(
+        collateral=PairedCollateralInput(portfolio=portfolio),
+        loan_count=out_loan_count,
+        original_collateral_balance=out_orig_bal,
+        market_date=out_market_date,
     )
