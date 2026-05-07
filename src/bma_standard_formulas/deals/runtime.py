@@ -954,6 +954,121 @@ def _extract_collateral_arrays(run_input: DealRunInput) -> CollateralExtractionR
     raise TypeError(f"Unknown collateral input type: {type(coll)}")
 
 
+# =============================================================================
+# Loan proxy (Phase 1d.3) — restricted attribute access for safe-eval.
+# =============================================================================
+#
+# When a calculation expression iterates over ``loans`` (the per-loan
+# constituents on ``ExecutionContext``), each element is wrapped in a
+# ``LoanProxy``. The proxy exposes only a whitelist of attributes so an
+# expression cannot reach into Python internals (``__class__``, ``__dict__``,
+# dunder methods, etc.) to escape the sandbox.
+#
+# The whitelist is split into two categories:
+#   - Scalar attributes (``loan_id``, ``original_balance``, etc.) return a
+#     plain Python value (float or, for ``group_id``, str | None).
+#   - Array attributes (``perf_bal``, ``act_int``, etc.) return a
+#     ``_LoanArrayProxy`` that supports ``__getitem__`` for period indexing.
+#
+# Out-of-bounds and non-numeric indices return / raise a ``0.0`` / ValueError
+# respectively, mirroring the defensive defaults elsewhere in
+# ``_build_expr_context``.
+
+_LOAN_SCALAR_ATTRS: frozenset[str] = frozenset({
+    "loan_id", "group_id",
+    "original_balance", "current_balance",
+    "original_term", "remaining_term",
+    "accrued_interest",
+})
+_LOAN_ARRAY_ATTRS: frozenset[str] = frozenset({
+    # FLOW
+    "act_int", "act_prin", "act_cash", "act_am", "vol_prepay",
+    "exp_int", "lost_int", "prin_loss", "prin_recov", "new_def",
+    # STOCK
+    "perf_bal", "fcl", "total_bal", "sch_am", "adb",
+    # RATIO
+    "gross_rate", "net_rate", "mdr", "smm", "age",
+})
+
+
+class _LoanArrayProxy:
+    """Read-only, subscript-only proxy over a numpy cashflow array.
+
+    Returned by ``LoanProxy`` when an expression accesses a whitelisted
+    array attribute (e.g., ``loan.perf_bal``). Subscripting with a numeric
+    period index returns ``float``. Out-of-bounds indices return ``0.0``
+    so expressions evaluated near maturity don't blow up.
+    """
+
+    __slots__ = ("_arr",)
+
+    def __init__(self, arr: np.ndarray) -> None:
+        object.__setattr__(self, "_arr", arr)
+
+    def __getitem__(self, idx: int | float) -> float:
+        if not isinstance(idx, (int, float)) or isinstance(idx, bool):
+            raise ValueError("Loan array index must be numeric")
+        i = int(idx)
+        arr = self._arr
+        if i < 0 or i >= len(arr):
+            return 0.0
+        return float(arr[i])
+
+    def __len__(self) -> int:
+        return len(self._arr)
+
+
+class LoanProxy:
+    """Whitelisted attribute access over a per-loan cashflow.
+
+    Exposed to safe-eval expressions via the ``loans`` accessor on
+    ``ExecutionContext``. Wraps a single ``BMAActualCashflow`` (or
+    ``BMAScheduledCashflow``) constituent and forwards attribute lookups
+    only for the names in ``_LOAN_SCALAR_ATTRS`` / ``_LOAN_ARRAY_ATTRS``.
+    Any other attribute access raises ``ValueError``, blocking dunder
+    sandbox escapes.
+
+    Scalar attributes return a Python primitive (float / str / None).
+    Array attributes return a ``_LoanArrayProxy`` so expressions can
+    write ``loan.perf_bal[i]`` to read a period value.
+
+    Example use in a calculation expression::
+
+        len([l for l in loans if l.perf_bal[i] > 0])
+    """
+
+    __slots__ = ("_cf",)
+
+    def __init__(self, cf: BMAActualCashflow | BMAScheduledCashflow) -> None:
+        object.__setattr__(self, "_cf", cf)
+
+    def __getattr__(self, name: str):
+        if name in _LOAN_SCALAR_ATTRS:
+            val = getattr(self._cf, name, None)
+            # Numeric scalars cast to float for expression-context
+            # consistency; group_id stays str|None; loan_id stays int.
+            if name == "loan_id":
+                return int(val or 0)
+            if name == "group_id":
+                return val  # str | int | None
+            if val is None:
+                return 0.0
+            return float(val)
+        if name in _LOAN_ARRAY_ATTRS:
+            arr = getattr(self._cf, name, None)
+            if arr is None:
+                # The cashflow type doesn't carry this field (e.g.,
+                # BMAScheduledCashflow doesn't have `perf_bal`). Return
+                # an empty proxy that yields 0.0 for any index.
+                return _LoanArrayProxy(np.zeros(0))
+            return _LoanArrayProxy(arr)
+        raise ValueError(
+            f"Attribute {name!r} not exposed on loan proxy. Whitelisted "
+            f"scalars: {sorted(_LOAN_SCALAR_ATTRS)}; arrays: "
+            f"{sorted(_LOAN_ARRAY_ATTRS)}"
+        )
+
+
 _SAFE_BIN_OPS = {
     ast.Add: _op.add,
     ast.Sub: _op.sub,
@@ -965,43 +1080,218 @@ _SAFE_BIN_OPS = {
 _SAFE_UNARY_OPS = {
     ast.UAdd: _op.pos,
     ast.USub: _op.neg,
+    ast.Not: _op.not_,
 }
+_SAFE_COMPARE_OPS = {
+    ast.Eq: _op.eq,
+    ast.NotEq: _op.ne,
+    ast.Lt: _op.lt,
+    ast.LtE: _op.le,
+    ast.Gt: _op.gt,
+    ast.GtE: _op.ge,
+}
+# Whitelist of safe builtin functions accessible from expressions.
+# All return numeric values (Phase 1d.3 added len/sum/any/all to support
+# loan-iteration patterns). Non-numeric returns are coerced at the call
+# site if the outermost expression result must be float.
 _SAFE_FUNCS = {
     "min": min,
     "max": max,
     "abs": abs,
+    "len": len,
+    "sum": sum,
+    "any": any,
+    "all": all,
 }
 
 
-def _safe_eval_expr(expr: str, values: dict[str, float]) -> float:
-    def _eval(node: ast.AST) -> float:
+def _safe_eval_expr(expr: str, values: dict[str, Any]) -> float:
+    """Evaluate an IR expression in a sandboxed AST walker.
+
+    The expression context (``values``) maps identifiers to per-period
+    scalars (float), booleans (e.g., trigger states), or — for Phase 1d.3
+    — sequences of ``LoanProxy`` objects (the ``loans`` accessor).
+
+    Supported AST nodes (Phase 1d.3 expansion):
+
+      Original (still supported):
+        Expression, Constant (int/float/bool), Name, BinOp (+ - * / ** %),
+        UnaryOp (+ -), Call (whitelisted: min, max, abs).
+
+      Added in Phase 1d.3:
+        Compare (==, !=, <, <=, >, >=) — including chained comparisons.
+        BoolOp (and, or) — short-circuiting per Python semantics.
+        UnaryOp (not).
+        IfExp (x if cond else y).
+        Attribute — only on LoanProxy / _LoanArrayProxy targets.
+        Subscript — only on _LoanArrayProxy targets.
+        ListComp / GeneratorExp — single-level only (no nested loops).
+        comprehension (the for-target-in-iter-if-clause inside a comp).
+        Call to len, sum, any, all (non-numeric returns allowed for
+            len/sum/any/all results that immediately wrap or compare).
+
+    The outer wrapper coerces the final result to ``float()``. Intermediate
+    evaluations may return non-float values (LoanProxy, list, bool,
+    generator) but the top-level expression result must be numeric.
+
+    Sandbox notes:
+      - LoanProxy whitelists attribute names; dunder access is blocked.
+      - _LoanArrayProxy supports only ``__getitem__`` and ``__len__``.
+      - Comprehensions create local scope for the target variable; they
+        do NOT mutate the outer ``values`` dict.
+      - Multi-generator (nested) comprehensions are rejected as a
+        complexity-and-perf guardrail; rewrite as separate calls.
+    """
+    def _eval(node: ast.AST, scope: dict[str, Any]):
         if isinstance(node, ast.Expression):
-            return _eval(node.body)
+            return _eval(node.body, scope)
         if isinstance(node, ast.Constant):
-            if isinstance(node.value, (int, float)):
-                return float(node.value)
-            raise ValueError("Unsupported constant")
+            v = node.value
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, (int, float)):
+                return float(v)
+            raise ValueError(f"Unsupported constant: {v!r}")
         if isinstance(node, ast.Name):
-            return float(values.get(node.id, 0.0))
+            # Identifier lookup: scope (local, e.g. comprehension target)
+            # then values (outer expression context). Default to 0.0 to
+            # keep the legacy behavior of missing names being benign.
+            if node.id in scope:
+                return scope[node.id]
+            return values.get(node.id, 0.0)
         if isinstance(node, ast.BinOp):
             fn = _SAFE_BIN_OPS.get(type(node.op))
             if fn is None:
-                raise ValueError("Unsupported binary operator")
-            return float(fn(_eval(node.left), _eval(node.right)))
+                raise ValueError(f"Unsupported binary operator: {type(node.op).__name__}")
+            left = _eval(node.left, scope)
+            right = _eval(node.right, scope)
+            return float(fn(float(left), float(right)))
         if isinstance(node, ast.UnaryOp):
             fn = _SAFE_UNARY_OPS.get(type(node.op))
             if fn is None:
-                raise ValueError("Unsupported unary operator")
-            return float(fn(_eval(node.operand)))
+                raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
+            operand = _eval(node.operand, scope)
+            if isinstance(node.op, ast.Not):
+                return bool(fn(operand))
+            return float(fn(float(operand)))
+        if isinstance(node, ast.Compare):
+            # Chained comparisons: Python's `a < b < c` is one Compare node
+            # with comparators=[b, c]; we evaluate left-to-right and short
+            # circuit on the first false.
+            left = _eval(node.left, scope)
+            for op, comp_node in zip(node.ops, node.comparators):
+                fn = _SAFE_COMPARE_OPS.get(type(op))
+                if fn is None:
+                    raise ValueError(
+                        f"Unsupported comparison operator: {type(op).__name__}"
+                    )
+                right = _eval(comp_node, scope)
+                if not fn(left, right):
+                    return False
+                left = right
+            return True
+        if isinstance(node, ast.BoolOp):
+            # Short-circuit: ast.And succeeds only if every value is truthy;
+            # ast.Or returns the first truthy value (or False if none are).
+            if isinstance(node.op, ast.And):
+                last = True
+                for v in node.values:
+                    last = _eval(v, scope)
+                    if not last:
+                        return False
+                return bool(last)
+            if isinstance(node.op, ast.Or):
+                for v in node.values:
+                    val = _eval(v, scope)
+                    if val:
+                        return val
+                return False
+            raise ValueError(f"Unsupported boolean operator: {type(node.op).__name__}")
+        if isinstance(node, ast.IfExp):
+            return _eval(node.body, scope) if _eval(node.test, scope) else _eval(node.orelse, scope)
+        if isinstance(node, ast.Attribute):
+            target = _eval(node.value, scope)
+            # Defense in depth: the AST walker enforces the LoanProxy
+            # whitelist before forwarding to ``getattr``. Python's normal
+            # attribute resolution finds ``__class__`` / ``__doc__`` /
+            # other built-in attrs before ``__getattr__`` fires, so
+            # whitelist-only ``__getattr__`` alone is insufficient. The
+            # AST-level check below blocks dunder access regardless of
+            # what Python's MRO would resolve.
+            if not isinstance(target, LoanProxy):
+                raise ValueError(
+                    "Attribute access only allowed on LoanProxy targets; "
+                    f"got {type(target).__name__}"
+                )
+            if node.attr not in _LOAN_SCALAR_ATTRS and node.attr not in _LOAN_ARRAY_ATTRS:
+                raise ValueError(
+                    f"Attribute {node.attr!r} not exposed on loan proxy. "
+                    f"Whitelisted scalars: {sorted(_LOAN_SCALAR_ATTRS)}; "
+                    f"arrays: {sorted(_LOAN_ARRAY_ATTRS)}"
+                )
+            return getattr(target, node.attr)
+        if isinstance(node, ast.Subscript):
+            target = _eval(node.value, scope)
+            if not isinstance(target, _LoanArrayProxy):
+                raise ValueError(
+                    "Subscripting only allowed on loan array attributes; "
+                    f"got {type(target).__name__}"
+                )
+            # Python 3.9+: subscript slice is an expression directly.
+            idx = _eval(node.slice, scope)
+            return target[idx]
+        if isinstance(node, (ast.GeneratorExp, ast.ListComp)):
+            if len(node.generators) != 1:
+                raise ValueError(
+                    "Nested comprehensions not supported; rewrite as "
+                    "separate expressions or pre-aggregate via a "
+                    "CalculationNode"
+                )
+            comp = node.generators[0]
+            if not isinstance(comp.target, ast.Name):
+                raise ValueError(
+                    "Comprehension target must be a simple identifier"
+                )
+            iterable = _eval(comp.iter, scope)
+            try:
+                items = list(iterable)
+            except TypeError as exc:
+                raise ValueError(
+                    f"Cannot iterate over {type(iterable).__name__}"
+                ) from exc
+            results = []
+            target_name = comp.target.id
+            for item in items:
+                # Comprehension scope: new dict per iteration so target
+                # binding doesn't leak across iterations or to the outer.
+                inner = dict(scope)
+                inner[target_name] = item
+                if all(_eval(if_clause, inner) for if_clause in comp.ifs):
+                    results.append(_eval(node.elt, inner))
+            # Both ListComp and GeneratorExp return a list here; the only
+            # observable difference (laziness) doesn't matter inside this
+            # bounded sandbox where we always materialize fully.
+            return results
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             fn = _SAFE_FUNCS.get(node.func.id)
             if fn is None:
-                raise ValueError("Unsupported function")
-            args = [_eval(a) for a in node.args]
-            return float(fn(*args))
-        raise ValueError("Unsupported expression node")
+                raise ValueError(f"Unsupported function: {node.func.id}")
+            args = [_eval(a, scope) for a in node.args]
+            return fn(*args)
+        raise ValueError(f"Unsupported expression node: {type(node).__name__}")
 
-    return float(_eval(ast.parse(expr, mode="eval")))
+    result = _eval(ast.parse(expr, mode="eval"), {})
+    # Outermost expression must coerce to float for the runtime numeric
+    # contract (rule caps, fee amounts, calculation node values, trigger
+    # thresholds). Bool coerces to 0.0/1.0; numeric stays numeric; lists
+    # / proxies / generators raise here, surfacing the misuse cleanly.
+    if isinstance(result, bool):
+        return 1.0 if result else 0.0
+    if isinstance(result, (int, float)):
+        return float(result)
+    raise ValueError(
+        f"Expression result must be numeric; got {type(result).__name__}"
+    )
 
 
 def _build_expr_context(
@@ -1017,7 +1307,9 @@ def _build_expr_context(
     cash_avail: np.ndarray | None,
     i: int,
     orig_collat_bal: float,
-) -> dict[str, float]:
+    constituents: list[BMAActualCashflow] | None = None,
+    constituents_by_group: dict[str, list[BMAActualCashflow]] | None = None,
+) -> dict[str, Any]:
     """Build the per-period expression context dict.
 
     Reads collateral data via attribute access on the typed BMA cashflow
@@ -1079,7 +1371,7 @@ def _build_expr_context(
     else:
         survival_factor_prev = 1.0
 
-    ctx: dict[str, float] = {
+    ctx: dict[str, Any] = {
         "period": float(i),
         "loan_count": float(run_input.loan_count or 0),
         "orig_collateral_balance": float(orig_collat_bal),
@@ -1147,6 +1439,23 @@ def _build_expr_context(
     for src_name, arr in virtual_sources.items():
         if src_name.isidentifier():
             ctx[f"{src_name}_available"] = float(arr[i])
+
+    # Phase 1d.3: per-loan accessor. ``loans`` is a list of LoanProxy
+    # wrappers — exposing whitelisted attribute access on the per-loan
+    # constituents so calculation expressions can write things like
+    # ``len([l for l in loans if l.perf_bal[i] > 0])``. PAIRED inputs
+    # populate constituents; LDCMA inputs leave them empty (no per-loan
+    # data available), so ``loans`` is an empty list and any expression
+    # that iterates safely degrades to a zero result.
+    ctx["loans"] = [LoanProxy(cf) for cf in (constituents or [])]
+    if constituents_by_group:
+        ctx["loans_by_group"] = {
+            gid: [LoanProxy(cf) for cf in cfs]
+            for gid, cfs in constituents_by_group.items()
+        }
+    else:
+        ctx["loans_by_group"] = {}
+
     return ctx
 
 
@@ -1260,6 +1569,8 @@ def _update_virtual_sources(
         ctx.cash_avail,
         i,
         orig_collat_bal,
+        constituents=ctx.constituents,
+        constituents_by_group=ctx.constituents_by_group,
     )
     for src_name, expr in formulas.items():
         if not isinstance(src_name, str) or not isinstance(expr, str):
@@ -1296,6 +1607,8 @@ def _apply_balance_trackers(
         ctx.cash_avail,
         i,
         orig_collat_bal,
+        constituents=ctx.constituents,
+        constituents_by_group=ctx.constituents_by_group,
     )
     for target_name, expr in trackers.items():
         if not isinstance(target_name, str) or not isinstance(expr, str):
@@ -1743,7 +2056,9 @@ def run_deal(
             ctx.cash_avail,
             i,
             orig_collat_bal,
-        )
+        constituents=ctx.constituents,
+        constituents_by_group=ctx.constituents_by_group,
+    )
         ctx.calculation_values = _evaluate_calculations(deal, expr_ctx)
         if deal.triggers:
             _evaluate_triggers(deal, ctx, i, orig_collat_bal, cum_loss_cache)
@@ -1761,7 +2076,9 @@ def run_deal(
             ctx.cash_avail,
             i,
             orig_collat_bal,
-        )
+        constituents=ctx.constituents,
+        constituents_by_group=ctx.constituents_by_group,
+    )
         allow_negative_cash_math = bool(deal.deal_knobs.get("allow_negative_cashflow_math", False))
         # Reset per-period cash snapshots so each rule sees the cash state as
         # of its own start, anchored to a deterministic point in the waterfall.
@@ -1802,7 +2119,9 @@ def run_deal(
                 ctx.cash_avail,
                 i,
                 orig_collat_bal,
-            )
+        constituents=ctx.constituents,
+        constituents_by_group=ctx.constituents_by_group,
+    )
             for snap_rule_id, snap_value in ctx.rule_cash_snapshots.items():
                 # Snapshot identifiers are namespaced: bare rule_id → CASH,
                 # `__prin__:<rule_id>` → ACT_PRIN, `__int__:<rule_id>` → ACT_INT.

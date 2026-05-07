@@ -416,9 +416,10 @@ class TestExtractCollateralArraysConstituents:
 class TestExecutionContextConstituents:
     """``run_deal`` populates ``ExecutionContext.constituents`` from the
     extraction result so downstream rule/calculation hooks see the per-loan
-    leaves. The current runtime doesn't yet *consume* this data (Phase 1d.3
-    adds the ``loans`` expression accessor); this test pins the wire-up so
-    later phases can rely on it."""
+    leaves. Phase 1d.3 adds the ``loans`` expression accessor that
+    consumes this data; the end-to-end test below validates that a
+    ``CalculationNode`` can iterate ``loans`` and produce a value that
+    matches the equivalent BMA-aggregate calculation."""
 
     def test_paired_run_populates_constituents_via_trace(self):
         # Use a passthrough_deal that emits a trace; we verify the runtime
@@ -442,3 +443,147 @@ class TestExecutionContextConstituents:
         extraction = _extract_collateral_arrays(run_input)
         assert len(extraction.actual_constituents) == 3
         assert {cf.loan_id for cf in extraction.actual_constituents} == {1, 2, 3}
+
+    def test_loans_accessor_in_expression_context(self):
+        """End-to-end Phase 1d.3 validation: ``_build_expr_context``
+        populates the ``loans`` and ``loans_by_group`` keys with
+        ``LoanProxy`` lists when constituents are present, and the
+        sandbox can iterate over them.
+
+        Pins the wire-up that ``ExecutionContext.constituents`` →
+        ``_build_expr_context`` argument → ``LoanProxy`` list under the
+        ``loans`` key → safe-eval comprehension produces the right
+        value.
+        """
+        from bma_standard_formulas.deals.runtime import (
+            LoanProxy,
+            _build_expr_context,
+            _safe_eval_expr,
+        )
+        from bma_standard_formulas.deals.schemas.ir import (
+            DealDefinition, BondDef, RuleNode, RuleType,
+        )
+
+        loans = [_build_loan(i, group_id=None) for i in range(1, 4)]
+        portfolio = _build_paired_portfolio(loans)
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            loan_count=3,
+            original_collateral_balance=3_000_000.0,
+        )
+        extraction = _extract_collateral_arrays(run_input)
+
+        # Minimal deal stub for _build_expr_context's first arg.
+        deal = DealDefinition(
+            deal_name="loans_accessor_e2e",
+            bonds=[
+                BondDef(name="A", coupon=5.0, size_dollars=3_000_000.0),
+                BondDef(name="R", is_pseudo=True, tranche_type="RESIDUAL"),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="r_resid",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+
+        # Period 1 — first month with cashflow.
+        i = 1
+        ctx = _build_expr_context(
+            deal=deal,
+            run_input=run_input,
+            actual=extraction.actual,
+            scheduled=extraction.scheduled,
+            bonds={},
+            accounts={},
+            trigger_states={},
+            calculation_values={},
+            virtual_sources={},
+            cash_avail=None,
+            i=i,
+            orig_collat_bal=3_000_000.0,
+            constituents=extraction.actual_constituents,
+            constituents_by_group=extraction.actual_constituents_by_group,
+        )
+
+        # 1) ``loans`` is exposed as a list of LoanProxy objects.
+        assert "loans" in ctx
+        assert isinstance(ctx["loans"], list)
+        assert len(ctx["loans"]) == 3
+        assert all(isinstance(p, LoanProxy) for p in ctx["loans"])
+
+        # 2) Iterating loans in a comprehension produces the right count.
+        assert _safe_eval_expr("len(loans)", ctx) == 3.0
+
+        # 3) Sum-over-loans equals the aggregate field exposed in the
+        #    same context (collateral_act_int). Period 1 act_int per
+        #    loan summed equals the pool-level act_int.
+        per_loan_sum = _safe_eval_expr("sum(l.act_int[period] for l in loans)", ctx)
+        aggregate = ctx["collateral_act_int"]
+        assert per_loan_sum == pytest.approx(aggregate, rel=1e-9, abs=1e-6)
+
+        # 4) Filter expression: count loans with positive perf_bal at period 1.
+        active_count = _safe_eval_expr(
+            "len([l for l in loans if l.perf_bal[period] > 0])", ctx,
+        )
+        assert active_count == 3.0
+
+    def test_loans_accessor_empty_for_ldcma_input(self):
+        """LDCMA-format inputs are pre-aggregated and have no per-loan
+        visibility. The ``loans`` accessor must be an empty list so
+        expressions degrade gracefully without raising."""
+        from bma_standard_formulas.deals.runtime import (
+            _build_expr_context,
+            _safe_eval_expr,
+        )
+        from bma_standard_formulas.deals.schemas.ir import (
+            DealDefinition, BondDef, RuleNode, RuleType,
+        )
+
+        loan = _build_loan(1, group_id=None)
+        actual, _ = _build_actual_and_scheduled(loan)
+        run_input = from_actual_cashflow(actual, horizon=361, initial_balance=1_000_000.0)
+        extraction = _extract_collateral_arrays(run_input)
+
+        deal = DealDefinition(
+            deal_name="ldcma_no_loans",
+            bonds=[
+                BondDef(name="A", coupon=5.0, size_dollars=1_000_000.0),
+                BondDef(name="R", is_pseudo=True, tranche_type="RESIDUAL"),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="r_resid",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+
+        ctx = _build_expr_context(
+            deal=deal,
+            run_input=run_input,
+            actual=extraction.actual,
+            scheduled=extraction.scheduled,
+            bonds={},
+            accounts={},
+            trigger_states={},
+            calculation_values={},
+            virtual_sources={},
+            cash_avail=None,
+            i=1,
+            orig_collat_bal=1_000_000.0,
+            constituents=extraction.actual_constituents,
+            constituents_by_group=extraction.actual_constituents_by_group,
+        )
+
+        assert ctx["loans"] == []
+        # Empty iteration yields zero — expression doesn't crash.
+        assert _safe_eval_expr("len(loans)", ctx) == 0.0
+        assert _safe_eval_expr("sum(l.act_int[period] for l in loans)", ctx) == 0.0
