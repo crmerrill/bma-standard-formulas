@@ -97,13 +97,65 @@ def _io_total_cashflows(
 
 
 def _pool_total_cashflows(run_input: DealRunInput) -> np.ndarray:
-    """Net pool principal + interest cashflow, period-indexed."""
+    """Net pool principal + interest cashflow, period-indexed.
+
+    Handles all four ``CollateralInput`` variants:
+
+      - ``PooledCollateralInput`` / ``StripCollateralInput``: read
+        ``cf.principal`` + ``cf.interest`` from the inner LDCMA payload.
+      - ``GroupedCollateralInput``: aggregate by summing each group's
+        principal + interest streams.
+      - ``PairedCollateralInput`` (Phase 1f): read directly from the
+        BMA-native PortfolioCashflow's pool — ``portfolio.pool.act_prin``
+        for principal and ``portfolio.pool.act_int`` for interest.
+        ``act_int`` is whatever the deal runtime sees (already netted
+        for FNR-style MBS-layer wedge handling done at fixture build
+        time via ``dataclasses.replace``).
+    """
     coll = run_input.collateral
+
+    # PAIRED: BMA-native cashflow. Read from portfolio.pool directly.
+    portfolio = getattr(coll, "portfolio", None)
+    if portfolio is not None:
+        try:
+            pool = portfolio.pool
+        except (ValueError, AttributeError, TypeError):
+            return np.zeros(0)
+        principal = np.asarray(pool.act_prin, dtype=float)
+        interest = np.asarray(pool.act_int, dtype=float)
+        n = max(len(principal), len(interest))
+        pool_cf = np.zeros(n)
+        if len(principal) > 0:
+            pool_cf[: len(principal)] += principal
+        if len(interest) > 0:
+            pool_cf[: len(interest)] += interest
+        return pool_cf
+
+    # LDCMA paths: PooledCollateralInput and StripCollateralInput expose
+    # the inner LDCMA payload as ``coll.collateral``; GroupedCollateralInput
+    # exposes per-group payloads as ``coll.groups``.
     cf = getattr(coll, "collateral", None)
     if cf is None:
         groups = getattr(coll, "groups", None)
         if groups:
-            cf = next(iter(groups.values()))
+            # Aggregate across groups so single-group access does the
+            # same thing as multi-group access (sum of principal +
+            # interest streams). Pre-Phase-1f the loop just took the
+            # first group, which dropped the rest of the cashflow.
+            principal_total: np.ndarray | None = None
+            interest_total: np.ndarray | None = None
+            for g_cf in groups.values():
+                p = np.asarray(g_cf.principal, dtype=float)
+                i = np.asarray(g_cf.interest, dtype=float)
+                principal_total = p if principal_total is None else principal_total + p
+                interest_total = i if interest_total is None else interest_total + i
+            if principal_total is None or interest_total is None:
+                return np.zeros(0)
+            n = max(len(principal_total), len(interest_total))
+            pool_cf = np.zeros(n)
+            pool_cf[: len(principal_total)] += principal_total
+            pool_cf[: len(interest_total)] += interest_total
+            return pool_cf
     if cf is None:
         return np.zeros(0)
     principal = np.asarray(cf.principal, dtype=float)
@@ -227,28 +279,74 @@ def _solve_tranche_ytm(
 # ---------------------------------------------------------------------------
 
 
+def _pool_principal_array(run_input: DealRunInput) -> np.ndarray:
+    """Pool principal cashflow stream, period-indexed.
+
+    Mirrors ``_pool_total_cashflows`` for the principal-only stream. Used
+    by the WAL calculation. Handles all four CollateralInput variants.
+    """
+    coll = run_input.collateral
+    portfolio = getattr(coll, "portfolio", None)
+    if portfolio is not None:
+        try:
+            return np.asarray(portfolio.pool.act_prin, dtype=float)
+        except (ValueError, AttributeError, TypeError):
+            return np.zeros(0)
+    cf = getattr(coll, "collateral", None)
+    if cf is not None:
+        return np.asarray(cf.principal, dtype=float)
+    groups = getattr(coll, "groups", None)
+    if groups:
+        total: np.ndarray | None = None
+        for g_cf in groups.values():
+            arr = np.asarray(g_cf.principal, dtype=float)
+            total = arr if total is None else total + arr
+        return total if total is not None else np.zeros(0)
+    return np.zeros(0)
+
+
+def _pool_initial_balance(run_input: DealRunInput) -> float:
+    """Pool starting balance for the YTM solve.
+
+    Prefers ``run_input.original_collateral_balance``; falls back to the
+    period-0 balance of the collateral payload (across all four variants).
+    """
+    declared = float(run_input.original_collateral_balance or 0.0)
+    if declared > 0.0:
+        return declared
+    coll = run_input.collateral
+    portfolio = getattr(coll, "portfolio", None)
+    if portfolio is not None:
+        try:
+            pool = portfolio.pool
+        except (ValueError, AttributeError, TypeError):
+            return 0.0
+        return float(pool.perf_bal[0]) if len(pool.perf_bal) > 0 else 0.0
+    cf = getattr(coll, "collateral", None)
+    if cf is not None and cf.balance:
+        return float(cf.balance[0])
+    groups = getattr(coll, "groups", None)
+    if groups:
+        return float(sum(
+            (g_cf.balance[0] for g_cf in groups.values() if g_cf.balance), 0.0,
+        ))
+    return 0.0
+
+
 def _solve_pool_ytm(run_input: DealRunInput) -> tuple[float, float, float, float]:
     """Return ``(pool_balance, ytm_cbe_pct, modified_duration_years, wal_years)``."""
     pool_cf = _pool_total_cashflows(run_input)
     if pool_cf.sum() <= 0.0:
         return 0.0, 0.0, 0.0, 0.0
-    pool_balance = float(run_input.original_collateral_balance or 0.0)
-    if pool_balance <= 0.0:
-        coll = run_input.collateral
-        cf = getattr(coll, "collateral", None)
-        if cf is not None and cf.balance:
-            pool_balance = float(cf.balance[0])
+    pool_balance = _pool_initial_balance(run_input)
     try:
         r_m = solve_monthly_irr(pool_cf, pool_balance)
     except ValueError:
         return pool_balance, 0.0, 0.0, 0.0
     ytm = monthly_to_cbe(r_m)
     dur = _modified_duration(pool_cf, r_m)
-    # WAL of pool = principal-only weighted average period.
-    coll = run_input.collateral
-    cf = getattr(coll, "collateral", None)
-    if cf is not None:
-        principal = np.asarray(cf.principal, dtype=float)
+    principal = _pool_principal_array(run_input)
+    if len(principal) > 0:
         periods = np.arange(len(principal), dtype=float)
         total = float(principal.sum())
         wal = float((periods * principal).sum() / total / 12.0) if total > 0 else 0.0

@@ -28,7 +28,10 @@ from datetime import date
 import numpy as np
 import pytest
 
-from bma_standard_formulas.deals.adapters import from_actual_cashflow
+from bma_standard_formulas.deals.adapters import (
+    from_actual_cashflow,
+    ldcma_to_paired,
+)
 from bma_standard_formulas.deals.runtime import run_deal
 from bma_standard_formulas.deals.schemas.input import (
     CollateralCashflows,
@@ -224,34 +227,82 @@ def _repline_for_psa(psa_speed: float):
     return agg_sched, agg_actual, weighted_wac
 
 
-def _deal_input_from_repline(psa_speed: float, n_periods: int) -> DealRunInput:
+def _deal_input_from_repline(
+    psa_speed: float,
+    n_periods: int,
+    *,
+    group_id: str | None = None,
+) -> DealRunInput:
     """Build a DealRunInput by routing the BMA actual cashflow through the
-    canonical ``from_actual_cashflow`` adapter (production code path).
+    PAIRED runtime branch via ``ldcma_to_paired`` (Phase 1f migration).
 
-    The adapter copies BMA's `act_int` directly into the deal's `interest`
-    stream; because each sub-repline ``Loan`` is constructed with
-    ``servicing_fee = wac - net_pct`` (or 0 in the 0% PSA override where
-    gross == net == 8.00%), `act_int` is already net of the GSE guaranty
-    wedge and ready to drive the bond cash-interest rules. The deal IR
-    therefore does not need a separate wedge ``FeeDef`` for this fixture
-    -- the wedge is netted upstream at the loan level, so what reaches
-    the waterfall is exactly the pass-through interest the trust
-    distributes.
+    Pipeline:
+
+      1. ``_repline_for_psa`` aggregates the FNR Group 1 sub-replines into
+         a duck-typed ``_AggregatedActual`` carrying the primitive BMA
+         flow / stock fields needed by the deal engine.
+      2. ``from_actual_cashflow(net_of_servicing=True)`` builds the LDCMA
+         intermediate. ``net_of_servicing`` subtracts ``svc_billed`` from
+         ``act_int`` because each underlying MBS delivers only the 5.50%
+         pass-through rate to the trust (Fannie Mae guaranty fee netted
+         at the MBS layer; modeling it as a trust-level ``FeeDef`` would
+         double-count).
+      3. ``ldcma_to_paired`` wraps the LDCMA payload as a
+         ``PairedCollateralInput`` over a ``PortfolioCashflow`` (ACTUAL_ONLY
+         mode). The deal runtime consumes the BMA-native PAIRED form.
+      4. When ``group_id`` is supplied, the synthesized BMAActualCashflow
+         constituent is retagged via ``dataclasses.replace`` so the
+         multi-group runtime path routes cash to the right group.
+
+    Why route Group 1 through ``ldcma_to_paired`` rather than building a
+    real ``BMAActualCashflow`` directly: ``_repline_for_psa`` returns a
+    duck-typed ``_AggregatedActual`` (sum of sub-repline arrays) that
+    only carries the primitive flow / stock fields the LDCMA adapter
+    needs — many ``BMAActualCashflow`` fields (``mdr``, ``smm``,
+    ``gross_rate``, ``age``, etc.) are not populated by the aggregator.
+    ``ldcma_to_paired`` synthesizes a proper ``BMAActualCashflow`` via
+    ``_ldcma_to_bma_actual`` (single source of truth shared with the
+    runtime's PAIRED branch) so the fixture reaches the PAIRED runtime
+    branch without needing a parallel aggregator that populates every
+    BMA field. Group 2 (single-loan repline) is migrated directly to
+    full PAIRED in ``_group_2_collateral_input``.
     """
+    import dataclasses
+
+    from bma_standard_formulas.deals.schemas.input import PairedCollateralInput
+    from bma_standard_formulas.engine import PortfolioCashflow
+    from bma_standard_formulas.engine.portfolio import PortfolioMode
+
     _sched, actual, _wac_pct = _repline_for_psa(psa_speed)
     initial_balance = float(POOL_ASSUMPTIONS["aggregate_upb_dollars"])
-    return from_actual_cashflow(
+    ldcma_input = from_actual_cashflow(
         actual,
         horizon=n_periods + 1,
         loan_count=int(initial_balance / 200_000.0),
         initial_balance=initial_balance,
-        # FNR is a Fannie Mae REMIC: each underlying MBS delivers only the
-        # 5.50% pass-through rate to the trust, with the gross-vs-net
-        # wedge netted at the MBS layer (Fannie Mae guaranty fee). The
-        # adapter subtracts svc_billed so the deal engine receives net
-        # pass-through interest -- modeling the wedge as a trust-level
-        # FeeDef would double-count it.
         net_of_servicing=True,
+    )
+    paired_input = ldcma_to_paired(ldcma_input)
+
+    if group_id is None:
+        return paired_input
+
+    # Retag the synthesized constituent with the requested group_id so
+    # the multi-group combined run routes cash through GROUP_<id>_*
+    # tokens correctly. ldcma_to_paired emitted untagged constituents
+    # (group_id=None); rebuild a portfolio whose constituents carry the
+    # caller's group_id.
+    portfolio = paired_input.collateral.portfolio
+    retagged = [
+        dataclasses.replace(cf, group_id=group_id)
+        for cf in portfolio.actual_constituents()
+    ]
+    new_portfolio = PortfolioCashflow(retagged, mode=PortfolioMode.ACTUAL_ONLY)
+    return DealRunInput(
+        collateral=PairedCollateralInput(portfolio=new_portfolio),
+        loan_count=paired_input.loan_count,
+        original_collateral_balance=paired_input.original_collateral_balance,
+        market_date=paired_input.market_date,
     )
 
 
@@ -424,8 +475,13 @@ class TestRuntimeAggregateGroupITieOut:
         run_input = _collateral_at_psa(100.0, n_periods)
         deal = build_fnr_2006_018_group_1_deal(n_periods=n_periods)
         result = run_deal(deal, run_input, scenario_name="100PSA")
-        pool_principal = float(sum(run_input.collateral.collateral.principal))
-        pool_interest = float(sum(run_input.collateral.collateral.interest))
+        # Phase 1f: collateral is now PairedCollateralInput; read pool
+        # principal / interest from the BMA-native portfolio.pool fields
+        # (act_prin = act_am + vol_prepay; act_int already netted of the
+        # MBS-layer servicing wedge by ldcma_to_paired's input).
+        pool = run_input.collateral.portfolio.pool
+        pool_principal = float(pool.act_prin.sum())
+        pool_interest = float(pool.act_int.sum())
         bond_principal = float(sum(
             r.total_principal for r in result.bond_cashflows
             if r.tranche_id != "R"

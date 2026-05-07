@@ -170,9 +170,11 @@ class TestStage3DealEngineConservation:
         run_input = _deal_input_from_repline(float(psa), N_PERIODS)
         deal = build_fnr_2006_018_group_1_deal(n_periods=N_PERIODS)
         result = run_deal(deal, run_input, scenario_name=f"{psa}PSA")
-        coll = run_input.collateral.collateral
-        pool_principal = float(sum(coll.principal))
-        pool_interest = float(sum(coll.interest))
+        # Phase 1f: collateral is PairedCollateralInput; read pool
+        # principal / interest from the BMA-native portfolio.pool.
+        pool = run_input.collateral.portfolio.pool
+        pool_principal = float(pool.act_prin.sum())
+        pool_interest = float(pool.act_int.sum())
         bond_principal = float(sum(
             r.total_principal for r in result.bond_cashflows
             if r.tranche_id != "R"

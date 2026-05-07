@@ -22,20 +22,30 @@ published WALA (24) so the SMM curve seasons correctly.
 """
 from __future__ import annotations
 
+import dataclasses
 from datetime import date
 
 import numpy as np
 import pytest
 
-from bma_standard_formulas.deals.adapters import from_actual_cashflow
 from bma_standard_formulas.deals.runtime import run_deal
-from bma_standard_formulas.deals.schemas.input import DealRunInput
+from bma_standard_formulas.deals.schemas.input import (
+    DealRunInput,
+    PairedCollateralInput,
+)
+from bma_standard_formulas.engine import PortfolioCashflow
 from bma_standard_formulas.engine.loan import (
     Loan,
     actual_cashflow_from_loan,
     scheduled_cashflow_from_loan,
 )
+from bma_standard_formulas.engine.portfolio import PortfolioMode
 from bma_standard_formulas.formulas import generate_smm_curve_from_psa
+from bma_standard_formulas.formulas.cashflows import (
+    BMAActualCashflow,
+    BMAScheduledCashflow,
+    CashFlowPair,
+)
 
 from tests.fixtures.fnr_2006_018 import (
     DECREMENT_TABLE_PERIODS,
@@ -115,9 +125,53 @@ def _build_group_2_loan(psa_speed: float) -> Loan:
     )
 
 
-def _group_2_collateral_input(psa_speed: float, n_periods: int) -> DealRunInput:
-    """Build a Group 2 DealRunInput by routing the Loan through BMA actual
-    cashflow + the canonical ``from_actual_cashflow`` adapter.
+def _slice_array_fields(
+    cf: BMAActualCashflow | BMAScheduledCashflow,
+    horizon: int,
+) -> dict:
+    """Return a kwargs dict slicing every numpy-array field to ``horizon``.
+
+    Skips derived fields (``init=False`` with ``metadata['derived']=True``)
+    so dataclasses.replace doesn't try to set them — ``__post_init__``
+    recomputes them on the new instance.
+    """
+    overrides: dict = {}
+    for f in dataclasses.fields(cf):
+        if f.metadata.get("derived"):
+            continue
+        val = getattr(cf, f.name)
+        if isinstance(val, np.ndarray) and len(val) > horizon:
+            overrides[f.name] = val[:horizon].copy()
+    return overrides
+
+
+def _group_2_collateral_input(
+    psa_speed: float,
+    n_periods: int,
+    *,
+    group_id: str | None = None,
+) -> DealRunInput:
+    """Build a Group 2 DealRunInput as a BMA-native PAIRED payload (Phase 1f).
+
+    Pipeline:
+
+      1. Construct the Group 2 Loan and run the BMA cashflow engine to
+         produce paired scheduled + actual cashflows for the full term.
+      2. Truncate both streams to ``n_periods + 1`` periods so the deal
+         runs over exactly the requested horizon (matches the legacy
+         ``from_actual_cashflow(horizon=n_periods+1)`` behavior).
+      3. Net the FNR MBS-layer servicing wedge: each underlying MBS
+         delivers only the 5.50% pass-through rate to the trust, with the
+         gross-vs-net wedge netted at the MBS layer (Fannie Mae guaranty
+         fee). Subtract ``svc_billed`` from ``act_int`` so the deal engine
+         receives net pass-through interest.
+      4. Wrap the (truncated, netted) pair in a PortfolioCashflow PAIRED
+         portfolio and return as a PairedCollateralInput.
+
+    The previous LDCMA-format adapter (``from_actual_cashflow(net_of_servicing=True)``)
+    is replaced by direct BMA-native PortfolioCashflow construction —
+    full PAIRED-mode fidelity (scheduled stream available for PAC/TAC
+    re-derivation; ``loans`` accessor sees the per-loan constituent).
     """
     loan = _build_group_2_loan(psa_speed)
     sched = scheduled_cashflow_from_loan(loan)
@@ -130,13 +184,33 @@ def _group_2_collateral_input(psa_speed: float, n_periods: int) -> DealRunInput:
         mdr_curve=np.zeros(n),
         severity_curve=np.zeros(n),
     )
-    return from_actual_cashflow(
-        actual,
-        horizon=n_periods + 1,
+
+    horizon = n_periods + 1
+    sched_truncated = dataclasses.replace(sched, **_slice_array_fields(sched, horizon))
+    actual_truncated = dataclasses.replace(actual, **_slice_array_fields(actual, horizon))
+
+    # FNR MBS-layer netting: replace act_int with (act_int - svc_billed)
+    # via dataclasses.replace. The frozen dataclass's __post_init__
+    # recomputes the derived act_cash field from the new act_int.
+    netted_act_int = actual_truncated.act_int - actual_truncated.svc_billed
+    actual_netted = dataclasses.replace(actual_truncated, act_int=netted_act_int)
+
+    # Multi-group run: tag the constituent with the requested group_id
+    # so the runtime routes cash through GROUP_<id>_* tokens correctly.
+    # Tag both scheduled and actual so aggregate_*_by_group sees the
+    # same partition (the runtime keys on actual.group_id but keeping
+    # the scheduled in sync avoids surprises in downstream consumers).
+    if group_id is not None:
+        actual_netted = dataclasses.replace(actual_netted, group_id=group_id)
+        sched_truncated = dataclasses.replace(sched_truncated, group_id=group_id)
+
+    pair = CashFlowPair(scheduled=sched_truncated, actual=actual_netted)
+    portfolio = PortfolioCashflow([pair], mode=PortfolioMode.PAIRED)
+
+    return DealRunInput(
+        collateral=PairedCollateralInput(portfolio=portfolio),
         loan_count=int(GROUP_2_FACE / 200_000.0),
-        initial_balance=GROUP_2_FACE,
-        # FNR Group 2: net of MBS-layer servicing wedge (see adapter docs).
-        net_of_servicing=True,
+        original_collateral_balance=GROUP_2_FACE,
     )
 
 

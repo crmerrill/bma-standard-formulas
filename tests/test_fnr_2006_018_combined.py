@@ -30,12 +30,12 @@ import numpy as np
 import pytest
 
 from bma_standard_formulas.deals.runtime import run_deal
-from bma_standard_formulas.deals.schemas.common import CollateralInputMode
 from bma_standard_formulas.deals.schemas.input import (
     DealRunInput,
-    GroupedCollateralInput,
-    PooledCollateralInput,
+    PairedCollateralInput,
 )
+from bma_standard_formulas.engine import PortfolioCashflow
+from bma_standard_formulas.engine.portfolio import PortfolioMode
 
 from tests.fixtures.fnr_2006_018.deal_definition import (
     build_fnr_2006_018_combined_deal,
@@ -59,30 +59,50 @@ from tests.test_fnr_2006_018_parity import _deal_input_from_repline
 
 
 # ---------------------------------------------------------------------------
-# Combined run input: pair the Group 1 and Group 2 collateral feeds into
-# one GroupedCollateralInput keyed by the same group_ids the deal
-# declares (GROUP_1, GROUP_2).
+# Combined run input: merge the Group 1 and Group 2 PAIRED portfolios into
+# one multi-group BMA-native PortfolioCashflow whose constituents carry
+# the same group_ids the deal declares (GROUP_1, GROUP_2). Phase 1f
+# migrated both group helpers to PairedCollateralInput, so the combined
+# helper merges constituents instead of stitching LDCMA payloads.
 # ---------------------------------------------------------------------------
 
 
 def _combined_run_input(psa_speed: float, n_periods_g1: int, n_periods_g2: int) -> DealRunInput:
-    """Build a DealRunInput with both groups' cashflows."""
-    g1_input = _deal_input_from_repline(psa_speed, n_periods_g1)
-    g2_input = _group_2_collateral_input(psa_speed, n_periods_g2)
-    # Both helpers return PooledCollateralInput; lift their inner
-    # CollateralCashflows out and stitch them under a grouped input
-    # keyed by group_id.
-    assert isinstance(g1_input.collateral, PooledCollateralInput)
-    assert isinstance(g2_input.collateral, PooledCollateralInput)
-    grouped = GroupedCollateralInput(
-        mode=CollateralInputMode.GROUPED,
-        groups={
-            "GROUP_1": g1_input.collateral.collateral,
-            "GROUP_2": g2_input.collateral.collateral,
-        },
+    """Build a multi-group PAIRED DealRunInput by merging both groups'
+    constituents into a single PortfolioCashflow.
+
+    Both helpers (``_deal_input_from_repline`` and
+    ``_group_2_collateral_input``) accept an optional ``group_id`` kwarg
+    and tag their constituents accordingly. Group 1 emits an ACTUAL_ONLY
+    constituent (LDCMA-sourced — no scheduled stream); Group 2 emits a
+    full PAIRED ``CashFlowPair``. Merging them downgrades to ACTUAL_ONLY
+    overall (the single source-of-truth restriction is per-portfolio
+    mode), but the combined deal runtime only consumes ``actual.*``
+    fields for cash math, so the downgrade has no effect on bond
+    output. The runtime's ``aggregate_actual_by_group()`` partitions
+    the merged constituents by ``group_id`` so per-group routing works
+    correctly.
+    """
+    g1_input = _deal_input_from_repline(psa_speed, n_periods_g1, group_id="GROUP_1")
+    g2_input = _group_2_collateral_input(psa_speed, n_periods_g2, group_id="GROUP_2")
+
+    g1_pf = g1_input.collateral.portfolio
+    g2_pf = g2_input.collateral.portfolio
+
+    # Sum both groups' actual constituents into a single ACTUAL_ONLY
+    # portfolio. ``actual_constituents`` extracts ``.actual`` from
+    # CashFlowPair and returns BMAActualCashflow as-is, so the result
+    # is uniformly typed regardless of whether each source portfolio
+    # is PAIRED or ACTUAL_ONLY.
+    merged_constituents = (
+        g1_pf.actual_constituents() + g2_pf.actual_constituents()
     )
+    combined_portfolio = PortfolioCashflow(
+        merged_constituents, mode=PortfolioMode.ACTUAL_ONLY,
+    )
+
     return DealRunInput(
-        collateral=grouped,
+        collateral=PairedCollateralInput(portfolio=combined_portfolio),
         loan_count=(g1_input.loan_count or 0) + (g2_input.loan_count or 0),
         original_collateral_balance=(
             (g1_input.original_collateral_balance or 0.0)
