@@ -191,6 +191,25 @@ class ExecutionContext:
     interest_avail_by_group: dict[str, np.ndarray] = field(default_factory=dict)
     principal_avail_by_group: dict[str, np.ndarray] = field(default_factory=dict)
     loss_avail_by_group: dict[str, np.ndarray] = field(default_factory=dict)
+    # Per-loan constituent visibility (Phase 1d.1). Populated only for
+    # PAIRED collateral inputs that carry per-loan ``CashFlowPair`` /
+    # ``BMAActualCashflow`` constituents. LDCMA-format inputs (POOLED,
+    # GROUPED, STRIP_PI) leave these empty because LDCMA pre-aggregates
+    # at the source — the per-loan trajectories are not recoverable.
+    #
+    # Used by trigger calculations and rule expressions that need to
+    # reference individual loans (e.g., per-borrower delinquency, FICO
+    # bucket aggregates, balance-weighted attributes). The expression
+    # context exposes these via the ``loans`` accessor (Phase 1d.3).
+    #
+    # ``constituents`` is the whole-pool view (sum of all groups);
+    # ``constituents_by_group`` is the per-group partition. The
+    # ``_ungrouped`` bucket from PortfolioCashflow is filtered out for
+    # consistency with ``actual_by_group``.
+    constituents: list[BMAActualCashflow] = field(default_factory=list)
+    scheduled_constituents: list[BMAScheduledCashflow] = field(default_factory=list)
+    constituents_by_group: dict[str, list[BMAActualCashflow]] = field(default_factory=dict)
+    scheduled_constituents_by_group: dict[str, list[BMAScheduledCashflow]] = field(default_factory=dict)
     trace_buf: list[tuple] | None = None
     trigger_rows: list[TriggerStateRow] = field(default_factory=list)
     # Per-period dictionary of `cash_at_<rule_id>` snapshots so a later rule
@@ -745,47 +764,74 @@ def _ldcma_to_bma_actual(cf: CollateralCashflows) -> BMAActualCashflow:
     )
 
 
-def _extract_collateral_arrays(
-    run_input: DealRunInput,
-) -> tuple[
-    BMAActualCashflow,
-    BMAScheduledCashflow | None,
-    dict[str, BMAActualCashflow],
-    dict[str, BMAScheduledCashflow],
-]:
+@dataclass(frozen=True)
+class CollateralExtractionResult:
+    """Typed result of ``_extract_collateral_arrays``.
+
+    Bundles the whole-pool aggregates, the per-group aggregates, and (when
+    the input format permits) the underlying per-loan constituents. Replaces
+    the older 4-tuple return so call sites read by attribute name and so the
+    Phase 1d.1 per-loan visibility fields can be added without breaking
+    callers.
+
+    Field semantics:
+
+      - ``actual``: whole-pool ``BMAActualCashflow``. Always present.
+      - ``scheduled``: whole-pool ``BMAScheduledCashflow`` if the input
+        carries one (PAIRED only); ``None`` for LDCMA inputs.
+      - ``actual_by_group`` / ``scheduled_by_group``: per-group aggregates
+        for multi-group deals. Empty for single-pool deals. The
+        ``_ungrouped`` bucket from PAIRED-mode group partition is filtered
+        out so it doesn't surface as a routed group in rule resolution.
+      - ``actual_constituents``: per-loan ``BMAActualCashflow`` leaves
+        (PAIRED inputs only — LDCMA inputs are pre-aggregated and have no
+        per-loan visibility, so this is ``[]``).
+      - ``scheduled_constituents``: mirror of ``actual_constituents`` for
+        scheduled cashflows (PAIRED only).
+      - ``actual_constituents_by_group`` / ``scheduled_constituents_by_group``:
+        per-loan constituents partitioned by ``group_id``. PAIRED-only.
+        ``_ungrouped`` bucket filtered out for consistency with the
+        aggregated-by-group dicts.
+    """
+
+    actual: BMAActualCashflow
+    scheduled: BMAScheduledCashflow | None
+    actual_by_group: dict[str, BMAActualCashflow]
+    scheduled_by_group: dict[str, BMAScheduledCashflow]
+    actual_constituents: list[BMAActualCashflow]
+    scheduled_constituents: list[BMAScheduledCashflow]
+    actual_constituents_by_group: dict[str, list[BMAActualCashflow]]
+    scheduled_constituents_by_group: dict[str, list[BMAScheduledCashflow]]
+
+
+def _extract_collateral_arrays(run_input: DealRunInput) -> CollateralExtractionResult:
     """Extract collateral cashflows as typed BMA objects for the runtime.
 
-    Returns a 4-tuple ``(actual, scheduled, actual_by_group,
-    scheduled_by_group)`` where:
-
-      - ``actual``: whole-pool ``BMAActualCashflow`` (always present)
-      - ``scheduled``: whole-pool ``BMAScheduledCashflow`` if available
-        (PAIRED inputs only); ``None`` otherwise
-      - ``actual_by_group``: per-group ``BMAActualCashflow`` dict for
-        multi-group deals (empty dict for single-pool)
-      - ``scheduled_by_group``: per-group ``BMAScheduledCashflow`` dict
-        (empty dict if not available)
+    Returns a :class:`CollateralExtractionResult` carrying the whole-pool
+    aggregate, per-group aggregates (multi-group deals), and per-loan
+    constituents (PAIRED inputs only).
 
     Input variant dispatch:
 
-      PAIRED  -> portfolio.pool, portfolio.scheduled,
-                 aggregate_actual_by_group(), aggregate_scheduled_by_group()
-                 (Phase 0A primitives). The "_ungrouped" bucket from the
-                 group aggregation is filtered out so it doesn't show up
-                 as a routed group in rule resolution.
+      PAIRED  -> portfolio.pool, portfolio.scheduled, the Phase 0A
+                 ``aggregate_*_by_group`` accessors, and the Phase 1d.1
+                 ``*_constituents`` / ``*_constituents_by_group`` accessors
+                 for per-loan visibility. The "_ungrouped" bucket is
+                 filtered out of every group dict so it doesn't show up as
+                 a routed group in rule resolution.
 
       POOLED  -> _ldcma_to_bma_actual(coll.collateral). No scheduled
-                 stream available from LDCMA; scheduled = None.
+                 stream available from LDCMA, so scheduled = None and
+                 every constituent list is empty (LDCMA inputs are
+                 pre-aggregated and have no per-loan visibility).
 
       GROUPED -> _ldcma_to_bma_actual on each per-group LDCMA cashflow,
-                 then PortfolioCashflow._aggregate_actual to produce the
-                 whole-pool aggregate. Reuses the engine's aggregation
-                 path so summable FLOW fields are summed correctly and
-                 STOCK / RATIO fields are reconstructed from primitives.
+                 then ``_aggregate_actual`` to produce the whole-pool
+                 aggregate. Constituent lists are empty (each "group" is
+                 itself an aggregate, not a loan).
 
       STRIP_PI -> _ldcma_to_bma_actual(coll.principal_strip). The interest
-                  strip is not currently consumed by the runtime; this
-                  variant is rarely exercised.
+                  strip is not currently consumed by the runtime; rare.
 
     Raises:
         TypeError: If the collateral input variant is unknown.
@@ -821,12 +867,54 @@ def _extract_collateral_arrays(
             for gid, g_sched in scheduleds_by_group_raw.items()
             if gid != "_ungrouped"
         }
-        return actual, scheduled, actuals_by_group, scheduleds_by_group
+
+        # Per-loan constituent visibility (Phase 1d.1). PAIRED is the only
+        # input mode that carries per-loan cashflows; LDCMA inputs are
+        # pre-aggregated. Filter "_ungrouped" out of the by-group dicts to
+        # match the aggregated-by-group dict convention above.
+        actual_constituents = portfolio.actual_constituents()
+        try:
+            scheduled_constituents = portfolio.scheduled_constituents()
+        except (ValueError, AttributeError, TypeError):
+            scheduled_constituents = []
+        actual_constituents_by_group = {
+            gid: cfs
+            for gid, cfs in portfolio.actual_constituents_by_group().items()
+            if gid != "_ungrouped"
+        }
+        try:
+            scheduled_constituents_by_group = {
+                gid: cfs
+                for gid, cfs in portfolio.scheduled_constituents_by_group().items()
+                if gid != "_ungrouped"
+            }
+        except (ValueError, AttributeError, TypeError):
+            scheduled_constituents_by_group = {}
+
+        return CollateralExtractionResult(
+            actual=actual,
+            scheduled=scheduled,
+            actual_by_group=actuals_by_group,
+            scheduled_by_group=scheduleds_by_group,
+            actual_constituents=actual_constituents,
+            scheduled_constituents=scheduled_constituents,
+            actual_constituents_by_group=actual_constituents_by_group,
+            scheduled_constituents_by_group=scheduled_constituents_by_group,
+        )
 
     # ── POOLED: legacy LDCMA-format single pool ────────────────────────
     if isinstance(coll, PooledCollateralInput):
         actual = _ldcma_to_bma_actual(coll.collateral)
-        return actual, None, {}, {}
+        return CollateralExtractionResult(
+            actual=actual,
+            scheduled=None,
+            actual_by_group={},
+            scheduled_by_group={},
+            actual_constituents=[],
+            scheduled_constituents=[],
+            actual_constituents_by_group={},
+            scheduled_constituents_by_group={},
+        )
 
     # ── GROUPED: legacy LDCMA-format multi-group ──────────────────────
     if isinstance(coll, GroupedCollateralInput):
@@ -838,12 +926,30 @@ def _extract_collateral_arrays(
         # portfolios. _aggregate_actual returns the constituent itself
         # for len-1 lists, which is correct.
         agg_actual = _aggregate_actual(list(per_group_actuals.values()))
-        return agg_actual, None, per_group_actuals, {}
+        return CollateralExtractionResult(
+            actual=agg_actual,
+            scheduled=None,
+            actual_by_group=per_group_actuals,
+            scheduled_by_group={},
+            actual_constituents=[],
+            scheduled_constituents=[],
+            actual_constituents_by_group={},
+            scheduled_constituents_by_group={},
+        )
 
     # ── STRIP_PI: legacy P/I strip (rare) ─────────────────────────────
     if isinstance(coll, StripCollateralInput):
         actual = _ldcma_to_bma_actual(coll.principal_strip)
-        return actual, None, {}, {}
+        return CollateralExtractionResult(
+            actual=actual,
+            scheduled=None,
+            actual_by_group={},
+            scheduled_by_group={},
+            actual_constituents=[],
+            scheduled_constituents=[],
+            actual_constituents_by_group={},
+            scheduled_constituents_by_group={},
+        )
 
     raise TypeError(f"Unknown collateral input type: {type(coll)}")
 
@@ -1449,7 +1555,11 @@ def run_deal(
     collect_trace: bool = True,
 ) -> ScenarioOutputBundle:
     """Execute a deal waterfall and return the full output bundle for one scenario."""
-    actual, scheduled, actual_by_group, scheduled_by_group = _extract_collateral_arrays(run_input)
+    extraction = _extract_collateral_arrays(run_input)
+    actual = extraction.actual
+    scheduled = extraction.scheduled
+    actual_by_group = extraction.actual_by_group
+    scheduled_by_group = extraction.scheduled_by_group
     cf_len = len(actual.perf_bal)
     collat_bal_0 = float(actual.perf_bal[0])
     declared_groups = [g.group_id for g in deal.collateral_groups]
@@ -1557,6 +1667,10 @@ def run_deal(
         interest_avail_by_group=interest_avail_by_group,
         principal_avail_by_group=principal_avail_by_group,
         loss_avail_by_group=loss_avail_by_group,
+        constituents=extraction.actual_constituents,
+        scheduled_constituents=extraction.scheduled_constituents,
+        constituents_by_group=extraction.actual_constituents_by_group,
+        scheduled_constituents_by_group=extraction.scheduled_constituents_by_group,
         trace_buf=trace_buf,
     )
     # Pre-allocate any virtual streams declared by SPLIT_CASH targets that are

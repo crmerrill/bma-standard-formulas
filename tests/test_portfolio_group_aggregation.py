@@ -353,3 +353,136 @@ class TestInvalidation:
         result_b = portfolio.aggregate_actual_by_group()
         assert set(result_b.keys()) == {"GROUP_1", "GROUP_2"}
         assert result_a is not result_b
+
+
+# ---------------------------------------------------------------------------
+# 6. Phase 1d.1: Public per-loan constituent accessors
+# ---------------------------------------------------------------------------
+#
+# ``actual_constituents`` / ``scheduled_constituents`` (and their _by_group
+# variants) expose per-loan cashflow leaves so downstream consumers (deal
+# runtime ExecutionContext, structuring tools, analytics) can reference
+# individual loans rather than only the aggregated pool. They wrap the
+# private ``_extract_*_constituents`` helpers and return new lists so caller
+# mutation cannot corrupt internal state.
+#
+# The runtime uses these for the Phase 1d.3 ``loans`` expression accessor,
+# which lets calculation expressions iterate per-loan attributes (e.g.,
+# ``len([l for l in loans if l.perf_bal[i] > 0])``).
+
+
+class TestActualConstituentsPublic:
+    """Public ``actual_constituents`` accessor on PortfolioCashflow."""
+
+    def test_returns_per_loan_actual_cashflows(self):
+        l1, _ = _build_actual_cashflow(_build_loan(1, "GROUP_1"))
+        l2, _ = _build_actual_cashflow(_build_loan(2, "GROUP_1"))
+        l3, _ = _build_actual_cashflow(_build_loan(3, "GROUP_2"))
+        portfolio = PortfolioCashflow([l1, l2, l3], mode=PortfolioMode.ACTUAL_ONLY)
+
+        cfs = portfolio.actual_constituents()
+
+        assert len(cfs) == 3
+        assert [cf.loan_id for cf in cfs] == [1, 2, 3]
+
+    def test_returns_new_list_not_view(self):
+        """Caller mutation of the returned list must not affect the portfolio."""
+        l1, _ = _build_actual_cashflow(_build_loan(1, "GROUP_1"))
+        l2, _ = _build_actual_cashflow(_build_loan(2, "GROUP_2"))
+        portfolio = PortfolioCashflow([l1, l2], mode=PortfolioMode.ACTUAL_ONLY)
+
+        cfs = portfolio.actual_constituents()
+        cfs.clear()
+
+        # Internal _pending should still hold both constituents.
+        assert len(portfolio._pending) == 2
+
+    def test_returns_empty_after_flush(self):
+        """flush() clears _pending, so constituent accessors return []."""
+        l1, _ = _build_actual_cashflow(_build_loan(1, "GROUP_1"))
+        portfolio = PortfolioCashflow([l1], mode=PortfolioMode.ACTUAL_ONLY)
+        portfolio.flush()
+        assert portfolio.actual_constituents() == []
+
+
+class TestScheduledConstituentsPublic:
+    """Public ``scheduled_constituents`` accessor on PortfolioCashflow."""
+
+    def test_returns_per_loan_scheduled_cashflows(self):
+        _, s1 = _build_actual_cashflow(_build_loan(1, "GROUP_1"))
+        _, s2 = _build_actual_cashflow(_build_loan(2, "GROUP_2"))
+        portfolio = PortfolioCashflow([s1, s2], mode=PortfolioMode.SCHEDULED_ONLY)
+
+        cfs = portfolio.scheduled_constituents()
+
+        assert len(cfs) == 2
+        assert [cf.loan_id for cf in cfs] == [1, 2]
+
+
+class TestActualConstituentsByGroupPublic:
+    """Public partition accessor returns per-group lists of per-loan cashflows."""
+
+    def test_partitions_by_group_id(self):
+        l1, _ = _build_actual_cashflow(_build_loan(1, "GROUP_1"))
+        l2, _ = _build_actual_cashflow(_build_loan(2, "GROUP_1"))
+        l3, _ = _build_actual_cashflow(_build_loan(3, "GROUP_2"))
+        portfolio = PortfolioCashflow([l1, l2, l3], mode=PortfolioMode.ACTUAL_ONLY)
+
+        partitioned = portfolio.actual_constituents_by_group()
+
+        assert set(partitioned.keys()) == {"GROUP_1", "GROUP_2"}
+        assert {cf.loan_id for cf in partitioned["GROUP_1"]} == {1, 2}
+        assert {cf.loan_id for cf in partitioned["GROUP_2"]} == {3}
+
+    def test_untagged_loans_go_to_ungrouped_bucket(self):
+        l_tagged, _ = _build_actual_cashflow(_build_loan(1, "GROUP_1"))
+        l_untagged, _ = _build_actual_cashflow(_build_loan(2, None))
+        portfolio = PortfolioCashflow(
+            [l_tagged, l_untagged], mode=PortfolioMode.ACTUAL_ONLY,
+        )
+
+        partitioned = portfolio.actual_constituents_by_group()
+
+        assert set(partitioned.keys()) == {"GROUP_1", "_ungrouped"}
+        assert partitioned["GROUP_1"][0].loan_id == 1
+        assert partitioned["_ungrouped"][0].loan_id == 2
+
+    def test_returns_per_loan_objects_not_aggregates(self):
+        """Distinguishes from ``aggregate_actual_by_group`` which returns
+        per-group BMAActualCashflow aggregates. The partition accessor
+        returns the original per-loan leaves; aggregation has not run."""
+        l1, _ = _build_actual_cashflow(_build_loan(1, "GROUP_1", balance=1_000_000))
+        l2, _ = _build_actual_cashflow(_build_loan(2, "GROUP_1", balance=500_000))
+        portfolio = PortfolioCashflow([l1, l2], mode=PortfolioMode.ACTUAL_ONLY)
+
+        partitioned = portfolio.actual_constituents_by_group()
+        aggregated = portfolio.aggregate_actual_by_group()
+
+        # Partitioned: list of two per-loan cashflows, each with its own balance
+        assert len(partitioned["GROUP_1"]) == 2
+        per_loan_balances = sorted(cf.original_balance for cf in partitioned["GROUP_1"])
+        assert per_loan_balances == [500_000.0, 1_000_000.0]
+
+        # Aggregated: single combined cashflow
+        agg = aggregated["GROUP_1"]
+        # Sum-of-act_int across per-loan cashflows equals the aggregated act_int
+        np.testing.assert_allclose(
+            agg.act_int,
+            partitioned["GROUP_1"][0].act_int + partitioned["GROUP_1"][1].act_int,
+            rtol=1e-9, atol=1e-6,
+        )
+
+
+class TestScheduledConstituentsByGroupPublic:
+    """Mirror of TestActualConstituentsByGroupPublic for scheduled cashflows."""
+
+    def test_partitions_by_group_id(self):
+        _, s1 = _build_actual_cashflow(_build_loan(1, "GROUP_1"))
+        _, s2 = _build_actual_cashflow(_build_loan(2, "GROUP_2"))
+        portfolio = PortfolioCashflow([s1, s2], mode=PortfolioMode.SCHEDULED_ONLY)
+
+        partitioned = portfolio.scheduled_constituents_by_group()
+
+        assert set(partitioned.keys()) == {"GROUP_1", "GROUP_2"}
+        assert partitioned["GROUP_1"][0].loan_id == 1
+        assert partitioned["GROUP_2"][0].loan_id == 2

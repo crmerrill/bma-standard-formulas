@@ -1412,6 +1412,76 @@ class PortfolioCashflow:
                 )
         return out
 
+    # --- Public per-loan constituent accessors (Phase 1d.1) ---
+    #
+    # These expose per-loan cashflow leaves so downstream consumers (deal
+    # runtime ExecutionContext, structuring tools, analytics) can reference
+    # individual loan trajectories rather than only the aggregated pool.
+    # They wrap the private _extract_*_constituents helpers and return new
+    # lists so caller mutation cannot corrupt internal state.
+    #
+    # Lifecycle: these read from _pending and require constituents to be
+    # present (i.e., the portfolio has not been flushed). After flush(),
+    # _pending is cleared and these methods return [].
+
+    def actual_constituents(self) -> list[BMAActualCashflow]:
+        """Per-loan ``BMAActualCashflow`` leaves (PAIRED extracts .actual).
+
+        Returns a new list, not a view; caller mutation does not affect
+        internal state. Empty if the portfolio has been flushed or
+        contains no actual cashflows.
+
+        Available in ``ACTUAL_ONLY`` and ``PAIRED`` modes. Use
+        ``actual_constituents_by_group`` for the partitioned view.
+        """
+        if not self._pending:
+            return []
+        return list(self._extract_actual_constituents())
+
+    def scheduled_constituents(self) -> list[BMAScheduledCashflow]:
+        """Per-loan ``BMAScheduledCashflow`` leaves (PAIRED extracts .scheduled).
+
+        Returns a new list, not a view; caller mutation does not affect
+        internal state. Empty if the portfolio has been flushed or
+        contains no scheduled cashflows.
+
+        Available in ``SCHEDULED_ONLY`` and ``PAIRED`` modes.
+        """
+        if not self._pending:
+            return []
+        return list(self._extract_scheduled_constituents())
+
+    def actual_constituents_by_group(self) -> dict[str, list[BMAActualCashflow]]:
+        """Per-loan actual cashflows partitioned by ``group_id``.
+
+        Walks every constituent and groups by ``group_id`` *without*
+        aggregating — each group's value is the list of original per-loan
+        ``BMAActualCashflow`` objects, not a summed aggregate.
+
+        Constituents with ``group_id == None`` go into the special bucket
+        ``"_ungrouped"`` so callers can detect partially-tagged tapes
+        (mirrors the convention used by ``aggregate_actual_by_group``).
+        Numeric ``group_id`` values are stringified for stable dict keys
+        (matches ``_partition_by_group_id`` semantics).
+
+        Returns ``{}`` if the portfolio has been flushed or contains no
+        actual cashflows. Result is computed fresh on each call (no
+        caching) since the partition is cheap relative to aggregation.
+
+        Use ``aggregate_actual_by_group`` when you want per-group
+        aggregated cashflows; use this when you need the underlying
+        per-loan trajectories per group.
+        """
+        return _partition_by_group_id(self.actual_constituents())
+
+    def scheduled_constituents_by_group(self) -> dict[str, list[BMAScheduledCashflow]]:
+        """Per-loan scheduled cashflows partitioned by ``group_id``.
+
+        Mirror of ``actual_constituents_by_group`` for the scheduled
+        cashflow stream. See that method's docstring for semantics.
+        """
+        return _partition_by_group_id(self.scheduled_constituents())
+
     # --- Mode extraction (Part G) ---
 
     def _extract_for_mode(

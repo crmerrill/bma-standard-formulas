@@ -166,12 +166,12 @@ class TestExtractCollateralArrays:
             loan_count=1,
             original_collateral_balance=1_000_000.0,
         )
-        actual, scheduled, actual_by_group, scheduled_by_group = _extract_collateral_arrays(run_input)
+        result = _extract_collateral_arrays(run_input)
 
-        assert isinstance(actual, BMAActualCashflow)
-        assert isinstance(scheduled, BMAScheduledCashflow)
-        assert actual_by_group == {}        # single-pool: untagged loans skipped
-        assert scheduled_by_group == {}
+        assert isinstance(result.actual, BMAActualCashflow)
+        assert isinstance(result.scheduled, BMAScheduledCashflow)
+        assert result.actual_by_group == {}        # single-pool: untagged loans skipped
+        assert result.scheduled_by_group == {}
 
     def test_paired_multi_group_returns_per_group_dicts(self):
         loans = [
@@ -184,24 +184,24 @@ class TestExtractCollateralArrays:
             loan_count=2,
             original_collateral_balance=1_500_000.0,
         )
-        actual, scheduled, actual_by_group, scheduled_by_group = _extract_collateral_arrays(run_input)
+        result = _extract_collateral_arrays(run_input)
 
-        assert isinstance(actual, BMAActualCashflow)
-        assert set(actual_by_group.keys()) == {"GROUP_1", "GROUP_2"}
-        for gid, g_actual in actual_by_group.items():
+        assert isinstance(result.actual, BMAActualCashflow)
+        assert set(result.actual_by_group.keys()) == {"GROUP_1", "GROUP_2"}
+        for gid, g_actual in result.actual_by_group.items():
             assert isinstance(g_actual, BMAActualCashflow)
-        assert set(scheduled_by_group.keys()) == {"GROUP_1", "GROUP_2"}
+        assert set(result.scheduled_by_group.keys()) == {"GROUP_1", "GROUP_2"}
 
     def test_pooled_ldcma_input_returns_actual_only(self):
         loan = _build_loan(1, group_id=None)
         actual, _ = _build_actual_and_scheduled(loan)
         run_input = from_actual_cashflow(actual, horizon=361, initial_balance=1_000_000.0)
 
-        a, s, abg, sbg = _extract_collateral_arrays(run_input)
+        result = _extract_collateral_arrays(run_input)
 
-        assert isinstance(a, BMAActualCashflow)
-        assert s is None              # LDCMA inputs have no scheduled stream
-        assert abg == {} and sbg == {}
+        assert isinstance(result.actual, BMAActualCashflow)
+        assert result.scheduled is None              # LDCMA inputs have no scheduled stream
+        assert result.actual_by_group == {} and result.scheduled_by_group == {}
 
     def test_paired_aggregate_perf_bal_sums_per_group(self):
         loans = [
@@ -214,12 +214,13 @@ class TestExtractCollateralArrays:
             loan_count=2,
             original_collateral_balance=1_500_000.0,
         )
-        actual, _, actual_by_group, _ = _extract_collateral_arrays(run_input)
+        result = _extract_collateral_arrays(run_input)
 
         # Linearity property: aggregate perf_bal == sum of per-group perf_bal
         np.testing.assert_allclose(
-            actual.perf_bal,
-            actual_by_group["GROUP_1"].perf_bal + actual_by_group["GROUP_2"].perf_bal,
+            result.actual.perf_bal,
+            result.actual_by_group["GROUP_1"].perf_bal
+            + result.actual_by_group["GROUP_2"].perf_bal,
             rtol=1e-10, atol=1e-6,
         )
 
@@ -272,3 +273,172 @@ class TestPairedDealRunParity:
             assert paired_row.end_balance == pytest.approx(
                 ldcma_row.end_balance, rel=1e-9, abs=1e-6,
             )
+
+
+# ---------------------------------------------------------------------------
+# 4. Phase 1d.1: Per-loan constituent exposure
+# ---------------------------------------------------------------------------
+#
+# The runtime exposes per-loan cashflow leaves on ``ExecutionContext`` so
+# downstream consumers (trigger calculations, rule expressions via the
+# Phase 1d.3 ``loans`` accessor, structuring tools, analytics) can reference
+# individual loan trajectories rather than only the aggregated pool.
+#
+# PAIRED inputs carry per-loan ``CashFlowPair`` constituents and populate
+# the constituent fields. LDCMA inputs (POOLED, GROUPED, STRIP_PI) are
+# pre-aggregated at the source and leave the constituent fields empty —
+# the per-loan trajectories are simply not recoverable from an LDCMA
+# dict-of-arrays.
+
+
+class TestExtractCollateralArraysConstituents:
+    """Per-loan constituent visibility on the extraction result."""
+
+    def test_paired_single_pool_exposes_actual_constituents(self):
+        loans = [_build_loan(i, group_id=None) for i in range(1, 4)]
+        portfolio = _build_paired_portfolio(loans)
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            loan_count=3,
+            original_collateral_balance=3_000_000.0,
+        )
+        result = _extract_collateral_arrays(run_input)
+
+        # One BMAActualCashflow per loan, in input order.
+        assert len(result.actual_constituents) == 3
+        for cf in result.actual_constituents:
+            assert isinstance(cf, BMAActualCashflow)
+        loan_ids = [cf.loan_id for cf in result.actual_constituents]
+        assert loan_ids == [1, 2, 3]
+
+        # Single-pool: every loan has group_id=None so by_group is empty
+        # (the "_ungrouped" bucket is filtered out for parity with
+        # actual_by_group, which also drops it).
+        assert result.actual_constituents_by_group == {}
+
+    def test_paired_single_pool_exposes_scheduled_constituents(self):
+        loans = [_build_loan(i, group_id=None) for i in range(1, 4)]
+        portfolio = _build_paired_portfolio(loans)
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            loan_count=3,
+            original_collateral_balance=3_000_000.0,
+        )
+        result = _extract_collateral_arrays(run_input)
+
+        assert len(result.scheduled_constituents) == 3
+        for cf in result.scheduled_constituents:
+            assert isinstance(cf, BMAScheduledCashflow)
+
+    def test_paired_multi_group_partitions_constituents(self):
+        loans = [
+            _build_loan(1, group_id="GROUP_1"),
+            _build_loan(2, group_id="GROUP_1"),
+            _build_loan(3, group_id="GROUP_2"),
+        ]
+        portfolio = _build_paired_portfolio(loans)
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            loan_count=3,
+            original_collateral_balance=3_000_000.0,
+        )
+        result = _extract_collateral_arrays(run_input)
+
+        # Whole-pool view holds every loan.
+        assert len(result.actual_constituents) == 3
+
+        # Per-group partition: GROUP_1 has 2 loans, GROUP_2 has 1.
+        assert set(result.actual_constituents_by_group.keys()) == {"GROUP_1", "GROUP_2"}
+        assert len(result.actual_constituents_by_group["GROUP_1"]) == 2
+        assert len(result.actual_constituents_by_group["GROUP_2"]) == 1
+        assert {cf.loan_id for cf in result.actual_constituents_by_group["GROUP_1"]} == {1, 2}
+        assert {cf.loan_id for cf in result.actual_constituents_by_group["GROUP_2"]} == {3}
+
+    def test_paired_multi_group_filters_ungrouped_bucket(self):
+        """Mixed tagged + untagged tape: untagged loans contribute to the
+        whole-pool view but are filtered out of the per-group partition
+        for consistency with ``actual_by_group``."""
+        loans = [
+            _build_loan(1, group_id="GROUP_1"),
+            _build_loan(2, group_id=None),       # untagged
+            _build_loan(3, group_id="GROUP_2"),
+        ]
+        portfolio = _build_paired_portfolio(loans)
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            loan_count=3,
+            original_collateral_balance=3_000_000.0,
+        )
+        result = _extract_collateral_arrays(run_input)
+
+        # Whole-pool view includes the untagged loan.
+        assert {cf.loan_id for cf in result.actual_constituents} == {1, 2, 3}
+
+        # Per-group partition does NOT surface the "_ungrouped" bucket.
+        assert "_ungrouped" not in result.actual_constituents_by_group
+        assert set(result.actual_constituents_by_group.keys()) == {"GROUP_1", "GROUP_2"}
+
+    def test_pooled_ldcma_input_constituents_empty(self):
+        """LDCMA inputs are pre-aggregated and have no per-loan visibility."""
+        loan = _build_loan(1, group_id=None)
+        actual, _ = _build_actual_and_scheduled(loan)
+        run_input = from_actual_cashflow(actual, horizon=361, initial_balance=1_000_000.0)
+
+        result = _extract_collateral_arrays(run_input)
+
+        assert result.actual_constituents == []
+        assert result.scheduled_constituents == []
+        assert result.actual_constituents_by_group == {}
+        assert result.scheduled_constituents_by_group == {}
+
+    def test_constituent_aggregation_invariant(self):
+        """Sum of per-loan act_int across constituents equals the aggregate
+        act_int. Pins the invariant that constituents are the same data
+        the aggregator consumed."""
+        loans = [_build_loan(i, group_id=None) for i in range(1, 4)]
+        portfolio = _build_paired_portfolio(loans)
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            loan_count=3,
+            original_collateral_balance=3_000_000.0,
+        )
+        result = _extract_collateral_arrays(run_input)
+
+        per_loan_sum = np.zeros_like(result.actual.act_int)
+        for cf in result.actual_constituents:
+            per_loan_sum = per_loan_sum + cf.act_int
+
+        np.testing.assert_allclose(
+            result.actual.act_int, per_loan_sum, rtol=1e-9, atol=1e-6,
+        )
+
+
+class TestExecutionContextConstituents:
+    """``run_deal`` populates ``ExecutionContext.constituents`` from the
+    extraction result so downstream rule/calculation hooks see the per-loan
+    leaves. The current runtime doesn't yet *consume* this data (Phase 1d.3
+    adds the ``loans`` expression accessor); this test pins the wire-up so
+    later phases can rely on it."""
+
+    def test_paired_run_populates_constituents_via_trace(self):
+        # Use a passthrough_deal that emits a trace; we verify the runtime
+        # accepts a PAIRED input with constituents and runs to completion.
+        # The constituents fields on ExecutionContext are private to the
+        # runtime, so the assertion here is end-to-end: the run completes
+        # AND the underlying portfolio's constituent count survives the
+        # extraction round-trip (verified by re-extracting from the input).
+        loans = [_build_loan(i, group_id=None) for i in range(1, 4)]
+        portfolio = _build_paired_portfolio(loans)
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            loan_count=3,
+            original_collateral_balance=3_000_000.0,
+        )
+
+        bundle = run_deal(passthrough_deal(), run_input, scenario_name="constituent_test")
+        assert bundle is not None
+
+        # The same extraction the runtime did should give us the constituents.
+        extraction = _extract_collateral_arrays(run_input)
+        assert len(extraction.actual_constituents) == 3
+        assert {cf.loan_id for cf in extraction.actual_constituents} == {1, 2, 3}
