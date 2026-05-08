@@ -104,6 +104,10 @@ class BondDef(BaseModel):
     pac_upper_psa: float | None = None
     tac_pricing_psa: float | None = None
     schedule_contract: list[dict[str, float | int]] = Field(default_factory=list)
+    schedule_derivation: dict[str, Any] | None = Field(
+        default=None,
+        description="Provenance when schedule_contract was machine-derived (Phase 1i PSA overlay).",
+    )
     schedule_tolerance_bps: float | None = None
     support_tranches: list[str] = Field(default_factory=list)
     supported_by_tranches: list[str] = Field(default_factory=list)

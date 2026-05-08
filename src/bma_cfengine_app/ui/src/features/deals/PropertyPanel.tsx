@@ -104,6 +104,19 @@ interface PropertyPanelProps {
     status: "OK" | "WARN" | "BLOCK" | null,
     reason: string,
   ) => void;
+  /** Phase 1i: pool inputs for PSA schedule derivation + stale indicator. */
+  onPoolDerivationContextChange?: (
+    ctx: {
+      balance: number;
+      wac_pct: number;
+      term_months: number;
+      horizon_months: number;
+    } | null,
+  ) => void;
+  psaScheduleStale?: { stale: boolean; reason: string };
+  showPsaScheduleTools?: boolean;
+  onRederivePsaSchedules?: () => void | Promise<void>;
+  scheduleDeriveBusy?: boolean;
 }
 
 function scanWorkspace(workspace: any): {
@@ -345,6 +358,11 @@ export default function PropertyPanel({
   availableTapes = [],
   poolSnapshots = [],
   onCarryTieOutStatusChange,
+  onPoolDerivationContextChange,
+  psaScheduleStale,
+  showPsaScheduleTools = false,
+  onRederivePsaSchedules,
+  scheduleDeriveBusy = false,
 }: PropertyPanelProps) {
   const [bonds, setBonds] = useState<BondProps[]>([]);
   const [accounts, setAccounts] = useState<AccountProps[]>([]);
@@ -707,6 +725,32 @@ export default function PropertyPanel({
     });
   }, [tapeCollateralStats, poolNotional, bonds, collateralRiskSettings.newRiskParams.cpr]);
 
+  useEffect(() => {
+    if (!onPoolDerivationContextChange) return;
+    if (poolNotional <= 0 || !tapeCollateralStats) {
+      onPoolDerivationContextChange(null);
+      return;
+    }
+    const wac = tapeCollateralStats.wac_pct;
+    const wam = Math.max(1, Math.round(tapeCollateralStats.wam_months));
+    const horizon = Math.max(1, Math.round(collateralRiskSettings.newRiskParams.horizonMonths));
+    if (!Number.isFinite(wac) || wac <= 0) {
+      onPoolDerivationContextChange(null);
+      return;
+    }
+    onPoolDerivationContextChange({
+      balance: poolNotional,
+      wac_pct: wac,
+      term_months: wam,
+      horizon_months: horizon,
+    });
+  }, [
+    poolNotional,
+    tapeCollateralStats,
+    collateralRiskSettings.newRiskParams.horizonMonths,
+    onPoolDerivationContextChange,
+  ]);
+
   // Bubble up the carry status to DealEditor so the Run/Solve buttons
   // can gate on a BLOCK condition (Phase 5 of the carry tie-out plan).
   useEffect(() => {
@@ -725,6 +769,31 @@ export default function PropertyPanel({
           result={carryTieOutResult}
           contextLabel="Live carry tie-out"
         />
+      )}
+      {showPsaScheduleTools && onRederivePsaSchedules && (
+        <div
+          className={`rounded-md border px-3 py-2 ${
+            psaScheduleStale?.stale
+              ? "border-amber-500/50 bg-amber-500/10 text-amber-100"
+              : "border-border/80 bg-muted/20 text-muted-foreground"
+          }`}
+        >
+          <div className="font-medium text-foreground">PAC / TAC PSA schedules</div>
+          <p className="mt-1 text-[11px] leading-snug">
+            {psaScheduleStale?.stale
+              ? psaScheduleStale.reason
+              : "Schedules match current pool, speeds, and sizes (or Blockly placeholders only)."}
+            {" "}Collateral stats from tape drive the envelope projection.
+          </p>
+          <button
+            type="button"
+            className="mt-2 rounded border border-border px-2 py-1 text-[11px] text-foreground hover:bg-muted/40 disabled:opacity-50"
+            disabled={Boolean(scheduleDeriveBusy)}
+            onClick={() => void onRederivePsaSchedules()}
+          >
+            {scheduleDeriveBusy ? "Deriving…" : "Re-derive schedules now"}
+          </button>
+        </div>
       )}
       <SectionCard title="Collateral & Risk">
         <CollateralRiskSettingsEditor

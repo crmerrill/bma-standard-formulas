@@ -480,3 +480,40 @@ def test_ensure_canonical_deal_normalizes_legacy_enums(monkeypatch):
     assert canonical.triggers[0].metric_type.value == "CUMULATIVE_LOSS"
     assert canonical.waterfall_rules[0].from_sources == ["CASH"]
     assert captured["deal_id"] == "deal_legacy"
+
+
+def test_post_derive_psa_schedules_contract():
+    from tests.test_psa_schedule_overlay import _one_rule_deal, _support_bond
+
+    from bma_standard_formulas.deals.schemas.common import PrepayModelType, TrancheBehavior
+    from bma_standard_formulas.deals.schemas.ir import BondDef
+
+    client = TestClient(app)
+    sup = _support_bond()
+    pac = BondDef(
+        name="PAC_A",
+        tranche_behavior=TrancheBehavior.PAC,
+        schedule_model_type=PrepayModelType.PSA,
+        schedule_speed_low=100.0,
+        schedule_speed_high=250.0,
+        size_dollars=4_000_000.0,
+        support_tranches=[sup.name],
+    )
+    deal = _one_rule_deal([pac, sup])
+    res = client.post(
+        "/api/deals/derive-psa-schedules",
+        json={
+            "ir": deal.model_dump(mode="json"),
+            "pool": {
+                "balance": 10_000_000.0,
+                "wac_pct": 6.0,
+                "term_months": 360,
+                "horizon_months": 60,
+            },
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert "PAC_A" in body["overlay"]
+    assert body["derived_bond_names"] == ["PAC_A"]
+    assert len(body["overlay"]["PAC_A"]["schedule_contract"]) > 0

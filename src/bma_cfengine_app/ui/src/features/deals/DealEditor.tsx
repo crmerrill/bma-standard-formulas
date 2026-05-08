@@ -38,6 +38,11 @@ import type {
 } from "./solver/types";
 import type { CollateralRiskSettings } from "./shared/riskSettings";
 import { getDefaultCollateralRiskSettings, validateCollateralRiskSettings } from "./shared/riskSettings";
+import {
+  computePsaScheduleStale,
+  mergeScheduleOverlay,
+  type ScheduleOverlay,
+} from "./scheduleOverlayMerge";
 
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 640;
@@ -150,6 +155,12 @@ export default function DealEditor({
   const [lastSavedFingerprint, setLastSavedFingerprint] = useState<string>("");
   const [pendingCleanMark, setPendingCleanMark] = useState(false);
   const [verificationState, setVerificationState] = useState<api.StructuringVerificationResult | null>(null);
+  /** Phase 1i: server-derived PAC/TAC PSA schedules merged into Blockly IR. */
+  const [scheduleOverlay, setScheduleOverlay] = useState<ScheduleOverlay | null>(null);
+  const scheduleOverlayRef = useRef<ScheduleOverlay | null>(null);
+  scheduleOverlayRef.current = scheduleOverlay;
+  const [poolDerivationCtx, setPoolDerivationCtx] = useState<api.DerivePsaSchedulesPoolBody | null>(null);
+  const [scheduleDeriveBusy, setScheduleDeriveBusy] = useState(false);
 
   const [solverSpecDraft, setSolverSpecDraft] = useState<SolverSpecDraft>(() => getDefaultSolverSpecDraft());
   const [advancedJson, setAdvancedJson] = useState<AdvancedJsonState>(() =>
@@ -171,6 +182,78 @@ export default function DealEditor({
     () => parseScenarioSet(solverSpecDraft.scenarioSetText),
     [solverSpecDraft.scenarioSetText],
   );
+  const hasPsaStructuringBonds = useMemo(() => {
+    try {
+      const ir = JSON.parse(irJson || "{}") as {
+        bonds?: Array<{ tranche_behavior?: string; schedule_model_type?: string }>;
+      };
+      return (
+        ir.bonds?.some(
+          (b) =>
+            (b.tranche_behavior === "PAC" || b.tranche_behavior === "TAC")
+            && b.schedule_model_type === "PSA",
+        ) ?? false
+      );
+    } catch {
+      return false;
+    }
+  }, [irJson]);
+  const psaScheduleStaleInfo = useMemo(
+    () => computePsaScheduleStale(irJson, poolDerivationCtx),
+    [irJson, poolDerivationCtx],
+  );
+
+  const handlePoolDerivationContextChange = useCallback((ctx: api.DerivePsaSchedulesPoolBody | null) => {
+    setPoolDerivationCtx(ctx);
+  }, []);
+
+  const runPsaScheduleDerivation = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!poolDerivationCtx || errors.length > 0 || !irJson.trim()) {
+      if (!opts?.silent) {
+        toast.error("Need valid IR, collateral pool stats, and no Blockly errors to derive schedules.");
+      }
+      return;
+    }
+    setScheduleDeriveBusy(true);
+    try {
+      const ir = JSON.parse(irJson) as Record<string, unknown>;
+      const res = await api.derivePsaSchedules({ ir, pool: poolDerivationCtx });
+      setScheduleOverlay(res.overlay as ScheduleOverlay);
+      const n = res.derived_bond_names.length;
+      if (!opts?.silent) {
+        toast.success(n ? `Updated PSA schedules for ${n} tranche(s).` : "No PSA-mode PAC/TAC bonds to derive.");
+      }
+    } catch (e: unknown) {
+      if (!opts?.silent) {
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setScheduleDeriveBusy(false);
+    }
+  }, [poolDerivationCtx, errors.length, irJson]);
+
+  const psaAutoDeriveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (studioTab !== "design") return;
+    if (errors.length > 0 || !poolDerivationCtx || !hasPsaStructuringBonds) return;
+    const { stale } = computePsaScheduleStale(irJson, poolDerivationCtx);
+    if (!stale) return;
+    if (psaAutoDeriveTimerRef.current) clearTimeout(psaAutoDeriveTimerRef.current);
+    psaAutoDeriveTimerRef.current = setTimeout(() => {
+      psaAutoDeriveTimerRef.current = null;
+      void runPsaScheduleDerivation({ silent: true });
+    }, 800);
+    return () => {
+      if (psaAutoDeriveTimerRef.current) clearTimeout(psaAutoDeriveTimerRef.current);
+    };
+  }, [
+    studioTab,
+    errors.length,
+    poolDerivationCtx,
+    hasPsaStructuringBonds,
+    irJson,
+    runPsaScheduleDerivation,
+  ]);
   const selectedStudioDealSummary = useMemo(
     () => studioDeals.find((deal) => deal.deal_id === selectedStudioDealId) ?? null,
     [studioDeals, selectedStudioDealId],
@@ -289,20 +372,30 @@ export default function DealEditor({
     }
   }, []);
 
-  const handleWorkspaceChange = useCallback((ws: any) => {
-    setWorkspace(ws);
+  const recomputeIrFromWorkspace = useCallback((ws: any) => {
+    if (!ws) return;
     applyDynamicColors(ws);
     try {
-      const ir = generateDealIR(ws);
+      let ir: Record<string, unknown> = generateDealIR(ws) as unknown as Record<string, unknown>;
+      ir = mergeScheduleOverlay(ir, scheduleOverlayRef.current) as Record<string, unknown>;
       setIrJson(JSON.stringify(ir, null, 2));
       setErrors([]);
       if (ir?.deal_name && typeof ir.deal_name === "string") {
-        setDealName((prev) => (prev === "Deal" ? ir.deal_name : prev));
+        setDealName((prev) => (prev === "Deal" ? (ir.deal_name as string) : prev));
       }
     } catch (e: any) {
       setErrors([e.message || "Error generating IR"]);
     }
   }, []);
+
+  const handleWorkspaceChange = useCallback((ws: any) => {
+    setWorkspace(ws);
+    recomputeIrFromWorkspace(ws);
+  }, [recomputeIrFromWorkspace]);
+
+  useEffect(() => {
+    if (workspace) recomputeIrFromWorkspace(workspace);
+  }, [scheduleOverlay, recomputeIrFromWorkspace]);
 
   const handleSaveDeal = useCallback(async () => {
     if (errors.length > 0 || !irJson.trim()) {
@@ -1407,6 +1500,11 @@ export default function DealEditor({
                   availableTapes={uploadLibrary}
                   poolSnapshots={poolSnapshots}
                   onCarryTieOutStatusChange={handleCarryStatusChange}
+                  onPoolDerivationContextChange={handlePoolDerivationContextChange}
+                  psaScheduleStale={psaScheduleStaleInfo}
+                  showPsaScheduleTools={hasPsaStructuringBonds && !!poolDerivationCtx}
+                  onRederivePsaSchedules={() => void runPsaScheduleDerivation()}
+                  scheduleDeriveBusy={scheduleDeriveBusy}
                 />
               </div>
             </div>

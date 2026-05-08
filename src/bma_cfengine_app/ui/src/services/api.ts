@@ -820,6 +820,36 @@ export function saveStudioDeal(body: {
   });
 }
 
+export interface DerivePsaSchedulesPoolBody {
+  balance: number;
+  wac_pct: number;
+  term_months: number;
+  horizon_months: number;
+}
+
+export interface DerivePsaSchedulesResponse {
+  overlay: Record<
+    string,
+    {
+      schedule_contract: Array<Record<string, unknown>>;
+      schedule_derivation: Record<string, unknown>;
+    }
+  >;
+  derived_bond_names: string[];
+}
+
+/** Phase 1i: machine PAC/TAC PSA schedule_contract overlay for structuring UI. */
+export function derivePsaSchedules(body: {
+  ir: Record<string, unknown>;
+  pool: DerivePsaSchedulesPoolBody;
+}): Promise<DerivePsaSchedulesResponse> {
+  return request("/deals/derive-psa-schedules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 export function listPoolSnapshots(search?: string): Promise<{ items: PoolSnapshotSummary[] }> {
   const q = search ? `?search=${encodeURIComponent(search)}` : "";
   return request(`/deals/pools${q}`);

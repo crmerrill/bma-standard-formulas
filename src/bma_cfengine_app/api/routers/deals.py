@@ -47,6 +47,7 @@ from ...orchestrator.deals.solver_templates import (
     list_templates_for_deal,
     template_view_for_deal,
 )
+from ...orchestrator.deals.psa_schedule_overlay import PoolDerivationInputs, build_psa_schedule_overlay
 from ...orchestrator.deals.structuring_verification import verify_structure
 from bma_standard_formulas.deals.schemas.solver_template import (
     TemplateInstantiationRequest,
@@ -171,6 +172,65 @@ class StructuringVerificationResponse(BaseModel):
     errors: list[str]
     warnings: list[str]
     suggestions: list[str]
+
+
+class PoolDerivationRequestBody(BaseModel):
+    balance: float = Field(gt=0)
+    wac_pct: float = Field(gt=0)
+    term_months: int = Field(gt=0)
+    horizon_months: int = Field(gt=0, le=720)
+
+
+class DerivePsaSchedulesRequest(BaseModel):
+    ir: dict[str, Any]
+    pool: PoolDerivationRequestBody
+
+
+class ScheduleOverlayEntryResponse(BaseModel):
+    schedule_contract: list[dict[str, Any]]
+    schedule_derivation: dict[str, Any]
+
+
+class DerivePsaSchedulesResponse(BaseModel):
+    overlay: dict[str, ScheduleOverlayEntryResponse]
+    derived_bond_names: list[str]
+
+
+@router.post("/deals/derive-psa-schedules", response_model=DerivePsaSchedulesResponse)
+async def derive_psa_schedules(body: DerivePsaSchedulesRequest):
+    """Structuring-time PAC/TAC PSA schedule_contract overlay (Phase 1i).
+
+    Validates studio IR, projects collateral principal at PSA speeds, and
+    returns a per-bond patch for ``schedule_contract`` +
+    ``schedule_derivation``. The UI merges this into Blockly-generated IR
+    without rewriting blocks.
+    """
+    normalized_ir = _normalize_legacy_studio_ir(body.ir)
+    try:
+        canonical = DealDefinition.model_validate(migrate_deal_payload(normalized_ir))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid deal IR: {exc}",
+        ) from exc
+
+    pool = PoolDerivationInputs(
+        balance=float(body.pool.balance),
+        wac_pct=float(body.pool.wac_pct),
+        term_months=int(body.pool.term_months),
+        horizon_months=int(body.pool.horizon_months),
+    )
+    raw_overlay = build_psa_schedule_overlay(canonical, pool)
+    overlay: dict[str, ScheduleOverlayEntryResponse] = {}
+    for name, payload in raw_overlay.items():
+        overlay[name] = ScheduleOverlayEntryResponse(
+            schedule_contract=list(payload["schedule_contract"]),
+            schedule_derivation=dict(payload["schedule_derivation"]),
+        )
+    return DerivePsaSchedulesResponse(
+        overlay=overlay,
+        derived_bond_names=sorted(overlay.keys()),
+    )
 
 
 @router.get("/deals/pools")
