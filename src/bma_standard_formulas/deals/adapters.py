@@ -1,12 +1,27 @@
 """Collateral input adapters — bridge BMA engine outputs to DealRunInput.
 
 Adapters convert:
-- PortfolioCashflow / BMAActualCashflow → PooledCollateralInput
-- Multiple PortfolioCashflows (grouped) → GroupedCollateralInput
-- P/I strip arrays → StripCollateralInput
+- PortfolioCashflow / BMAActualCashflow → PooledCollateralInput (legacy)
+- Multiple PortfolioCashflows (grouped) → GroupedCollateralInput (legacy)
+- P/I strip arrays → StripCollateralInput (legacy)
 - Legacy LDCMA-format collateral → PairedCollateralInput (Phase 1e
   parity-testing adapter, ``ldcma_to_paired``)
+
+Phase 1h deprecation (May 2026):
+  The LDCMA-format adapters
+  (``from_collateral_dict``, ``from_actual_cashflow``,
+  ``from_portfolio_cashflow``, ``from_grouped_portfolio_cashflows``,
+  ``from_pi_strips``) emit ``DeprecationWarning`` because the BMA-native
+  ``PairedCollateralInput`` path is now the canonical input form. The
+  adapters remain functional so existing parity tests and
+  ``ldcma_to_paired`` (which intentionally uses ``from_collateral_dict``
+  as a translation step) continue to work; they're tagged so new code
+  picks up the recommended migration path. The ``ldcma_to_paired``
+  adapter and the orchestrator's ``collateral_bridge`` suppress the
+  warning at their internal call sites because they are themselves
+  the migration machinery.
 """
+import warnings
 from dataclasses import replace
 from datetime import date
 from typing import Any
@@ -21,6 +36,24 @@ from .schemas.input import (
     PairedCollateralInput,
     PooledCollateralInput,
     StripCollateralInput,
+)
+
+
+# Phase 1h: shared deprecation message for the LDCMA-format adapters.
+# Each adapter emits this at the top of its body via ``warnings.warn``
+# with ``stacklevel=2`` so the warning is reported at the caller's site.
+_LDCMA_DEPRECATION_MSG = (
+    "Legacy LDCMA-format collateral adapters are deprecated (Phase 1h, "
+    "May 2026). The BMA-native PairedCollateralInput path is canonical. "
+    "Migration:\n"
+    "  - For BMA cashflow inputs: build a PortfolioCashflow with PAIRED "
+    "or ACTUAL_ONLY mode and wrap it in PairedCollateralInput.\n"
+    "  - For legacy LDCMA dict-of-arrays inputs: use ldcma_to_paired() "
+    "to convert to a PairedCollateralInput.\n"
+    "  - For BMA-shaped DataFrame artifacts: build a "
+    "PortfolioCashflow.from_dataframe and wrap in PairedCollateralInput.\n"
+    "These adapters remain functional but will be removed in a future "
+    "release."
 )
 
 
@@ -79,6 +112,11 @@ def from_collateral_dict(
 ) -> DealRunInput:
     """Convert an LDCMA-style ``collCF`` dict to a DealRunInput.
 
+    .. deprecated:: Phase 1h (May 2026)
+        Use :func:`ldcma_to_paired` for legacy LDCMA dict-of-arrays inputs
+        — it builds a BMA-native ``PairedCollateralInput`` instead. See
+        the module docstring for the full migration policy.
+
     The LDCMA convention uses ``collCF['COLLAT']`` for the primary pool and
     optional ``collCF['COLLAT_*']`` keys for additional collateral groups.
 
@@ -90,6 +128,7 @@ def from_collateral_dict(
     Returns:
         DealRunInput with appropriate CollateralInput variant.
     """
+    warnings.warn(_LDCMA_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     if len(collcf) == 1 and "COLLAT" in collcf:
         cf_data = collcf["COLLAT"]
         n = len(cf_data["balance"])
@@ -189,10 +228,16 @@ def from_portfolio_cashflow(
 ) -> DealRunInput:
     """Convert a BMA PortfolioCashflow DataFrame to a single-pool DealRunInput.
 
+    .. deprecated:: Phase 1h (May 2026)
+        Build a ``PortfolioCashflow.from_dataframe`` and wrap it directly
+        in ``PairedCollateralInput`` instead. See module docstring for
+        the migration policy.
+
     Maps BMA engine output columns to the LDCMA-style CollateralCashflows
     field names expected by the waterfall runtime, then wraps the result
     as a ``PooledCollateralInput``.
     """
+    warnings.warn(_LDCMA_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     cf_dict, n = _portfolio_df_to_cf_dict(portfolio_df)
     cf = _build_cf_from_dict(cf_dict, n)
     orig_bal = float(cf_dict["balance"][0]) if n > 0 else 0.0
@@ -212,6 +257,12 @@ def from_grouped_portfolio_cashflows(
     market_date: str | None = None,
 ) -> DealRunInput:
     """Convert per-group BMA PortfolioCashflow DataFrames to a multi-group DealRunInput.
+
+    .. deprecated:: Phase 1h (May 2026)
+        Build a single multi-group ``PortfolioCashflow`` with per-group
+        constituents tagged via ``group_id`` and wrap it directly in
+        ``PairedCollateralInput``. See module docstring for the
+        migration policy.
 
     Each entry in ``group_dfs`` (keyed by ``group_id``) becomes one
     ``CollateralCashflows`` instance inside a ``GroupedCollateralInput``.
@@ -237,6 +288,7 @@ def from_grouped_portfolio_cashflows(
     Raises:
         ValueError: If ``group_dfs`` is empty.
     """
+    warnings.warn(_LDCMA_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     if not group_dfs:
         raise ValueError("from_grouped_portfolio_cashflows requires at least one group")
 
@@ -267,6 +319,14 @@ def from_actual_cashflow(
     net_of_servicing: bool = False,
 ) -> DealRunInput:
     """Convert a BMA `actual_cashflow_from_loan` output to ``DealRunInput``.
+
+    .. deprecated:: Phase 1h (May 2026)
+        For new code, build a ``PortfolioCashflow`` containing the
+        ``BMAActualCashflow`` (in ``ACTUAL_ONLY`` mode) and wrap it
+        directly in ``PairedCollateralInput``. See module docstring.
+        Existing parity harnesses can continue to use this adapter and
+        wrap the output in :func:`ldcma_to_paired` (the FNR Group 1
+        fixture follows this pattern).
 
     Mirrors :func:`from_portfolio_cashflow` (the production adapter that
     accepts a portfolio DataFrame artifact) but takes the typed
@@ -330,6 +390,7 @@ def from_actual_cashflow(
     Returns:
         DealRunInput with PooledCollateralInput populated.
     """
+    warnings.warn(_LDCMA_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     perf_bal = np.asarray(actual.perf_bal, dtype=float)
     act_am = np.asarray(actual.act_am, dtype=float)
     vol_prepay = np.asarray(actual.vol_prepay, dtype=float)
@@ -401,7 +462,14 @@ def from_pi_strips(
     loan_count: int | None = None,
     market_date: str | None = None,
 ) -> DealRunInput:
-    """Build DealRunInput from separate P and I strip array dicts."""
+    """Build DealRunInput from separate P and I strip array dicts.
+
+    .. deprecated:: Phase 1h (May 2026)
+        Build a ``PortfolioCashflow`` directly and wrap it in
+        ``PairedCollateralInput``. See module docstring for the
+        migration policy.
+    """
+    warnings.warn(_LDCMA_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     n_p = len(principal_arrays.get("balance", []))
     n_i = len(interest_arrays.get("balance", []))
     n = max(n_p, n_i)
@@ -553,11 +621,17 @@ def ldcma_to_paired(
     elif isinstance(coll, dict):
         # LDCMA collCF shape — convert via from_collateral_dict first
         # (preserves the multi-group routing logic centralized there).
-        source_run_input = from_collateral_dict(
-            coll,
-            loan_count=loan_count,
-            market_date=market_date,
-        )
+        # Suppress the deprecation warning: this adapter intentionally
+        # bridges legacy LDCMA inputs to the BMA-native PAIRED form, so
+        # internal use of from_collateral_dict is the migration machinery
+        # itself, not a caller that should be alerted to migrate.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            source_run_input = from_collateral_dict(
+                coll,
+                loan_count=loan_count,
+                market_date=market_date,
+            )
         inner = source_run_input.collateral
         if isinstance(inner, PooledCollateralInput):
             groups = {"_pooled": inner.collateral}

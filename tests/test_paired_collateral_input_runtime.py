@@ -37,6 +37,14 @@ from datetime import date
 import numpy as np
 import pytest
 
+# Phase 1h: this module exercises the legacy LDCMA-format adapter
+# (``from_actual_cashflow``) on purpose — the parity tests below compare
+# LDCMA-branch outputs vs PAIRED-branch outputs to validate the runtime's
+# input-mode equivalence. Suppress the DeprecationWarning at module
+# scope so test output stays clean. Remove this filter when the LDCMA
+# path is fully retired.
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 from bma_standard_formulas.deals.adapters import from_actual_cashflow
 from bma_standard_formulas.deals.deal_library import passthrough_deal
 from bma_standard_formulas.deals.runtime import (

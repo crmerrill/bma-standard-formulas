@@ -268,6 +268,7 @@ def _deal_input_from_repline(
     full PAIRED in ``_group_2_collateral_input``.
     """
     import dataclasses
+    import warnings
 
     from bma_standard_formulas.deals.schemas.input import PairedCollateralInput
     from bma_standard_formulas.engine import PortfolioCashflow
@@ -275,13 +276,20 @@ def _deal_input_from_repline(
 
     _sched, actual, _wac_pct = _repline_for_psa(psa_speed)
     initial_balance = float(POOL_ASSUMPTIONS["aggregate_upb_dollars"])
-    ldcma_input = from_actual_cashflow(
-        actual,
-        horizon=n_periods + 1,
-        loan_count=int(initial_balance / 200_000.0),
-        initial_balance=initial_balance,
-        net_of_servicing=True,
-    )
+    # Suppress the Phase 1h DeprecationWarning: this helper is itself
+    # transitional bridging machinery (LDCMA -> PAIRED via ldcma_to_paired).
+    # ``from_actual_cashflow`` is used here as the LDCMA-side construction
+    # step, then immediately wrapped via ldcma_to_paired - the BMA-native
+    # PAIRED form is what the deal runtime ultimately consumes.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        ldcma_input = from_actual_cashflow(
+            actual,
+            horizon=n_periods + 1,
+            loan_count=int(initial_balance / 200_000.0),
+            initial_balance=initial_balance,
+            net_of_servicing=True,
+        )
     paired_input = ldcma_to_paired(ldcma_input)
 
     if group_id is None:

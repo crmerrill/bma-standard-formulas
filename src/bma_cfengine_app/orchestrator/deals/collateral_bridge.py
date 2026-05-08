@@ -26,6 +26,7 @@ path unchanged.
 from __future__ import annotations
 
 import re
+import warnings
 from typing import Any
 
 from bma_standard_formulas.deals.adapters import (
@@ -136,30 +137,38 @@ def build_from_runsetup_ref(
     for scenario_name in selected:
         prefix = _safe_artifact_name(scenario_name)
 
-        if group_names:
-            # Grouped run: prefer per-group artifacts.  If they're all
-            # missing for this scenario, fall through to the aggregate
-            # artifact so a partially-built run remains usable.
-            group_dfs = _load_group_dataframes(run_id, prefix, group_names)
-            if group_dfs:
-                ldcma_input = from_grouped_portfolio_cashflows(
-                    group_dfs,
-                    loan_count=loan_count,
-                    market_date=market_date,
-                )
-                deal_inputs[scenario_name] = ldcma_to_paired(ldcma_input)
-                continue
+        # The bridge bridges DataFrame artifacts to the BMA-native PAIRED
+        # input via the LDCMA-format adapters as a transitional step.
+        # The adapters emit DeprecationWarning (Phase 1h) but the bridge
+        # IS the migration machinery here, so suppress at the call site —
+        # we're not a caller that should be alerted to migrate.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
 
-        # Single-pool path (or grouped run with missing per-group artifacts):
-        # use the aggregate artifact.
-        agg_section = f"{prefix}_portfolio_actual"
-        df = run_store.load_artifact(run_id, agg_section)
-        ldcma_input = from_portfolio_cashflow(
-            df,
-            loan_count=loan_count,
-            market_date=market_date,
-        )
-        deal_inputs[scenario_name] = ldcma_to_paired(ldcma_input)
+            if group_names:
+                # Grouped run: prefer per-group artifacts.  If they're all
+                # missing for this scenario, fall through to the aggregate
+                # artifact so a partially-built run remains usable.
+                group_dfs = _load_group_dataframes(run_id, prefix, group_names)
+                if group_dfs:
+                    ldcma_input = from_grouped_portfolio_cashflows(
+                        group_dfs,
+                        loan_count=loan_count,
+                        market_date=market_date,
+                    )
+                    deal_inputs[scenario_name] = ldcma_to_paired(ldcma_input)
+                    continue
+
+            # Single-pool path (or grouped run with missing per-group artifacts):
+            # use the aggregate artifact.
+            agg_section = f"{prefix}_portfolio_actual"
+            df = run_store.load_artifact(run_id, agg_section)
+            ldcma_input = from_portfolio_cashflow(
+                df,
+                loan_count=loan_count,
+                market_date=market_date,
+            )
+            deal_inputs[scenario_name] = ldcma_to_paired(ldcma_input)
 
     return deal_inputs
 

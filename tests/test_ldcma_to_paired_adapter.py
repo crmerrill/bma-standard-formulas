@@ -26,6 +26,13 @@ from datetime import date
 import numpy as np
 import pytest
 
+# Phase 1h: this module tests the ldcma_to_paired parity adapter, which
+# by design accepts legacy LDCMA-format inputs. The deprecated adapters
+# (``from_actual_cashflow``, ``from_collateral_dict``) are used here to
+# build the LDCMA inputs the parity adapter consumes. Suppress the
+# DeprecationWarning at module scope so test output stays clean.
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 from bma_standard_formulas.deals.adapters import (
     from_actual_cashflow,
     from_collateral_dict,

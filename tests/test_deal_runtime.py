@@ -17,7 +17,7 @@ from bma_standard_formulas.deals.deal_library import (
 )
 from bma_standard_formulas.deals.runtime import run_deal
 from bma_standard_formulas.deals.schema import DealValidationError, validate_deal
-from bma_standard_formulas.deals.adapters import from_collateral_dict, ldcma_to_paired
+from bma_standard_formulas.deals.adapters import ldcma_to_paired
 from bma_standard_formulas.deals.schemas.migrations import migrate_deal_payload
 from bma_standard_formulas.deals.schemas.input import (
     CollateralCashflows,
@@ -376,9 +376,11 @@ class TestAdapters:
         }
         # Phase 1g: route through the BMA-native PAIRED branch so the
         # fixture exercises the same runtime path production code uses.
-        # ldcma_to_paired is bit-identical to the legacy LDCMA path
-        # (Phase 1e parity tests).
-        run_input = ldcma_to_paired(from_collateral_dict(collcf, loan_count=10))
+        # Pass the LDCMA dict directly; ldcma_to_paired's dict-input
+        # path internally bridges via from_collateral_dict (with the
+        # DeprecationWarning suppressed because this is the migration
+        # machinery itself).
+        run_input = ldcma_to_paired(collcf, loan_count=10)
         deal = passthrough_deal()
         result = run_deal(deal, run_input)
         resid = _bond_totals(result, "R")
