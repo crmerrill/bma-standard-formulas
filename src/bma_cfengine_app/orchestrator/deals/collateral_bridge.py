@@ -1,12 +1,17 @@
 """Build DealRunInput payloads from either Run Setup refs or deal-native inputs.
 
-Phase 0C (May 2026): the bridge now reads per-group portfolio artifacts when
-the source run was grouped, producing a ``GroupedCollateralInput`` that the
+Phase 1g (May 2026): the bridge now produces ``PairedCollateralInput``
+payloads (BMA-native PortfolioCashflow) for both single-pool and grouped
+runs. The legacy ``from_portfolio_cashflow`` / ``from_grouped_portfolio_cashflows``
+LDCMA adapters are wrapped via ``ldcma_to_paired`` so the deal runtime
+consumes the BMA-native PAIRED branch end-to-end. Bond outputs are
+bit-identical to the pre-1g LDCMA path (Phase 1e parity tests).
+
+Phase 0C (May 2026): the bridge reads per-group portfolio artifacts when
+the source run was grouped, producing a multi-group payload that the
 deal runtime routes via ``GROUP_<id>_*`` source tokens.  Pre-Phase-0C the
-bridge always read only the aggregate artifact and produced
-``PooledCollateralInput``, which meant multi-group deals could not be wired
-to a Run-Setup-driven portfolio run from the UI — they had to use
-``deal_native`` payloads with hand-built per-group dicts.
+bridge always read only the aggregate artifact, which meant multi-group
+deals could not be wired to a Run-Setup-driven portfolio run from the UI.
 
 The bridge is tightly coupled to the orchestrator's artifact-naming
 convention (see ``run_service._execute_single_scenario``):
@@ -26,6 +31,7 @@ from typing import Any
 from bma_standard_formulas.deals.adapters import (
     from_grouped_portfolio_cashflows,
     from_portfolio_cashflow,
+    ldcma_to_paired,
 )
 from bma_standard_formulas.deals.schemas.input import DealRunInput
 
@@ -80,18 +86,23 @@ def build_from_runsetup_ref(
     """Build DealRunInput(s) from a completed portfolio run's stored artifacts.
 
     Returns one ``DealRunInput`` per requested scenario, keyed by scenario
-    name.  The collateral payload is:
+    name.  The collateral payload is always a ``PairedCollateralInput``
+    (Phase 1g, May 2026) wrapping a BMA-native ``PortfolioCashflow``:
 
-      - ``PooledCollateralInput`` when the source run was single-pool
-        (manifest ``group_names`` is empty), built from the aggregate
-        portfolio artifact.
-      - ``GroupedCollateralInput`` when the source run was grouped, built
-        from the per-group portfolio artifacts.  Each group's
-        ``CollateralCashflows`` is keyed by the original ``group_id``
-        from the manifest.
+      - Single-pool runs (manifest ``group_names`` empty) yield a
+        portfolio with one ACTUAL_ONLY constituent, synthesized from
+        the aggregate portfolio artifact.
+      - Grouped runs yield a portfolio with one ACTUAL_ONLY constituent
+        per group, each tagged with its original ``group_id`` from the
+        manifest.  The runtime's ``aggregate_actual_by_group()``
+        partitions the constituents back into per-group aggregates so
+        ``GROUP_<id>_*`` source-token routing works.
 
     Both paths reuse the engine output directly — there is no engine
-    re-invocation here.
+    re-invocation here.  The legacy LDCMA-format adapters
+    (``from_portfolio_cashflow`` / ``from_grouped_portfolio_cashflows``)
+    are wrapped via ``ldcma_to_paired`` so the runtime consumes the
+    BMA-native PAIRED branch end-to-end.
 
     Args:
         run_id: Identifier of a completed portfolio run.
@@ -131,22 +142,24 @@ def build_from_runsetup_ref(
             # artifact so a partially-built run remains usable.
             group_dfs = _load_group_dataframes(run_id, prefix, group_names)
             if group_dfs:
-                deal_inputs[scenario_name] = from_grouped_portfolio_cashflows(
+                ldcma_input = from_grouped_portfolio_cashflows(
                     group_dfs,
                     loan_count=loan_count,
                     market_date=market_date,
                 )
+                deal_inputs[scenario_name] = ldcma_to_paired(ldcma_input)
                 continue
 
         # Single-pool path (or grouped run with missing per-group artifacts):
         # use the aggregate artifact.
         agg_section = f"{prefix}_portfolio_actual"
         df = run_store.load_artifact(run_id, agg_section)
-        deal_inputs[scenario_name] = from_portfolio_cashflow(
+        ldcma_input = from_portfolio_cashflow(
             df,
             loan_count=loan_count,
             market_date=market_date,
         )
+        deal_inputs[scenario_name] = ldcma_to_paired(ldcma_input)
 
     return deal_inputs
 

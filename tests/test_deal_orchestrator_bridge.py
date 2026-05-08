@@ -56,7 +56,13 @@ def test_bridge_builds_runsetup_ref_inputs(monkeypatch, tmp_path):
     built = build_from_runsetup_ref(run_id, scenario_names=["Base Case"])
     assert "Base Case" in built
     assert built["Base Case"].loan_count == 2
-    assert built["Base Case"].collateral.mode == "POOLED"
+    # Phase 1g: bridge produces PairedCollateralInput (PAIRED mode) with
+    # an ACTUAL_ONLY-mode PortfolioCashflow under the hood.
+    assert built["Base Case"].collateral.mode == "PAIRED"
+    portfolio = built["Base Case"].collateral.portfolio
+    assert len(portfolio.actual_constituents()) == 1
+    # Single-pool: the synthesized constituent is untagged.
+    assert portfolio.actual_constituents()[0].group_id is None
 
 
 def test_bridge_reads_per_group_artifacts_for_grouped_run(monkeypatch, tmp_path):
@@ -133,15 +139,21 @@ def test_bridge_reads_per_group_artifacts_for_grouped_run(monkeypatch, tmp_path)
 
     assert "Base Case" in built
     deal_input = built["Base Case"]
-    assert deal_input.collateral.mode == "GROUPED"
-    assert set(deal_input.collateral.groups.keys()) == {"GROUP_1", "GROUP_2"}
+    # Phase 1g: bridge produces PairedCollateralInput (PAIRED mode) with
+    # one ACTUAL_ONLY constituent per group, tagged with its group_id.
+    assert deal_input.collateral.mode == "PAIRED"
+    portfolio = deal_input.collateral.portfolio
+    constituents = portfolio.actual_constituents()
+    assert len(constituents) == 2
+    by_group = portfolio.actual_constituents_by_group()
+    assert set(by_group.keys()) == {"GROUP_1", "GROUP_2"}
 
-    # The per-group CollateralCashflows should reflect the per-group artifacts,
-    # not the aggregate (period-0 balance is 200 / 100, not 300).
-    g1 = deal_input.collateral.groups["GROUP_1"]
-    g2 = deal_input.collateral.groups["GROUP_2"]
-    assert g1.balance[0] == 200.0
-    assert g2.balance[0] == 100.0
+    # The per-group constituents should reflect the per-group artifacts,
+    # not the aggregate (period-0 perf_bal is 200 / 100, not 300).
+    g1_cfs = by_group["GROUP_1"]
+    g2_cfs = by_group["GROUP_2"]
+    assert g1_cfs[0].perf_bal[0] == 200.0
+    assert g2_cfs[0].perf_bal[0] == 100.0
 
     # Original collateral balance is the sum of per-group initial balances.
     assert deal_input.original_collateral_balance == 300.0
@@ -178,8 +190,13 @@ def test_bridge_falls_back_to_aggregate_when_per_group_artifacts_missing(monkeyp
 
     built = build_from_runsetup_ref(run_id, scenario_names=["Base Case"])
 
-    # Falls back to the single-pool path.
-    assert built["Base Case"].collateral.mode == "POOLED"
+    # Falls back to the single-pool path. Phase 1g: PAIRED-mode payload
+    # with one untagged constituent (no per-group routing because the
+    # per-group artifacts were missing).
+    assert built["Base Case"].collateral.mode == "PAIRED"
+    portfolio = built["Base Case"].collateral.portfolio
+    assert len(portfolio.actual_constituents()) == 1
+    assert portfolio.actual_constituents()[0].group_id is None
 
 
 def test_bridge_builds_deal_native_inputs():
