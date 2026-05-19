@@ -23,7 +23,6 @@ interface BondDefIR {
   schedule_depends_on: string | null;
   schedule_speed_low: number | null;
   schedule_speed_high: number | null;
-  schedule_speed_target: number | null;
   schedule_custom_vector: string | null;
   schedule_contract: Array<{ period: number; target_principal: number }>;
   schedule_tolerance_bps: number | null;
@@ -166,7 +165,6 @@ interface TargetInfo {
   scheduleDependsOn?: string | null;
   scheduleSpeedLow?: number | null;
   scheduleSpeedHigh?: number | null;
-  scheduleSpeedTarget?: number | null;
   scheduleCustomVector?: string | null;
   scheduleContract?: Array<{ period: number; target_principal: number }>;
   scheduleToleranceBps?: number | null;
@@ -314,10 +312,9 @@ function buildSyntheticScheduleFromModel(opts: {
   modelType: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR";
   speedLow: number | null;
   speedHigh: number | null;
-  speedTarget: number | null;
   customVector: string;
 }): Array<{ period: number; target_principal: number }> {
-  const { behavior, modelType, speedLow, speedHigh, speedTarget, customVector } = opts;
+  const { behavior, modelType, speedLow, speedHigh, customVector } = opts;
   if (modelType === "CUSTOM_VECTOR") {
     const parsed = parseScheduleContract(customVector);
     if (parsed.length > 0) return parsed;
@@ -336,7 +333,7 @@ function buildSyntheticScheduleFromModel(opts: {
       { period: 2, target_principal: hi },
     ];
   }
-  const tgt = Number.isFinite(speedTarget as number) ? Number(speedTarget) : null;
+  const tgt = Number.isFinite(speedLow as number) ? Number(speedLow) : null;
   if (tgt == null) return [];
   return [{ period: 1, target_principal: tgt }];
 }
@@ -348,7 +345,6 @@ function applyPacTacSemantics(
     modelType,
     speedLow,
     speedHigh,
-    speedTarget,
     customVector,
     priorityTier,
     dependsOn,
@@ -358,7 +354,6 @@ function applyPacTacSemantics(
     modelType: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR";
     speedLow: number | null;
     speedHigh: number | null;
-    speedTarget: number | null;
     customVector: string;
     priorityTier: number | null;
     dependsOn: string | null;
@@ -370,7 +365,6 @@ function applyPacTacSemantics(
     modelType,
     speedLow,
     speedHigh,
-    speedTarget,
     customVector,
   });
   const supportTranches = String(supportsRaw || "")
@@ -387,7 +381,6 @@ function applyPacTacSemantics(
       scheduleDependsOn: dependsOn,
       scheduleSpeedLow: speedLow,
       scheduleSpeedHigh: speedHigh,
-      scheduleSpeedTarget: speedTarget,
       scheduleCustomVector: customVector.trim() || null,
       scheduleContract,
       scheduleToleranceBps: null,
@@ -450,10 +443,11 @@ function emitPacTacSchedule(block: any, ctx: Ctx, behavior: "PAC" | "TAC"): void
   const modelType = (block.getFieldValue("MODEL_TYPE") || "PSA") as "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR";
   const speedLowRaw = Number(block.getFieldValue("SPEED_LOW"));
   const speedHighRaw = Number(block.getFieldValue("SPEED_HIGH"));
-  const speedTargetRaw = Number(block.getFieldValue("SPEED_TARGET"));
   const speedLow = Number.isFinite(speedLowRaw) ? speedLowRaw : null;
-  const speedHigh = Number.isFinite(speedHighRaw) ? speedHighRaw : null;
-  const speedTarget = Number.isFinite(speedTargetRaw) ? speedTargetRaw : null;
+  let speedHigh = Number.isFinite(speedHighRaw) ? speedHighRaw : null;
+  if (behavior === "TAC") {
+    speedHigh = speedLow;
+  }
   const customVector = String(block.getFieldValue("CUSTOM_VECTOR") || "");
   const priorityTierRaw = Number(block.getFieldValue("PRIORITY_TIER"));
   const priorityTier = Number.isFinite(priorityTierRaw) ? priorityTierRaw : null;
@@ -466,7 +460,6 @@ function emitPacTacSchedule(block: any, ctx: Ctx, behavior: "PAC" | "TAC"): void
     modelType,
     speedLow,
     speedHigh,
-    speedTarget,
     customVector,
     priorityTier,
     dependsOn,
@@ -636,7 +629,6 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       schedule_depends_on: info.scheduleDependsOn ?? null,
       schedule_speed_low: info.scheduleSpeedLow ?? null,
       schedule_speed_high: info.scheduleSpeedHigh ?? null,
-      schedule_speed_target: info.scheduleSpeedTarget ?? null,
       schedule_custom_vector: info.scheduleCustomVector ?? null,
       schedule_contract: info.scheduleContract || [],
       schedule_tolerance_bps:
@@ -657,7 +649,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
       pay_mode: "CASH_PAY",
       tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
-      schedule_model_type: null, schedule_priority_tier: null, schedule_depends_on: null, schedule_speed_low: null, schedule_speed_high: null, schedule_speed_target: null, schedule_custom_vector: null,
+      schedule_model_type: null, schedule_priority_tier: null, schedule_depends_on: null, schedule_speed_low: null, schedule_speed_high: null, schedule_custom_vector: null,
       support_tranches: [], supported_by_tranches: [], z_accrual_enabled: false, z_release_trigger: null,
     });
   }
@@ -686,7 +678,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
         is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
         pay_mode: "CASH_PAY",
         tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
-        schedule_model_type: null, schedule_priority_tier: null, schedule_depends_on: null, schedule_speed_low: null, schedule_speed_high: null, schedule_speed_target: null, schedule_custom_vector: null,
+        schedule_model_type: null, schedule_priority_tier: null, schedule_depends_on: null, schedule_speed_low: null, schedule_speed_high: null, schedule_custom_vector: null,
         support_tranches: [], supported_by_tranches: [], z_accrual_enabled: false, z_release_trigger: null,
       });
       bondNames.add(fee.name);

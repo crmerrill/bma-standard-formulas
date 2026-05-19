@@ -98,11 +98,14 @@ def build_psa_schedule_overlay(
             }
 
         elif bond.tranche_behavior == TrancheBehavior.TAC:
-            tgt = (
-                bond.schedule_speed_target
-                if bond.schedule_speed_target is not None
-                else bond.tac_pricing_psa
-            )
+            lo = bond.schedule_speed_low
+            hi = bond.schedule_speed_high
+            if lo is not None and hi is not None:
+                if abs(float(lo) - float(hi)) > 1e-9:
+                    continue
+                tgt = float(lo)
+            else:
+                tgt = bond.tac_pricing_psa
             if tgt is None:
                 continue
             sched = derive_tac_schedule(bal, wac, term, float(tgt), face, horizon)

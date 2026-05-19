@@ -73,7 +73,13 @@ function _expectedTacInputs(
   bond: Record<string, unknown>,
   pool: PoolDerivationCtx,
 ): Record<string, unknown> | null {
-  const tgtRaw = bond.schedule_speed_target ?? bond.tac_pricing_psa;
+  const lo = bond.schedule_speed_low;
+  const hi = bond.schedule_speed_high;
+  let tgtRaw: unknown = bond.tac_pricing_psa;
+  if (typeof lo === "number" && typeof hi === "number") {
+    if (Math.abs(lo - hi) > 1e-9) return null;
+    tgtRaw = lo;
+  }
   if (typeof tgtRaw !== "number") return null;
   const face = _faceUsd(bond, pool.balance);
   if (face <= 0) return null;

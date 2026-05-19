@@ -799,3 +799,40 @@ def test_account_type_field_is_rejected_after_hard_cut():
     migrated = migrate_deal_payload(payload)
     with pytest.raises(Exception, match="account_category"):
         DealDefinition.model_validate(migrated)
+
+
+def test_schedule_speed_target_is_rejected_after_hard_cut():
+    payload = {
+        "deal_name": "TacLegacy",
+        "bonds": [
+            {
+                "name": "A",
+                "tranche_type": "SEQUENTIAL",
+                "tranche_behavior": "TAC",
+                "schedule_model_type": "PSA",
+                "schedule_speed_target": 175.0,
+                "support_tranches": ["S"],
+            },
+            {"name": "S", "tranche_type": "SUPPORT"},
+            {"name": "R", "tranche_type": "RESIDUAL", "is_bond": False, "is_pseudo": True},
+        ],
+        "waterfall_rules": [
+            {
+                "rule_id": "r1",
+                "rule_type": "PAY_PRINCIPAL",
+                "order": 0,
+                "from_sources": ["CASH"],
+                "to_targets": ["A"],
+            },
+            {
+                "rule_id": "r2",
+                "rule_type": "PAY_RESIDUAL",
+                "order": 1,
+                "from_sources": ["CASH"],
+                "to_targets": ["R"],
+            },
+        ],
+    }
+    migrated = migrate_deal_payload(payload)
+    with pytest.raises(Exception, match="legacy fields"):
+        DealDefinition.model_validate(migrated)

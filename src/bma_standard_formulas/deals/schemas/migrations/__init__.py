@@ -37,7 +37,6 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
             bond.setdefault("schedule_depends_on", None)
             bond.setdefault("schedule_speed_low", None)
             bond.setdefault("schedule_speed_high", None)
-            bond.setdefault("schedule_speed_target", None)
             bond.setdefault("schedule_custom_vector", None)
             bond.setdefault("schedule_contract", [])
             bond.setdefault("schedule_tolerance_bps", None)

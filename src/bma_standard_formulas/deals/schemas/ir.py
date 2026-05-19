@@ -66,11 +66,14 @@ class BondDef(BaseModel):
     def _reject_legacy_size_fields(cls, value: Any) -> Any:
         # Hard cut (Phase 2b): do not accept legacy sizing field names.
         if isinstance(value, dict):
-            legacy = [k for k in ("size_dollars", "size_pct") if k in value]
+            legacy = [
+                k for k in ("size_dollars", "size_pct", "schedule_speed_target")
+                if k in value
+            ]
             if legacy:
                 raise ValueError(
-                    "BondDef legacy size fields are no longer supported; "
-                    "use notional and notional_pct_of_collateral."
+                    "BondDef legacy fields are no longer supported; use "
+                    "notional/notional_pct_of_collateral and TAC low/high speed band."
                 )
         return value
 
@@ -112,7 +115,6 @@ class BondDef(BaseModel):
     schedule_depends_on: str | None = None
     schedule_speed_low: float | None = None
     schedule_speed_high: float | None = None
-    schedule_speed_target: float | None = None
     schedule_custom_vector: str | None = None
     pac_lower_psa: float | None = None
     pac_upper_psa: float | None = None
@@ -507,9 +509,14 @@ class DealDefinition(BaseModel):
                             )
                 if has_model and bond.tranche_behavior == TrancheBehavior.TAC:
                     if bond.schedule_model_type != PrepayModelType.CUSTOM_VECTOR:
-                        if bond.schedule_speed_target is None:
+                        if bond.schedule_speed_low is None or bond.schedule_speed_high is None:
                             errors.append(
-                                f"Bond {bond.name!r}: TAC schedule requires target speed value."
+                                f"Bond {bond.name!r}: TAC schedule requires low/high speed values."
+                            )
+                        elif abs(float(bond.schedule_speed_low) - float(bond.schedule_speed_high)) > 1e-9:
+                            errors.append(
+                                f"Bond {bond.name!r}: TAC schedule requires a degenerate band "
+                                "(schedule_speed_low == schedule_speed_high)."
                             )
                 if not bond.support_tranches and not bond.supported_by_tranches:
                     errors.append(

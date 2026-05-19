@@ -172,7 +172,7 @@ export const DEAL_BLOCKS = [
     message0: "TAC Schedule model %1 speed %2 custom %3 from %4 tier %5 depends %6",
     args0: [
       { type: "field_dropdown", name: "MODEL_TYPE", options: PREPAY_MODEL_OPTIONS },
-      { type: "field_number", name: "SPEED_TARGET", value: 175, min: 0, precision: 0.01 },
+      { type: "field_number", name: "SPEED_LOW", value: 175, min: 0, precision: 0.01 },
       { type: "field_input", name: "CUSTOM_VECTOR", text: "ramp(175,175,24)" },
       { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
       { type: "field_number", name: "PRIORITY_TIER", value: 3, min: 1, precision: 1 },

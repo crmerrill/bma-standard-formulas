@@ -1356,7 +1356,7 @@ against the actual runtime + schemas. Findings:
 | H | Unify 6 BondDef relationship fields into one `relations: list[TrancheRelation]` | Confirmed with refinement | `support_tranches` (PAC support), `supported_by_tranches` (Z accretion), `tracks_bonds` (IO/PO mirror — used in `ops.py`), `parent_tranche` + `relation_type: StructureRelation` + `notional_ratio` (existing `StructureRelation` enum is `FLOATER_INVERSE \| IO_PO \| Z_ACCRUAL` — only 3 values). Migration to a 7-value `TrancheRelationType` covers IO/inverse-IO/super-floater/MACR with no behavior loss. Big migration in tranche_behaviors.py and the IO/PO ops. |
 | I | Coupon as `RateOrSchedule` for step-ups | Confirmed | New feature; runtime currently treats coupon as scalar. Touches coupon evaluation + Verus-style step-up bonds. |
 | J | Rename `size_dollars`/`size_pct` → `notional`/`notional_pct_of_collateral` | **Done** | Hard cut landed: schema/runtime/UI/tests all use `notional` fields; legacy names rejected by `BondDef` validator. |
-| K | Two-phase derivation; drop `schedule_speed_target` | **Confirmed AND already implemented** | `schedule_derivation.py` already exists at `src/bma_cfengine_app/orchestrator/deals/` with `derive_pac_schedule(...)` (lower envelope of two PSA projections) and `derive_tac_schedule(...)`. Runtime never reads speeds — only `schedule_contract`. Proposal collapses to just dropping the redundant `schedule_speed_target` field. |
+| K | Two-phase derivation; drop `schedule_speed_target` | **Done** | Hard cut landed: `schedule_speed_target` removed from schema/UI/runtime wiring; TAC now requires `schedule_speed_low == schedule_speed_high`. |
 | **L** | **Drop `PaymentStyle.CONCURRENT`** | **DOC WAS WRONG** | The current enum has only `SEQUENTIAL \| PRO_RATA`. `CONCURRENT` was never in the code. **No code change needed.** |
 | M | Reserve / recourse rule consolidation | Confirmed with refinement | `PAY_FROM_RESERVE_INTEREST` decrements bond's `int_shortfall` ledger and accumulates `opt_interest` (`runtime.py:1635-1642`). `PAY_FROM_RESERVE_PRINCIPAL` increments bond principal/balance. `PAY_RECOURSE_*` draws against pseudo-bond capacity. **Full collapse needs a `coverage_mode: NORMAL \| INTEREST_SHORTFALL \| PRINCIPAL_ACCELERATION` field** to preserve the shortfall-ledger semantics. Recourse pseudo-bonds are also valid `from_sources` since they have a balance to decrement. Recommend phased migration. |
 | N | Drop `COLLATERAL` aliases; rename `INT_CASH`/`PRIN_CASH` | **SHIPPED Phase 1c (May 2026)** | Renamed to `ACT_INT`/`ACT_PRIN` (BMA-native) per user directive, not `CASH_INT`/`CASH_PRIN`. `COLLATERAL` aliases dropped. Phase 2 will advance to full `COLL_*` taxonomy with decomposition tokens (post-CC research May 2026). |
@@ -2122,7 +2122,6 @@ class BondDef(BaseModel):
     schedule_model_type: PrepayModelType  # PSA | CPR | ABS | CUSTOM_VECTOR  (design-time input)
     schedule_speed_low: float | None      # PAC lower PSA / TAC target  (design-time input)
     schedule_speed_high: float | None     # PAC upper PSA  (TAC: == low)  (design-time input)
-    schedule_speed_target: float | None   # Round 3 K: dropped — redundant with low when TAC
     schedule_contract: list[dict]         # [{period, target_balance}] — runtime canonical, derived
     schedule_tolerance_bps: float | None
 
