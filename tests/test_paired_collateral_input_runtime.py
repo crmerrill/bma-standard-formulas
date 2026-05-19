@@ -485,7 +485,7 @@ class TestExecutionContextConstituents:
         deal = DealDefinition(
             deal_name="loans_accessor_e2e",
             bonds=[
-                BondDef(name="A", coupon=5.0, size_dollars=3_000_000.0),
+                BondDef(name="A", coupon=5.0, notional=3_000_000.0),
                 BondDef(name="R", is_pseudo=True, tranche_type="RESIDUAL"),
             ],
             waterfall_rules=[
@@ -560,7 +560,7 @@ class TestExecutionContextConstituents:
         deal = DealDefinition(
             deal_name="ldcma_no_loans",
             bonds=[
-                BondDef(name="A", coupon=5.0, size_dollars=1_000_000.0),
+                BondDef(name="A", coupon=5.0, notional=1_000_000.0),
                 BondDef(name="R", is_pseudo=True, tranche_type="RESIDUAL"),
             ],
             waterfall_rules=[

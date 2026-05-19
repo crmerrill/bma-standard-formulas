@@ -104,7 +104,7 @@ class TestPacScheduleEnforcement:
                     tranche_type=TrancheType.PAC,
                     tranche_behavior=TrancheBehavior.PAC,
                     coupon=4.0,
-                    size_dollars=pac_size,
+                    notional=pac_size,
                     schedule_contract=schedule,
                     support_tranches=["S"],
                 ),
@@ -113,7 +113,7 @@ class TestPacScheduleEnforcement:
                     tranche_type=TrancheType.SUPPORT,
                     tranche_behavior=TrancheBehavior.SEQUENTIAL,
                     coupon=5.0,
-                    size_dollars=support_size,
+                    notional=support_size,
                 ),
                 BondDef(
                     name="R",
@@ -235,7 +235,7 @@ class TestTacContractionProtection:
                     tranche_type=TrancheType.TAC,
                     tranche_behavior=TrancheBehavior.TAC,
                     coupon=4.5,
-                    size_dollars=8_400_000.0,
+                    notional=8_400_000.0,
                     schedule_contract=schedule,
                     support_tranches=["S"],
                 ),
@@ -244,7 +244,7 @@ class TestTacContractionProtection:
                     tranche_type=TrancheType.SUPPORT,
                     tranche_behavior=TrancheBehavior.SEQUENTIAL,
                     coupon=5.0,
-                    size_dollars=3_600_000.0,
+                    notional=3_600_000.0,
                 ),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
@@ -284,7 +284,7 @@ class TestZAccrual:
                     tranche_type=TrancheType.SEQUENTIAL,
                     tranche_behavior=TrancheBehavior.SEQUENTIAL,
                     coupon=4.0,
-                    size_dollars=senior_size,
+                    notional=senior_size,
                 ),
                 BondDef(
                     name="Z",
@@ -292,7 +292,7 @@ class TestZAccrual:
                     tranche_behavior=TrancheBehavior.Z,
                     pay_mode=PayMode.PIK,
                     coupon=z_coupon,
-                    size_dollars=z_size,
+                    notional=z_size,
                     z_accrual_enabled=True,
                     supported_by_tranches=["A"],
                 ),
@@ -387,7 +387,7 @@ class TestNoSyntheticFinalWritedown:
         deal = DealDefinition(
             deal_name="UnderAmortizing",
             bonds=[
-                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, coupon=4.0, size_dollars=1_000_000.0),
+                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, coupon=4.0, notional=1_000_000.0),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[

@@ -242,10 +242,10 @@ def _build_schedule_cap(bond_def: Any, cf_len: int) -> np.ndarray | None:
 
     # Determine bond face for legacy translation / forward-fill anchoring.
     bond_face: float
-    if bond_def.size_dollars is not None and bond_def.size_dollars > 0:
-        bond_face = float(bond_def.size_dollars)
-    elif bond_def.size_pct is not None and bond_def.size_pct > 0:
-        bond_face = float(bond_def.size_pct)  # caller will scale; not used numerically here.
+    if bond_def.notional is not None and bond_def.notional > 0:
+        bond_face = float(bond_def.notional)
+    elif bond_def.notional_pct_of_collateral is not None and bond_def.notional_pct_of_collateral > 0:
+        bond_face = float(bond_def.notional_pct_of_collateral)  # caller will scale; not used numerically here.
     else:
         bond_face = 0.0
 
@@ -303,10 +303,10 @@ def _allocate_bond_workspace(
     collateral_balance_0: float,
 ) -> BondWorkspace:
     # Authoritative sizing is dollar face. Percent-of-collateral is derived UX context.
-    if bond_def.size_dollars is not None and bond_def.size_dollars > 0:
-        initial_balance = bond_def.size_dollars
-    elif bond_def.size_pct is not None and bond_def.size_pct > 0:
-        initial_balance = collateral_balance_0 * bond_def.size_pct / 100.0
+    if bond_def.notional is not None and bond_def.notional > 0:
+        initial_balance = bond_def.notional
+    elif bond_def.notional_pct_of_collateral is not None and bond_def.notional_pct_of_collateral > 0:
+        initial_balance = collateral_balance_0 * bond_def.notional_pct_of_collateral / 100.0
     else:
         initial_balance = 0.0
 

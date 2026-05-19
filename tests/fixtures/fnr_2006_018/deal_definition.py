@@ -149,7 +149,7 @@ def build_fnr_2006_018_group_1_deal(
             tranche_behavior=TrancheBehavior.PAC,
             coupon_type=CouponType.FIXED if spec["type"] == "PAC" else CouponType.ZERO,
             coupon=spec["coupon_pct"] if spec["coupon_pct"] > 0 else None,
-            size_dollars=spec["size"],
+            notional=spec["size"],
             schedule_contract=per_bond,
             support_tranches=[s["name"] for s in sup_bond_specs] + ["PO"],
         ))
@@ -163,7 +163,7 @@ def build_fnr_2006_018_group_1_deal(
             tranche_behavior=TrancheBehavior.PAC,
             coupon_type=CouponType.FIXED,
             coupon=spec["coupon_pct"],
-            size_dollars=spec["size"],
+            notional=spec["size"],
             schedule_contract=per_bond,
             support_tranches=[s["name"] for s in sup_bond_specs] + ["PO"],
         ))
@@ -174,7 +174,7 @@ def build_fnr_2006_018_group_1_deal(
         pay_mode=PayMode.PIK,
         coupon_type=CouponType.FIXED,
         coupon=z_bond_spec["coupon_pct"],
-        size_dollars=z_bond_spec["size"],
+        notional=z_bond_spec["size"],
         z_accrual_enabled=True,
         # Z accrual is paid as principal of TA then TB until each reaches zero.
         supported_by_tranches=["TA", "TB"],
@@ -185,7 +185,7 @@ def build_fnr_2006_018_group_1_deal(
         tranche_behavior=TrancheBehavior.SEQUENTIAL,
         coupon_type=CouponType.ZERO,
         coupon=None,
-        size_dollars=sup_po_spec["size"],
+        notional=sup_po_spec["size"],
     ))
     for spec in sup_bond_specs:
         bonds.append(BondDef(
@@ -194,7 +194,7 @@ def build_fnr_2006_018_group_1_deal(
             tranche_behavior=TrancheBehavior.SEQUENTIAL,
             coupon_type=CouponType.FIXED,
             coupon=spec["coupon_pct"],
-            size_dollars=spec["size"],
+            notional=spec["size"],
         ))
     bonds.append(BondDef(
         name="R",
@@ -385,7 +385,7 @@ def build_fnr_2006_018_group_2_deal(n_periods: int = 240) -> DealDefinition:
             tranche_behavior=TrancheBehavior.SEQUENTIAL,
             coupon_type=CouponType.FIXED,
             coupon=spec["coupon_pct"],
-            size_dollars=spec["size"],
+            notional=spec["size"],
         ))
     # DO: zero-coupon principal-only.
     bonds.append(BondDef(
@@ -394,7 +394,7 @@ def build_fnr_2006_018_group_2_deal(n_periods: int = 240) -> DealDefinition:
         tranche_behavior=TrancheBehavior.SEQUENTIAL,
         coupon_type=CouponType.ZERO,
         coupon=None,
-        size_dollars=seq_po["size"],
+        notional=seq_po["size"],
     ))
     # DI: notional interest-only that strips DO's interest. `tracks_bonds`
     # syncs DI.balance to DO.balance post-waterfall each period; DI's
@@ -407,7 +407,7 @@ def build_fnr_2006_018_group_2_deal(n_periods: int = 240) -> DealDefinition:
         tranche_behavior=TrancheBehavior.SEQUENTIAL,
         coupon_type=CouponType.FIXED,
         coupon=ntl_io["coupon_pct"],
-        size_dollars=ntl_io["size"],
+        notional=ntl_io["size"],
         tracks_bonds={"balance": [seq_po["name"]]},
     ))
     bonds.append(BondDef(

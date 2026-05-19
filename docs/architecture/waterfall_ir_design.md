@@ -892,8 +892,8 @@ coupon:
 
 ### J. Notional, not "size"
 
-**Current state.** `size_dollars: float | None` and
-`size_pct: float | None`.
+**Current state.** `notional: float | None` and
+`notional_pct_of_collateral: float | None`.
 
 **Proposed rename.** "Size" is ambiguous. Use `notional`:
 
@@ -1355,7 +1355,7 @@ against the actual runtime + schemas. Findings:
 | G | Collapse `TrancheType` (13) + `TrancheBehavior` (4) → `TrancheKind` (8) | Confirmed | Runtime uses `tranche_type == "RESIDUAL"` (1 site) and `tranche_behavior == "Z"` (3 sites). Replaceable with `kind == TrancheKind.RESIDUAL` / `kind == TrancheKind.Z`. PAC/TAC stay as kinds; validator enforces `schedule_contract` non-empty. |
 | H | Unify 6 BondDef relationship fields into one `relations: list[TrancheRelation]` | Confirmed with refinement | `support_tranches` (PAC support), `supported_by_tranches` (Z accretion), `tracks_bonds` (IO/PO mirror — used in `ops.py`), `parent_tranche` + `relation_type: StructureRelation` + `notional_ratio` (existing `StructureRelation` enum is `FLOATER_INVERSE \| IO_PO \| Z_ACCRUAL` — only 3 values). Migration to a 7-value `TrancheRelationType` covers IO/inverse-IO/super-floater/MACR with no behavior loss. Big migration in tranche_behaviors.py and the IO/PO ops. |
 | I | Coupon as `RateOrSchedule` for step-ups | Confirmed | New feature; runtime currently treats coupon as scalar. Touches coupon evaluation + Verus-style step-up bonds. |
-| J | Rename `size_dollars`/`size_pct` → `notional`/`notional_pct_of_collateral` | Confirmed | Read in 4 places at workspace allocation (`runtime.py:190-254`). Pure rename + fixture migration. |
+| J | Rename `size_dollars`/`size_pct` → `notional`/`notional_pct_of_collateral` | **Done** | Hard cut landed: schema/runtime/UI/tests all use `notional` fields; legacy names rejected by `BondDef` validator. |
 | K | Two-phase derivation; drop `schedule_speed_target` | **Confirmed AND already implemented** | `schedule_derivation.py` already exists at `src/bma_cfengine_app/orchestrator/deals/` with `derive_pac_schedule(...)` (lower envelope of two PSA projections) and `derive_tac_schedule(...)`. Runtime never reads speeds — only `schedule_contract`. Proposal collapses to just dropping the redundant `schedule_speed_target` field. |
 | **L** | **Drop `PaymentStyle.CONCURRENT`** | **DOC WAS WRONG** | The current enum has only `SEQUENTIAL \| PRO_RATA`. `CONCURRENT` was never in the code. **No code change needed.** |
 | M | Reserve / recourse rule consolidation | Confirmed with refinement | `PAY_FROM_RESERVE_INTEREST` decrements bond's `int_shortfall` ledger and accumulates `opt_interest` (`runtime.py:1635-1642`). `PAY_FROM_RESERVE_PRINCIPAL` increments bond principal/balance. `PAY_RECOURSE_*` draws against pseudo-bond capacity. **Full collapse needs a `coverage_mode: NORMAL \| INTEREST_SHORTFALL \| PRINCIPAL_ACCELERATION` field** to preserve the shortfall-ledger semantics. Recourse pseudo-bonds are also valid `from_sources` since they have a balance to decrement. Recommend phased migration. |
@@ -2103,8 +2103,8 @@ class BondDef(BaseModel):
     # Sizing — Round 3 J: rename to `notional` and `notional_pct_of_collateral`.
     # "Notional" is the universal term (covers IOs which have notional but no principal flow)
     # and "size" is ambiguous.
-    size_dollars: float | None            # → notional
-    size_pct: float | None                # → notional_pct_of_collateral (0..1, not 0..100)
+    notional: float | None
+    notional_pct_of_collateral: float | None   # 0..100 (percent)
 
     # Maturity / accrual
     maturity_date: date | None
@@ -2467,7 +2467,7 @@ collateral_groups:
 bonds:
   # Aggregate Group I (PAC I + IO/PO)
   - { name: PA,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1,
-      coupon: 5.5, size_dollars: 33710000, schedule_contract: [...],
+      coupon: 5.5, notional: 33710000, schedule_contract: [...],
       support_tranches: [WA, WB, WC, WD, WE, WG, PO] }
   - { name: PB,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1, ... }
   - { name: PC,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1, ... }

@@ -68,7 +68,7 @@ def _make_test_deal(
                 tranche_type=TrancheType.SEQUENTIAL,
                 coupon_type=CouponType.FIXED,
                 coupon=5.5,
-                size_pct=100.0,
+                notional_pct_of_collateral=100.0,
             ),
             BondDef(
                 name="R",

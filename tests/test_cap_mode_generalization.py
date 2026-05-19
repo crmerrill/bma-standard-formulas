@@ -75,7 +75,7 @@ def _flat_pool(initial_balance: float, monthly_principal: float, n_periods: int,
 
 class TestCapModeEnum:
     def test_all_four_values_accepted(self):
-        bond = BondDef(name="A", tranche_type=TrancheType.PAC, coupon=4.0, size_dollars=1_000_000.0)
+        bond = BondDef(name="A", tranche_type=TrancheType.PAC, coupon=4.0, notional=1_000_000.0)
         for mode in (CapMode.PLANNED, CapMode.SCHEDULED, CapMode.TARGETED, CapMode.NONE):
             rule = RuleNode(
                 rule_id=f"r_{mode.value}",
@@ -150,7 +150,7 @@ class TestRuntimeHonorsCapMode:
                     tranche_type=TrancheType.PAC,
                     tranche_behavior=TrancheBehavior.PAC,
                     coupon=4.0,
-                    size_dollars=10_000_000.0,
+                    notional=10_000_000.0,
                     schedule_contract=[
                         {"period": p, "target_balance": max(0.0, 10_000_000.0 - p * 100_000.0)}
                         for p in range(1, 100)
@@ -161,7 +161,7 @@ class TestRuntimeHonorsCapMode:
                     name="S",
                     tranche_type=TrancheType.SUPPORT,
                     coupon=5.0,
-                    size_dollars=2_000_000.0,
+                    notional=2_000_000.0,
                 ),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
@@ -227,10 +227,10 @@ class TestStructuringVerificationCleanupWarnings:
             deal_name="VerifyCleanup",
             bonds=[
                 BondDef(name="PAC", tranche_type=TrancheType.PAC, tranche_behavior=TrancheBehavior.PAC,
-                        coupon=4.0, size_dollars=10_000_000.0,
+                        coupon=4.0, notional=10_000_000.0,
                         schedule_contract=[{"period": 1, "target_balance": 9_500_000.0}],
                         support_tranches=["S"]),
-                BondDef(name="S", tranche_type=TrancheType.SUPPORT, coupon=5.0, size_dollars=2_000_000.0),
+                BondDef(name="S", tranche_type=TrancheType.SUPPORT, coupon=5.0, notional=2_000_000.0),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=rules,
@@ -254,10 +254,10 @@ class TestStructuringVerificationCleanupWarnings:
             deal_name="NoCleanup",
             bonds=[
                 BondDef(name="PAC", tranche_type=TrancheType.PAC, tranche_behavior=TrancheBehavior.PAC,
-                        coupon=4.0, size_dollars=10_000_000.0,
+                        coupon=4.0, notional=10_000_000.0,
                         schedule_contract=[{"period": 1, "target_balance": 9_500_000.0}],
                         support_tranches=["S"]),
-                BondDef(name="S", tranche_type=TrancheType.SUPPORT, coupon=5.0, size_dollars=2_000_000.0),
+                BondDef(name="S", tranche_type=TrancheType.SUPPORT, coupon=5.0, notional=2_000_000.0),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[

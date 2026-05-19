@@ -9,8 +9,8 @@ interface BondDefIR {
   name: string;
   tranche_type: string;
   coupon: number;
-  size_pct: number;
-  size_dollars: number;
+  notional_pct_of_collateral: number;
+  notional: number;
   is_bond: boolean;
   is_pseudo: boolean;
   coupon_type: string;
@@ -622,8 +622,8 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
             ? "ACCRETION_DIRECTED"
             : "SEQUENTIAL",
       coupon: info.coupon || 0,
-      size_pct: Number(info.sizePctPool || 0),
-      size_dollars: info.faceAmt || 0,
+      notional_pct_of_collateral: Number(info.sizePctPool || 0),
+      notional: info.faceAmt || 0,
       is_bond: true,
       is_pseudo: info.faceAmt === 0,
       coupon_type: info.bondType || "FIXED",
@@ -653,7 +653,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
   // Always add residual
   if (!ctx.bonds.has("R") && !bonds.find((b) => b.tranche_type === "RESIDUAL")) {
     bonds.push({
-      name: "R", tranche_type: "RESIDUAL", coupon: 0, size_pct: 0, size_dollars: 0,
+      name: "R", tranche_type: "RESIDUAL", coupon: 0, notional_pct_of_collateral: 0, notional: 0,
       is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
       pay_mode: "CASH_PAY",
       tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
@@ -682,7 +682,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
   for (const fee of ctx.fees) {
     if (!bondNames.has(fee.name)) {
       bonds.push({
-        name: fee.name, tranche_type: "PSEUDO", coupon: 0, size_pct: 0, size_dollars: 0,
+        name: fee.name, tranche_type: "PSEUDO", coupon: 0, notional_pct_of_collateral: 0, notional: 0,
         is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
         pay_mode: "CASH_PAY",
         tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,

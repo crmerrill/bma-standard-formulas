@@ -138,7 +138,7 @@ class KnobSelectorKind(str, Enum):
     """How a knob pattern selects which deal_knobs/bond fields to tune."""
 
     BOND_COUPON = "BOND_COUPON"          # all cash-coupon bonds (excl IO/PO/residual)
-    BOND_SIZE = "BOND_SIZE"              # tranche `size_dollars`
+    BOND_SIZE = "BOND_SIZE"              # tranche `notional`
     DEAL_KNOB = "DEAL_KNOB"              # explicit `deal_knobs.<key>`
     FEE_RATE = "FEE_RATE"                # fees[].rate_pct
     EXPLICIT_LIST = "EXPLICIT_LIST"      # caller supplies a fixed list

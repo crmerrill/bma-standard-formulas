@@ -60,6 +60,20 @@ class CollateralGroupDef(BaseModel):
 
 class BondDef(BaseModel):
     """Immutable definition of a single tranche in the deal structure."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_size_fields(cls, value: Any) -> Any:
+        # Hard cut (Phase 2b): do not accept legacy sizing field names.
+        if isinstance(value, dict):
+            legacy = [k for k in ("size_dollars", "size_pct") if k in value]
+            if legacy:
+                raise ValueError(
+                    "BondDef legacy size fields are no longer supported; "
+                    "use notional and notional_pct_of_collateral."
+                )
+        return value
+
     name: str = Field(min_length=1)
     tranche_type: TrancheType = TrancheType.SEQUENTIAL
     is_bond: bool = True
@@ -79,8 +93,8 @@ class BondDef(BaseModel):
     floor: Rate | None = None
     inverse_multiplier: float | None = None
 
-    size_dollars: Dollars | None = None
-    size_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+    notional: Dollars | None = None
+    notional_pct_of_collateral: float | None = Field(default=None, ge=0.0, le=100.0)
 
     maturity_date: date | None = None
     day_count: DayCount = DayCount.THIRTY_360

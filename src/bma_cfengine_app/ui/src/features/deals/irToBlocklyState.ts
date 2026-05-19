@@ -48,8 +48,8 @@ interface IRBond {
   tranche_type?: string;
   tranche_behavior?: string;
   coupon?: number | null;
-  size_dollars?: number;
-  size_pct?: number | null;
+  notional?: number;
+  notional_pct_of_collateral?: number | null;
   pay_mode?: string;
   coupon_type?: string;
   index_name?: string | null;
@@ -564,8 +564,8 @@ function _bondTargetBlock(bond: IRBond): BlocklyBlock {
       NAME: bond.name,
       BOND_TYPE: bond.coupon_type === "FLOATING" ? "FLOATING" : "FIXED",
       PAY_MODE: bond.pay_mode ?? "CASH_PAY",
-      FACE_AMT: bond.size_dollars ?? 0,
-      SIZE_PCT_POOL: bond.size_pct ?? 0,
+      FACE_AMT: bond.notional ?? 0,
+      SIZE_PCT_POOL: bond.notional_pct_of_collateral ?? 0,
       // Bonds with coupon_type=ZERO (PO classes) carry coupon=null in
       // the IR; show 0 in the UI so the field doesn't disappear.
       COUPON: bond.coupon ?? 0,

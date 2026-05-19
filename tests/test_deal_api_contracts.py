@@ -444,7 +444,7 @@ def test_ensure_canonical_deal_normalizes_legacy_enums(monkeypatch):
                         "tranche_type": "SEQUENTIAL",
                         "coupon_type": "FIXED",
                         "coupon": 5.0,
-                        "size_dollars": 100.0,
+                        "notional": 100.0,
                     }
                 ],
                 "accounts": [],
@@ -496,7 +496,7 @@ def test_post_derive_psa_schedules_contract():
         schedule_model_type=PrepayModelType.PSA,
         schedule_speed_low=100.0,
         schedule_speed_high=250.0,
-        size_dollars=4_000_000.0,
+        notional=4_000_000.0,
         support_tranches=[sup.name],
     )
     deal = _one_rule_deal([pac, sup])

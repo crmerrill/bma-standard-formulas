@@ -253,13 +253,13 @@ def _resolve_bond_size_knobs(
             and bond.name not in pattern.include_only_tranche_ids
         ):
             continue
-        size = float(bond.size_dollars or 0.0)
+        size = float(bond.notional or 0.0)
         if size <= 0.0:
             continue
         out.append(
             ResolvedKnob(
                 knob_id=f"size_{bond.name}",
-                knob_path=f"bonds[{bond.name}].size_dollars",
+                knob_path=f"bonds[{bond.name}].notional",
                 label=f"Class {bond.name} size",
                 unit="$",
                 current_value=size,

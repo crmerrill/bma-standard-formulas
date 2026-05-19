@@ -380,7 +380,7 @@ export default function PropertyPanel({
     wam_months: number;
   } | null>(null);
   const [bondValidationError, setBondValidationError] = useState<string | null>(null);
-  const [solveDriver, setSolveDriver] = useState<"ce" | "size_dollars" | "size_pct_pool">("ce");
+  const [solveDriver, setSolveDriver] = useState<"ce" | "notional" | "notional_pct_pool">("ce");
 
   const refresh = useCallback(() => {
     const { bonds: b, accounts: a, residuals: r, triggers: t, fees: f, splits: s } = scanWorkspace(workspace);
@@ -943,8 +943,8 @@ export default function PropertyPanel({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSolveDriver("size_dollars")}
-                  className={solveDriver === "size_dollars"
+                  onClick={() => setSolveDriver("notional")}
+                  className={solveDriver === "notional"
                     ? "px-2 py-1 text-xs bg-primary/20 text-primary"
                     : "px-2 py-1 text-xs text-muted-foreground hover:text-foreground"}
                 >
@@ -952,8 +952,8 @@ export default function PropertyPanel({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSolveDriver("size_pct_pool")}
-                  className={solveDriver === "size_pct_pool"
+                  onClick={() => setSolveDriver("notional_pct_pool")}
+                  className={solveDriver === "notional_pct_pool"
                     ? "px-2 py-1 text-xs bg-primary/20 text-primary"
                     : "px-2 py-1 text-xs text-muted-foreground hover:text-foreground"}
                 >
@@ -1009,25 +1009,25 @@ export default function PropertyPanel({
                       type="number"
                       value={b.sizeDollars}
                       onChange={(e) => {
-                        if (solveDriver !== "size_dollars") return;
+                        if (solveDriver !== "notional") return;
                         const next = parseFloat(e.target.value) || 0;
                         solveStackForBondSize(b.name, next);
                       }}
                       className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
                       style={MONO}
-                      disabled={solveDriver !== "size_dollars"}
+                      disabled={solveDriver !== "notional"}
                     />
                     <input
                       type="number"
                       value={b.sizePctPool}
                       onChange={(e) => {
-                        if (solveDriver !== "size_pct_pool") return;
+                        if (solveDriver !== "notional_pct_pool") return;
                         const pct = Math.max(0, parseFloat(e.target.value) || 0);
                         solveStackForBondSize(b.name, (pct * poolNotional) / 100);
                       }}
                       className="w-full px-1.5 py-1 bg-input-background border border-border rounded text-foreground"
                       style={MONO}
-                      disabled={solveDriver !== "size_pct_pool"}
+                      disabled={solveDriver !== "notional_pct_pool"}
                     />
                     <input
                       type="number"

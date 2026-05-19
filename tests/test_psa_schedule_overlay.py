@@ -20,8 +20,8 @@ def _support_bond(name: str = "SUP") -> BondDef:
     return BondDef(
         name=name,
         tranche_type=TrancheType.SUPPORT,
-        size_dollars=1_000_000.0,
-        size_pct=0.0,
+        notional=1_000_000.0,
+        notional_pct_of_collateral=0.0,
     )
 
 
@@ -56,7 +56,7 @@ def test_build_overlay_pac_populates_schedule():
         schedule_model_type=PrepayModelType.PSA,
         schedule_speed_low=100.0,
         schedule_speed_high=250.0,
-        size_dollars=4_000_000.0,
+        notional=4_000_000.0,
         support_tranches=[sup.name],
     )
     deal = _one_rule_deal([pac, sup])
@@ -83,7 +83,7 @@ def test_build_overlay_skips_non_psa_model():
         schedule_model_type=PrepayModelType.CPR,
         schedule_speed_low=50.0,
         schedule_speed_high=100.0,
-        size_dollars=1_000_000.0,
+        notional=1_000_000.0,
         support_tranches=[sup.name],
     )
     deal = _one_rule_deal([bond, sup])
@@ -102,7 +102,7 @@ def test_build_overlay_empty_pool_returns_empty():
         schedule_model_type=PrepayModelType.PSA,
         schedule_speed_low=100.0,
         schedule_speed_high=250.0,
-        size_dollars=1.0,
+        notional=1.0,
         support_tranches=[sup.name],
     )
     deal = _one_rule_deal([bond, sup])

@@ -472,7 +472,7 @@ class TestGeneralizedRuntime:
                     name="A",
                     tranche_type=TrancheType.SEQUENTIAL,
                     tranche_behavior=TrancheBehavior.PAC,
-                    size_dollars=80_000_000.0,
+                    notional=80_000_000.0,
                     schedule_contract=[{"period": 1, "target_principal": 500_000.0}],
                     schedule_tolerance_bps=5.0,
                     support_tranches=["B"],
@@ -480,7 +480,7 @@ class TestGeneralizedRuntime:
                 BondDef(
                     name="B",
                     tranche_type=TrancheType.SEQUENTIAL,
-                    size_dollars=10_000_000.0,
+                    notional=10_000_000.0,
                 ),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
@@ -510,7 +510,7 @@ class TestGeneralizedRuntime:
         deal = DealDefinition(
             deal_name="ZSupportDiag",
             bonds=[
-                BondDef(name="B", tranche_type=TrancheType.SEQUENTIAL, size_dollars=30_000_000.0),
+                BondDef(name="B", tranche_type=TrancheType.SEQUENTIAL, notional=30_000_000.0),
                 BondDef(
                     name="Z",
                     tranche_type=TrancheType.Z_BOND,
@@ -518,7 +518,7 @@ class TestGeneralizedRuntime:
                     pay_mode=PayMode.PIK,
                     z_accrual_enabled=True,
                     supported_by_tranches=["B"],
-                    size_dollars=10_000_000.0,
+                    notional=10_000_000.0,
                 ),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
@@ -561,7 +561,7 @@ class TestGeneralizedRuntime:
                     tranche_behavior=TrancheBehavior.Z,
                     pay_mode=PayMode.PIK,
                     z_accrual_enabled=True,
-                    size_dollars=10_000_000.0,
+                    notional=10_000_000.0,
                     coupon=12.0,
                 ),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
@@ -582,15 +582,15 @@ class TestGeneralizedRuntime:
         assert len(z_rows) >= 2
         assert z_rows[1].end_balance > z_rows[1].begin_balance
 
-    def test_dollar_face_takes_precedence_over_size_pct(self):
+    def test_dollar_face_takes_precedence_over_notional_pct(self):
         deal = DealDefinition(
             deal_name="DollarFacePriority",
             bonds=[
                 BondDef(
                     name="A",
                     tranche_type=TrancheType.SEQUENTIAL,
-                    size_dollars=21_000_000.0,
-                    size_pct=40.0,
+                    notional=21_000_000.0,
+                    notional_pct_of_collateral=40.0,
                     coupon=0.0,
                 ),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
@@ -622,7 +622,7 @@ class TestGeneralizedRuntime:
         deal = DealDefinition(
             deal_name="MaxAmountExpr",
             bonds=[
-                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, size_pct=100.0, coupon=0.0),
+                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, notional_pct_of_collateral=100.0, coupon=0.0),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[
@@ -718,7 +718,7 @@ class TestGeneralizedRuntime:
         deal = DealDefinition(
             deal_name="TriggerCalcRef",
             bonds=[
-                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, size_pct=100.0, coupon=0.0),
+                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, notional_pct_of_collateral=100.0, coupon=0.0),
                 BondDef(name="TRIG", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
             ],

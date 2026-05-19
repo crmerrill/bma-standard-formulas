@@ -73,12 +73,12 @@ def _set_knob_value(deal: DealDefinition, knob_path: str, value: float) -> None:
 
 
 def _apply_knobs_to_bond_sizes(deal: DealDefinition) -> None:
-    """Sync deal_knobs to bond size_pct/coupon fields."""
+    """Sync deal_knobs to bond notional_pct_of_collateral/coupon fields."""
     for bond in deal.bonds:
         pct_key = f"class_{bond.name.lower()}_pctbal"
         cpn_key = f"class_{bond.name.lower()}_coupon"
         if pct_key in deal.deal_knobs:
-            object.__setattr__(bond, "size_pct", float(deal.deal_knobs[pct_key]))
+            object.__setattr__(bond, "notional_pct_of_collateral", float(deal.deal_knobs[pct_key]))
         if cpn_key in deal.deal_knobs:
             object.__setattr__(bond, "coupon", float(deal.deal_knobs[cpn_key]))
 

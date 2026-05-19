@@ -227,8 +227,8 @@ def _tranche_face(bond_def: BondDef, rows: list[BondCashflowRow]) -> float:
     """Face for the YTM solve. For most bonds = size at issuance; for
     residual = end-of-deal cumulative cashflow (residual has no face).
     """
-    if bond_def.size_dollars and bond_def.size_dollars > 0:
-        return float(bond_def.size_dollars)
+    if bond_def.notional and bond_def.notional > 0:
+        return float(bond_def.notional)
     # Fallback: first non-zero begin_balance.
     for r in rows:
         if r.begin_balance > 0:
@@ -530,7 +530,7 @@ def compute_carry_tieout(
             CarryTieoutTrancheRow(
                 scenario_name=scenario.scenario_name,
                 tranche_id=bond_def.name,
-                notional=float(bond_def.size_dollars or 0.0),
+                notional=float(bond_def.notional or 0.0),
                 coupon_pct=float(bond_def.coupon or 0.0),
                 ytm_cbe_pct=ytm,
                 modified_duration_years=dur,

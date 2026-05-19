@@ -47,7 +47,7 @@ def build_tranche_behavior_diagnostics(
                     cur_balance = float(point.get("target_balance") or 0.0)
                     if prev_balance is None:
                         # First entry: assume bond was at face before this period.
-                        face = float(getattr(bond, "size_dollars", 0.0) or 0.0)
+                        face = float(getattr(bond, "notional", 0.0) or 0.0)
                         schedule_map[period] = max(0.0, face - cur_balance)
                     else:
                         schedule_map[period] = max(0.0, prev_balance - cur_balance)

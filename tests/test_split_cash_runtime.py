@@ -103,14 +103,14 @@ def _two_zero_coupon_bonds(
             tranche_type=TrancheType.SEQUENTIAL,
             tranche_behavior=TrancheBehavior.SEQUENTIAL,
             coupon_type=CouponType.ZERO,
-            size_dollars=face_a,
+            notional=face_a,
         ),
         BondDef(
             name=name_b,
             tranche_type=TrancheType.SEQUENTIAL,
             tranche_behavior=TrancheBehavior.SEQUENTIAL,
             coupon_type=CouponType.ZERO,
-            size_dollars=face_b,
+            notional=face_b,
         ),
         BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
     ]
@@ -236,14 +236,14 @@ class TestSplitManyToOne:
                     tranche_type=TrancheType.SEQUENTIAL,
                     tranche_behavior=TrancheBehavior.SEQUENTIAL,
                     coupon_type=CouponType.ZERO,
-                    size_dollars=100_000.0,
+                    notional=100_000.0,
                 ),
                 BondDef(
                     name="B",
                     tranche_type=TrancheType.SEQUENTIAL,
                     tranche_behavior=TrancheBehavior.SEQUENTIAL,
                     coupon_type=CouponType.ZERO,
-                    size_dollars=900_000.0,
+                    notional=900_000.0,
                 ),
                 BondDef(
                     name="R",

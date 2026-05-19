@@ -39,9 +39,9 @@ type PoolDerivationCtx = {
 };
 
 function _faceUsd(bond: Record<string, unknown>, poolBalance: number): number {
-  const sz = bond.size_dollars;
+  const sz = bond.notional;
   if (typeof sz === "number" && sz > 0) return sz;
-  const pct = bond.size_pct;
+  const pct = bond.notional_pct_of_collateral;
   if (typeof pct === "number" && pct > 0 && poolBalance > 0) return (pct / 100) * poolBalance;
   return 0;
 }

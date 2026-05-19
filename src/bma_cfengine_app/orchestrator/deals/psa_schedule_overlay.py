@@ -24,10 +24,14 @@ class PoolDerivationInputs:
 
 
 def _original_face_usd(bond: BondDef, pool_balance: float) -> float:
-    if bond.size_dollars is not None and float(bond.size_dollars) > 0:
-        return float(bond.size_dollars)
-    if bond.size_pct is not None and float(bond.size_pct) > 0 and pool_balance > 0:
-        return float(bond.size_pct) / 100.0 * pool_balance
+    if bond.notional is not None and float(bond.notional) > 0:
+        return float(bond.notional)
+    if (
+        bond.notional_pct_of_collateral is not None
+        and float(bond.notional_pct_of_collateral) > 0
+        and pool_balance > 0
+    ):
+        return float(bond.notional_pct_of_collateral) / 100.0 * pool_balance
     return 0.0
 
 

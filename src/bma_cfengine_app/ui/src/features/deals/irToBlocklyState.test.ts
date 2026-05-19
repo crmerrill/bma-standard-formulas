@@ -3,9 +3,9 @@ import { synthesizeWorkspaceState, type IRForSynthesis } from "./irToBlocklyStat
 
 const SIMPLE_DEAL: IRForSynthesis = {
   bonds: [
-    { name: "A", coupon: 5, size_dollars: 21_201_742, size_pct: 50, pay_mode: "CASH_PAY", coupon_type: "FIXED" },
-    { name: "B", coupon: 6, size_dollars: 4_240_348, size_pct: 10, pay_mode: "CASH_PAY", coupon_type: "FIXED" },
-    { name: "C", coupon: 7, size_dollars: 8_480_696, size_pct: 20, pay_mode: "CASH_PAY", coupon_type: "FIXED" },
+    { name: "A", coupon: 5, notional: 21_201_742, notional_pct_of_collateral: 50, pay_mode: "CASH_PAY", coupon_type: "FIXED" },
+    { name: "B", coupon: 6, notional: 4_240_348, notional_pct_of_collateral: 10, pay_mode: "CASH_PAY", coupon_type: "FIXED" },
+    { name: "C", coupon: 7, notional: 8_480_696, notional_pct_of_collateral: 20, pay_mode: "CASH_PAY", coupon_type: "FIXED" },
     { name: "R", tranche_type: "RESIDUAL" },
   ],
   fees: [
@@ -101,7 +101,7 @@ describe("synthesizeWorkspaceState", () => {
   it("emits a residual_target for residual bonds", () => {
     const dealWithResidual: IRForSynthesis = {
       bonds: [
-        { name: "A", coupon: 5, size_dollars: 80_000_000 },
+        { name: "A", coupon: 5, notional: 80_000_000 },
         { name: "R", tranche_type: "RESIDUAL" },
       ],
       waterfall_rules: [
@@ -125,7 +125,7 @@ describe("synthesizeWorkspaceState", () => {
 
   it("wraps trigger-gated rules in a trigger_wrapper", () => {
     const dealWithTrigger: IRForSynthesis = {
-      bonds: [{ name: "A", coupon: 5, size_dollars: 80_000_000 }],
+      bonds: [{ name: "A", coupon: 5, notional: 80_000_000 }],
       triggers: [
         { name: "CumLossTrigger", metric_type: "CUMULATIVE_LOSS", threshold_value: 0.05 },
       ],
@@ -156,8 +156,8 @@ describe("synthesizeWorkspaceState", () => {
   it("groups consecutive trigger-gated rules under one wrapper", () => {
     const deal: IRForSynthesis = {
       bonds: [
-        { name: "A", coupon: 5, size_dollars: 80_000_000 },
-        { name: "B", coupon: 6, size_dollars: 10_000_000 },
+        { name: "A", coupon: 5, notional: 80_000_000 },
+        { name: "B", coupon: 6, notional: 10_000_000 },
       ],
       triggers: [{ name: "T", metric_type: "CUMULATIVE_LOSS", threshold_value: 0.05 }],
       waterfall_rules: [
@@ -193,7 +193,7 @@ describe("synthesizeWorkspaceState", () => {
 
   it("skips unsupported rule types (PAC/TAC/Z) without crashing", () => {
     const dealWithPAC: IRForSynthesis = {
-      bonds: [{ name: "A", coupon: 5, size_dollars: 80_000_000 }],
+      bonds: [{ name: "A", coupon: 5, notional: 80_000_000 }],
       waterfall_rules: [
         {
           rule_id: "fee0",
@@ -247,7 +247,7 @@ describe("synthesizeWorkspaceState", () => {
     it("emits a residual_target for PAY_RESIDUAL rules with PAY_TYPE=REMAINING", () => {
       const deal: IRForSynthesis = {
         bonds: [
-          { name: "A", coupon: 5, size_dollars: 80_000_000 },
+          { name: "A", coupon: 5, notional: 80_000_000 },
           { name: "R", tranche_type: "RESIDUAL", is_pseudo: true },
         ],
         waterfall_rules: [
@@ -276,7 +276,7 @@ describe("synthesizeWorkspaceState", () => {
             tranche_type: "PAC",
             tranche_behavior: "PAC",
             coupon: 5.5,
-            size_dollars: 33_710_000,
+            notional: 33_710_000,
             coupon_type: "FIXED",
             schedule_contract: [
               { period: 1, target_balance: 33_710_000 },
@@ -315,7 +315,7 @@ describe("synthesizeWorkspaceState", () => {
             tranche_type: "Z_BOND",
             tranche_behavior: "Z",
             coupon: 5.5,
-            size_dollars: 5_000_000,
+            notional: 5_000_000,
             pay_mode: "PIK",
             z_accrual_enabled: true,
             supported_by_tranches: ["TA", "TB"],
@@ -348,7 +348,7 @@ describe("synthesizeWorkspaceState", () => {
             tranche_type: "IO",
             tranche_behavior: "SEQUENTIAL",
             coupon: 5.5,
-            size_dollars: 11_925_424,
+            notional: 11_925_424,
             tracks_bonds: { balance: ["DO"] },
           },
         ],
@@ -371,7 +371,7 @@ describe("synthesizeWorkspaceState", () => {
 
     it("preserves cap_mode=NONE on cleanup rules", () => {
       const deal: IRForSynthesis = {
-        bonds: [{ name: "PA", coupon: 5.5, size_dollars: 33_710_000 }],
+        bonds: [{ name: "PA", coupon: 5.5, notional: 33_710_000 }],
         waterfall_rules: [
           {
             rule_id: "r_prin_PA_uncapped",
@@ -395,7 +395,7 @@ describe("synthesizeWorkspaceState", () => {
         collateral_groups: [{ group_id: "GROUP_1" }],
         bonds: [
           {
-            name: "PA", coupon: 5.5, size_dollars: 33_710_000,
+            name: "PA", coupon: 5.5, notional: 33_710_000,
             group_id: "GROUP_1",
           },
         ],
@@ -424,8 +424,8 @@ describe("synthesizeWorkspaceState", () => {
           { group_id: "GROUP_2" },
         ],
         bonds: [
-          { name: "PA", coupon: 5.5, size_dollars: 33_710_000, group_id: "GROUP_1" },
-          { name: "BA", coupon: 5.5, size_dollars: 100_000_000, group_id: "GROUP_2" },
+          { name: "PA", coupon: 5.5, notional: 33_710_000, group_id: "GROUP_1" },
+          { name: "BA", coupon: 5.5, notional: 100_000_000, group_id: "GROUP_2" },
         ],
         waterfall_rules: [
           {
@@ -476,7 +476,7 @@ describe("synthesizeWorkspaceState", () => {
             tranche_type: "PAC",
             tranche_behavior: "PAC",
             coupon: 5.5,
-            size_dollars: 33_710_000,
+            notional: 33_710_000,
             group_id: "GROUP_1",
             schedule_contract: [{ period: 1, target_balance: 33_710_000 }],
             support_tranches: ["WA"],
@@ -486,7 +486,7 @@ describe("synthesizeWorkspaceState", () => {
             tranche_type: "Z_BOND",
             tranche_behavior: "Z",
             coupon: 5.5,
-            size_dollars: 5_000_000,
+            notional: 5_000_000,
             pay_mode: "PIK",
             group_id: "GROUP_1",
             z_accrual_enabled: true,
@@ -495,7 +495,7 @@ describe("synthesizeWorkspaceState", () => {
           {
             name: "BA",
             coupon: 5.5,
-            size_dollars: 100_000_000,
+            notional: 100_000_000,
             group_id: "GROUP_2",
           },
           { name: "R", tranche_type: "RESIDUAL", is_pseudo: true },
