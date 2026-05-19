@@ -138,6 +138,17 @@ class BondDef(BaseModel):
 
 class AccountDef(BaseModel):
     """Reserve, prefunding, revolving, or payment account."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_account_type(cls, value: Any) -> Any:
+        # Hard cut (Phase 2a): do not silently migrate legacy field names.
+        if isinstance(value, dict) and "account_type" in value:
+            raise ValueError(
+                "AccountDef.account_type is no longer supported; use account_category."
+            )
+        return value
+
     name: str = Field(min_length=1)
     account_category: AccountCategory = AccountCategory.RESERVE
     starting_amount: Dollars = 0.0

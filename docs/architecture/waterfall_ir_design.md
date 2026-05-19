@@ -1113,8 +1113,7 @@ migration (Phases 1d–1h) lands.
 
 **Implemented (Phase 2a):** enum `AccountCategory` (formerly `AccountType`) with
 `RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT`. IR field
-`account_category` (legacy JSON key `account_type` migrated in
-`migrate_deal_payload`).
+`account_category` with a **hard cut**: legacy `account_type` is rejected.
 
 (The earlier IR reference in this doc listed the wrong values —
 `CUSTODIAL | DISTRIBUTION` — and has been corrected.)
@@ -1162,7 +1161,7 @@ For example:
 | YSOC account | A `SPREAD_ACCOUNT` (label) feeding a `SPLIT_CASH` that boosts under-WAC bond cash |
 
 **Status:** Renamed in code (`AccountCategory`, `account_category`) with
-payload migration from `account_type`. No runtime branching change.
+hard-cut enforcement (legacy `account_type` rejected). No runtime branching change.
 
 If a future deal needs runtime behavior keyed on account type
 (e.g., "PREFUNDING accounts auto-amortize without explicit rules"),
@@ -1318,7 +1317,7 @@ Test coverage in `tests/test_account_minimum_basis.py`:
 | Built-in token `COLLATERAL` | (deleted) | Alias for `CASH` |
 | Built-in token `GROUP_<id>_COLLATERAL` | (deleted) | Alias for `GROUP_<id>_CASH` |
 | `INT_CASH` / `PRIN_CASH` (and group variants) | **Phase 1c (May 2026):** `ACT_INT` / `ACT_PRIN`. **Phase 2 (planned):** `COLL_INT` / `COLL_PRIN` under the full `COLL_*` taxonomy | Phase 1c aligns IR with `BMAActualCashflow` field names; Phase 2 adds 11 decomposition tokens + 3 balance refs. See proposal N updates and Part 2 "Built-in source/target tokens" |
-| ~~`AccountType` / `account_type` on `AccountDef`~~ | **`AccountCategory` / `account_category`** | **Done (Phase 2a)** — passthrough label; `migrate_deal_payload` rewrites legacy `account_type`. |
+| ~~`AccountType` / `account_type` on `AccountDef`~~ | **`AccountCategory` / `account_category`** | **Done (Phase 2a)** — passthrough label with hard-cut schema enforcement (`account_type` rejected). |
 | ~~`minimum_basis` and `starting_basis` ignored by runtime~~ | Per-period recomputation honoring the enum value | **FIXED (May 2026)** — proposal Q. `_allocate_account_workspace` + `_refresh_note_balance_minimums` in runtime.py; covered by `tests/test_account_minimum_basis.py` (9 tests, all passing). |
 
 Net schema impact:
@@ -1361,7 +1360,7 @@ against the actual runtime + schemas. Findings:
 | **L** | **Drop `PaymentStyle.CONCURRENT`** | **DOC WAS WRONG** | The current enum has only `SEQUENTIAL \| PRO_RATA`. `CONCURRENT` was never in the code. **No code change needed.** |
 | M | Reserve / recourse rule consolidation | Confirmed with refinement | `PAY_FROM_RESERVE_INTEREST` decrements bond's `int_shortfall` ledger and accumulates `opt_interest` (`runtime.py:1635-1642`). `PAY_FROM_RESERVE_PRINCIPAL` increments bond principal/balance. `PAY_RECOURSE_*` draws against pseudo-bond capacity. **Full collapse needs a `coverage_mode: NORMAL \| INTEREST_SHORTFALL \| PRINCIPAL_ACCELERATION` field** to preserve the shortfall-ledger semantics. Recourse pseudo-bonds are also valid `from_sources` since they have a balance to decrement. Recommend phased migration. |
 | N | Drop `COLLATERAL` aliases; rename `INT_CASH`/`PRIN_CASH` | **SHIPPED Phase 1c (May 2026)** | Renamed to `ACT_INT`/`ACT_PRIN` (BMA-native) per user directive, not `CASH_INT`/`CASH_PRIN`. `COLLATERAL` aliases dropped. Phase 2 will advance to full `COLL_*` taxonomy with decomposition tokens (post-CC research May 2026). |
-| O | Rename `AccountType` → `AccountCategory` | **Done** | Enum + IR/output field; `migrate_deal_payload` renames legacy `account_type`. |
+| O | Rename `AccountType` → `AccountCategory` | **Done** | Enum + IR/output field with hard cut; legacy `account_type` is rejected. |
 | Q | Implement `minimum_basis`/`starting_basis` per-period | **SHIPPED** (May 2026) | Done. |
 
 ### PAC/TAC schedule derivation (your earlier question)
@@ -2366,7 +2365,7 @@ class AccountDef(BaseModel):
     # VERIFIED against runtime.py: account_category is a passthrough display label only.
     # The runtime stores it at init and copies it to DealAccountRow output;
     # there is NO `if account_category == X` branch anywhere. Phase 2a:
-    # AccountCategory enum + account_category field (legacy JSON: account_type).
+    # AccountCategory enum + account_category field (hard cut; legacy account_type rejected).
     account_category: AccountCategory     # RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT
     starting_amount: float                # $ amount at closing
     starting_pct: float | None            # OR % of <basis quantity> at period 0

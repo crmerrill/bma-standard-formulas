@@ -779,7 +779,7 @@ class TestGeneralizedRuntime:
         assert "max_amount_expr" in migrated["waterfall_rules"][0]
 
 
-def test_migration_renames_account_type_to_account_category():
+def test_account_type_field_is_rejected_after_hard_cut():
     payload = {
         "deal_name": "Acct",
         "bonds": [{"name": "R", "tranche_type": "RESIDUAL", "is_bond": False, "is_pseudo": True}],
@@ -797,6 +797,5 @@ def test_migration_renames_account_type_to_account_category():
         ],
     }
     migrated = migrate_deal_payload(payload)
-    acc = migrated["accounts"][0]
-    assert acc["account_category"] == "RESERVE"
-    assert "account_type" not in acc
+    with pytest.raises(Exception, match="account_category"):
+        DealDefinition.model_validate(migrated)
