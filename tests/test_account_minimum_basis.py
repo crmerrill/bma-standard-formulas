@@ -25,7 +25,7 @@ import pytest
 
 from bma_standard_formulas.deals.runtime import run_deal
 from bma_standard_formulas.deals.schemas.common import (
-    AccountType,
+    AccountCategory,
     CouponType,
     MinimumBasis,
     RuleType,
@@ -80,7 +80,7 @@ def _make_test_deal(
         accounts=[
             AccountDef(
                 name="ReserveAcct",
-                account_type=AccountType.RESERVE,
+                account_category=AccountCategory.RESERVE,
                 starting_amount=starting_amount,
                 starting_pct=starting_pct,
                 starting_basis=starting_basis,

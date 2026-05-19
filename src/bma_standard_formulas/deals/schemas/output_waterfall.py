@@ -11,7 +11,7 @@ class DealAccountRow(BaseModel):
     """Single period of a single account (long-format grain)."""
     scenario_name: str
     account_id: str
-    account_type: str
+    account_category: str
     period: int = Field(ge=0)
     date: Optional[_dt.date] = None
 

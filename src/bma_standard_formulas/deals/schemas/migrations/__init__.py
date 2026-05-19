@@ -28,6 +28,12 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(trigger, dict):
             trigger.setdefault("calculation_ref", None)
             trigger.setdefault("comparison_ref", None)
+    # Phase 2a: AccountType / account_type renamed to AccountCategory / account_category.
+    for account in migrated.get("accounts", []) or []:
+        if isinstance(account, dict):
+            if "account_category" not in account and "account_type" in account:
+                account["account_category"] = account["account_type"]
+                del account["account_type"]
     for bond in migrated.get("bonds", []) or []:
         if isinstance(bond, dict):
             bond.setdefault("pay_mode", "CASH_PAY")

@@ -35,7 +35,7 @@ interface BondDefIR {
 
 interface AccountDefIR {
   name: string;
-  account_type: string;
+  account_category: string;
   starting_amount: number;
   starting_pct: number | null;
   starting_basis: string;
@@ -670,7 +670,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
     const isDollar = mode === "FIXED_DOLLAR";
     accounts.push({
       name,
-      account_type: info.accountType || name,
+      account_category: info.accountType || name,
       starting_amount: isDollar ? amt : 0,
       starting_pct: isDollar ? null : amt,
       starting_basis: isDollar ? "FIXED_DOLLAR" : "NOTE_BALANCE",

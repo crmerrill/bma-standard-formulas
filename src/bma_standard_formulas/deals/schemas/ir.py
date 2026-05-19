@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .common import (
     SCHEMA_VERSION,
-    AccountType,
+    AccountCategory,
     AccrualPeriod,
     CapMode,
     CouponType,
@@ -139,7 +139,7 @@ class BondDef(BaseModel):
 class AccountDef(BaseModel):
     """Reserve, prefunding, revolving, or payment account."""
     name: str = Field(min_length=1)
-    account_type: AccountType = AccountType.RESERVE
+    account_category: AccountCategory = AccountCategory.RESERVE
     starting_amount: Dollars = 0.0
     starting_pct: float | None = None
     starting_basis: MinimumBasis = MinimumBasis.FIXED_DOLLAR

@@ -694,7 +694,7 @@ class TestGeneralizedRuntime:
                 BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             accounts=[
-                AccountDef(name="RESV", account_type="RESERVE", starting_amount=100.0)
+                AccountDef(name="RESV", account_category="RESERVE", starting_amount=100.0)
             ],
             waterfall_rules=[
                 RuleNode(rule_id="fund", rule_type=RuleType.PAY_TO_RESERVE, order=0, from_sources=["CASH"], to_targets=["RESV"], max_amount_fixed=50.0),
@@ -712,6 +712,7 @@ class TestGeneralizedRuntime:
         reserve_rows = [r for r in result.deal_accounts if r.account_id == "RESV" and r.period > 0]
         assert len(reserve_rows) == 2
         assert reserve_rows[0].deposit == pytest.approx(50.0, rel=1e-6)
+        assert reserve_rows[0].account_category == "RESERVE"
 
     def test_trigger_uses_calculation_refs(self):
         deal = DealDefinition(
@@ -776,3 +777,26 @@ class TestGeneralizedRuntime:
         assert "amount_expr" in migrated["fees"][0]
         assert "rate_expr" in migrated["fees"][0]
         assert "max_amount_expr" in migrated["waterfall_rules"][0]
+
+
+def test_migration_renames_account_type_to_account_category():
+    payload = {
+        "deal_name": "Acct",
+        "bonds": [{"name": "R", "tranche_type": "RESIDUAL", "is_bond": False, "is_pseudo": True}],
+        "accounts": [
+            {"name": "RESV", "account_type": "RESERVE", "starting_amount": 10.0},
+        ],
+        "waterfall_rules": [
+            {
+                "rule_id": "r1",
+                "rule_type": "PAY_RESIDUAL",
+                "order": 0,
+                "from_sources": ["CASH"],
+                "to_targets": ["R"],
+            }
+        ],
+    }
+    migrated = migrate_deal_payload(payload)
+    acc = migrated["accounts"][0]
+    assert acc["account_category"] == "RESERVE"
+    assert "account_type" not in acc

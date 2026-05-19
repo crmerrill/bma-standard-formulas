@@ -88,7 +88,9 @@ class PayMode(str, Enum):
     PIK = "PIK"
 
 
-class AccountType(str, Enum):
+class AccountCategory(str, Enum):
+    """UI / reporting label for an account; the runtime does not branch on this."""
+
     RESERVE = "RESERVE"
     PREFUNDING = "PREFUNDING"
     REVOLVING = "REVOLVING"

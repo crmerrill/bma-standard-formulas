@@ -4,7 +4,6 @@ Each function returns a DealDefinition that faithfully reproduces the
 waterfall semantics of its LDCMA Python-module counterpart.
 """
 from .schemas.common import (
-    AccountType,
     CouponType,
     FeeBasisType,
     MinimumBasis,
@@ -13,9 +12,7 @@ from .schemas.common import (
     TriggerMetricType,
 )
 from .schemas.ir import (
-    AccountDef,
     BondDef,
-    CalculationNode,
     DealDefinition,
     FeeDef,
     RuleNode,

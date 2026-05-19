@@ -1109,32 +1109,33 @@ vocabulary. Phase 1c stops at the BMA-native rename; the `COLL_*`
 forward step is sequenced after the Proposal R PAIRED-input
 migration (Phases 1d–1h) lands.
 
-### O. AccountType is a label, not runtime semantics
+### O. AccountCategory is a label, not runtime semantics
 
-**Current `AccountType` enum:** `RESERVE | PREFUNDING | REVOLVING |
-PAYMENT | SPREAD_ACCOUNT`.
+**Implemented (Phase 2a):** enum `AccountCategory` (formerly `AccountType`) with
+`RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT`. IR field
+`account_category` (legacy JSON key `account_type` migrated in
+`migrate_deal_payload`).
 
 (The earlier IR reference in this doc listed the wrong values —
 `CUSTODIAL | DISTRIBUTION` — and has been corrected.)
 
-**Verified against the runtime:** `account_type` is purely a
+**Verified against the runtime:** `account_category` is purely a
 display label. The runtime touches it in exactly two places, both
 of which are passthrough:
 
-1. **Initialization** (`runtime.py:324`) — copy
-   `account_def.account_type.value` (a string) into
-   `AccountWorkspace.account_type`.
-2. **Output** (`runtime.py:1611`) — copy that string into the
-   `DealAccountRow` for output / reporting.
+1. **Initialization** — copy `account_def.account_category.value`
+   (a string) into `AccountWorkspace.account_category`.
+2. **Output** — copy that string into `DealAccountRow.account_category`
+   for output / reporting.
 
-There is **no `if account_type == X` branch anywhere** in the
+There is **no `if account_category == X` branch anywhere** in the
 runtime. The runtime treats every account uniformly: a named
 bucket with `balance`, `deposit`, `withdrawal`, and a
 `required_minimum` array.
 
 **`MinimumBasis` (after the Round 3 Q fix) IS the actual
 behavioral driver** for account floors and starting amounts —
-the runtime now branches on it correctly. `AccountType` remains a
+the runtime now branches on it correctly. `AccountCategory` remains a
 passthrough display label.
 
 This means real-world account variety:
@@ -1148,7 +1149,7 @@ This means real-world account variety:
 - **Yield supplement account** — auto YSOC
 - **Trustee fee reserve** — fee carve-out
 
-…is supported today not by adding more `AccountType` values, but
+…is supported today not by adding more `AccountCategory` values, but
 by configuring the right `minimum_basis`, the right `starting_amount`,
 and the right rules that deposit to / withdraw from the account.
 For example:
@@ -1160,15 +1161,14 @@ For example:
 | Capitalized interest account auto-amortizing | `starting_amount: <cap-i $>`, `minimum: 0`, plus a `PAY_INTEREST` rule with this account as `from_sources` for the bond's coupon during the cap-i period |
 | YSOC account | A `SPREAD_ACCOUNT` (label) feeding a `SPLIT_CASH` that boosts under-WAC bond cash |
 
-**Proposed change:** rename `AccountType` → `AccountCategory` to
-reflect that the field is a UI / reporting label and stop signaling
-"this might gate behavior" via the name. No runtime change needed.
+**Status:** Renamed in code (`AccountCategory`, `account_category`) with
+payload migration from `account_type`. No runtime branching change.
 
 If a future deal needs runtime behavior keyed on account type
 (e.g., "PREFUNDING accounts auto-amortize without explicit rules"),
 that should be added as a *separate* explicit field — e.g.,
 `auto_amortizes: bool`, `amortization_schedule: list[...]` — not by
-overloading `account_type` with hidden semantics.
+overloading `account_category` with hidden semantics.
 
 ### Q. Implement `minimum_basis` and `starting_basis` per-period semantics — FIXED
 
@@ -1318,7 +1318,7 @@ Test coverage in `tests/test_account_minimum_basis.py`:
 | Built-in token `COLLATERAL` | (deleted) | Alias for `CASH` |
 | Built-in token `GROUP_<id>_COLLATERAL` | (deleted) | Alias for `GROUP_<id>_CASH` |
 | `INT_CASH` / `PRIN_CASH` (and group variants) | **Phase 1c (May 2026):** `ACT_INT` / `ACT_PRIN`. **Phase 2 (planned):** `COLL_INT` / `COLL_PRIN` under the full `COLL_*` taxonomy | Phase 1c aligns IR with `BMAActualCashflow` field names; Phase 2 adds 11 decomposition tokens + 3 balance refs. See proposal N updates and Part 2 "Built-in source/target tokens" |
-| `AccountType` enum (treated as runtime-significant) | `AccountCategory` (UI label only) | **Verified**: runtime never branches on `account_type` |
+| ~~`AccountType` / `account_type` on `AccountDef`~~ | **`AccountCategory` / `account_category`** | **Done (Phase 2a)** — passthrough label; `migrate_deal_payload` rewrites legacy `account_type`. |
 | ~~`minimum_basis` and `starting_basis` ignored by runtime~~ | Per-period recomputation honoring the enum value | **FIXED (May 2026)** — proposal Q. `_allocate_account_workspace` + `_refresh_note_balance_minimums` in runtime.py; covered by `tests/test_account_minimum_basis.py` (9 tests, all passing). |
 
 Net schema impact:
@@ -1331,7 +1331,7 @@ Net schema impact:
 - 1 rule type renamed (`PAY_TO_RESERVE` → `PAY_TO_ACCOUNT`)
 - 1 enum value deleted (`PaymentStyle.CONCURRENT`)
 - 4 built-in tokens cleaned up (drop 2 aliases; rename 2 + group variants)
-- 1 enum repurposed (`AccountType` → `AccountCategory` UI label)
+- 1 enum repurposed (`AccountCategory`; legacy name `AccountType`)
 
 The result is a schema where:
 
@@ -1361,7 +1361,7 @@ against the actual runtime + schemas. Findings:
 | **L** | **Drop `PaymentStyle.CONCURRENT`** | **DOC WAS WRONG** | The current enum has only `SEQUENTIAL \| PRO_RATA`. `CONCURRENT` was never in the code. **No code change needed.** |
 | M | Reserve / recourse rule consolidation | Confirmed with refinement | `PAY_FROM_RESERVE_INTEREST` decrements bond's `int_shortfall` ledger and accumulates `opt_interest` (`runtime.py:1635-1642`). `PAY_FROM_RESERVE_PRINCIPAL` increments bond principal/balance. `PAY_RECOURSE_*` draws against pseudo-bond capacity. **Full collapse needs a `coverage_mode: NORMAL \| INTEREST_SHORTFALL \| PRINCIPAL_ACCELERATION` field** to preserve the shortfall-ledger semantics. Recourse pseudo-bonds are also valid `from_sources` since they have a balance to decrement. Recommend phased migration. |
 | N | Drop `COLLATERAL` aliases; rename `INT_CASH`/`PRIN_CASH` | **SHIPPED Phase 1c (May 2026)** | Renamed to `ACT_INT`/`ACT_PRIN` (BMA-native) per user directive, not `CASH_INT`/`CASH_PRIN`. `COLLATERAL` aliases dropped. Phase 2 will advance to full `COLL_*` taxonomy with decomposition tokens (post-CC research May 2026). |
-| O | Rename `AccountType` → `AccountCategory` | Confirmed | Already verified to be a passthrough label only. |
+| O | Rename `AccountType` → `AccountCategory` | **Done** | Enum + IR/output field; `migrate_deal_payload` renames legacy `account_type`. |
 | Q | Implement `minimum_basis`/`starting_basis` per-period | **SHIPPED** (May 2026) | Done. |
 
 ### PAC/TAC schedule derivation (your earlier question)
@@ -2362,14 +2362,12 @@ vocabulary stays canonical.
 ```python
 class AccountDef(BaseModel):
     name: str                             # "Reserve_Account"
-    # Current code: RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT
-    # VERIFIED against runtime.py: account_type is a passthrough display label only.
-    # The runtime stores it at init (line 324) and copies it to output (line 1611);
-    # there is NO `if account_type == X` branch anywhere. Round 3 O renames to
-    # AccountCategory. Behavior comes from minimum_basis + the rules that touch
-    # the account; minimum_basis is now (post-Round 3 Q fix) honored at runtime
-    # for both starting and required-minimum calculations.
-    account_type: AccountType             # RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT
+    # RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT
+    # VERIFIED against runtime.py: account_category is a passthrough display label only.
+    # The runtime stores it at init and copies it to DealAccountRow output;
+    # there is NO `if account_category == X` branch anywhere. Phase 2a:
+    # AccountCategory enum + account_category field (legacy JSON: account_type).
+    account_category: AccountCategory     # RESERVE | PREFUNDING | REVOLVING | PAYMENT | SPREAD_ACCOUNT
     starting_amount: float                # $ amount at closing
     starting_pct: float | None            # OR % of <basis quantity> at period 0
     starting_basis: MinimumBasis          # FIXED_DOLLAR | COLLATERAL_BALANCE | NOTE_BALANCE | ORIGINAL_COLLATERAL

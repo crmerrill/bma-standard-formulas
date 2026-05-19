@@ -85,7 +85,7 @@ class AccountWorkspace:
     """Mutable workspace arrays for account/reserve balances."""
 
     name: str
-    account_type: str
+    account_category: str
     balance: np.ndarray
     deposit: np.ndarray
     withdrawal: np.ndarray
@@ -456,7 +456,7 @@ def _allocate_account_workspace(
     balance[0] = starting_amount
     return AccountWorkspace(
         name=account_def.name,
-        account_type=account_def.account_type.value,
+        account_category=account_def.account_category.value,
         balance=balance,
         deposit=np.zeros(cf_len),
         withdrawal=np.zeros(cf_len),
@@ -2525,7 +2525,7 @@ def run_deal(
                 DealAccountRow(
                     scenario_name=scenario_name,
                     account_id=ws.name,
-                    account_type=ws.account_type,
+                    account_category=ws.account_category,
                     period=p,
                     begin_balance=float(ws.balance[p - 1]) if p > 0 else float(ws.balance[0]),
                     deposit=float(ws.deposit[p]),
