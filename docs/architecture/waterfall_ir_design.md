@@ -2058,37 +2058,52 @@ deal's entire static structure in a single document. It is:
 - **Source of truth.** The runtime executes the IR; the UI
   (Blockly canvas + Properties panel) edits the IR; saved deals
   persist as IR JSON; tests compare against the IR.
-- **Versioned.** `schema_version: "1.0.0"` allows forward-compatible
-  migrations.
+- **Versioned.** `schema_version: "2.0.0"` (bumped in Round 3, May 2026)
+  allows forward-compatible migrations. `migrate_deal_payload()` in
+  `schemas/migrations/__init__.py` handles all 1.x → 2.0 field renames and
+  hard cuts.
 - **Self-validating.** Pydantic enforces field types; the
   top-level `_validate_references` validator enforces cross-field
   consistency (every rule's `from_sources` and `to_targets` must
   reference declared bonds, accounts, fees, or built-in streams;
-  every rule's `condition_trigger` must reference a declared
-  trigger; every bond's `support_tranches` must reference real
-  bonds; etc.).
+  every trigger name must be unique; every `deal_state_trigger` must
+  reference a declared trigger; every bond's SUPPORTED_BY `relations`
+  must reference real bonds; etc.).
 - **Round-tripping.** IR → runtime → cashflow output is
   deterministic; IR → Blockly synthesizer → workspace → irGenerator
-  → IR is meant to be lossless.
+  → IR is meant to be lossless (see "Human vs. Machine IR" section).
 
 ## Top-level schema: `DealDefinition`
 
 ```python
 class DealDefinition(BaseModel):
-    schema_version: str = "1.0.0"
+    schema_version: str = "2.0.0"         # bumped from 1.0.0 in Round 3
     deal_name: str                        # "FNR 2006-018 (Group 1 + Group 2)"
     description: str = ""
     origination_date: date | None
     settlement_date: date | None
 
+    # Credit-card master trust identity (Phase 8)
+    series_id: str | None = None
+
+    # Credit-card Discount Option: pre-waterfall reclassification of
+    # principal_collections as finance charges. 0 = inactive (Phase 7 / SR7).
+    discount_factor_pct: float = 0.0
+
     # Structure
     bonds: list[BondDef]                  # All tranches, including pseudo bonds
     accounts: list[AccountDef]            # Reserves, prefunding, custodial
     fees: list[FeeDef]                    # Trustee, servicer, etc.
-    triggers: list[TriggerNode]           # Conditional gates
-    calculations: list[CalculationNode]   # Named expressions for triggers
+    triggers: list[TriggerNode]           # Conditional gates (Phase 9: window_periods, comparison)
+    calculations: list[CalculationNode]   # Named expressions for triggers and rules
     waterfall_rules: list[RuleNode]       # The actual priority of payments
     collateral_groups: list[CollateralGroupDef]  # Multi-pool deals
+
+    # Phase 9: deal-state machine (REVOLVING / ACCUMULATION / AMORTIZATION /
+    # EARLY_AMORTIZATION). deal_state_trigger names the trigger whose FAIL
+    # transitions the deal to EARLY_AMORTIZATION.
+    deal_state_trigger: str | None = None
+    initial_deal_state: DealStateType = DealStateType.REVOLVING
 
     # Solver / overrides / runtime extensions (see below)
     deal_knobs: dict[str, Any] = {}
@@ -2104,10 +2119,15 @@ gets injected into expression-evaluation context.
 | Key | Type | Purpose |
 |---|---|---|
 | `source_formulas` | `dict[str, str]` | Named per-period expressions that become first-class `from_source` tokens. Example: `{"NET_EXCESS": "ACT_INT - bond_coupon_total"}` makes `NET_EXCESS` referenceable in any rule's `from_sources`. |
-| `balance_trackers` | `dict[str, str]` | Maps a residual / pseudo bond's name to a runtime quantity it should mirror. Example: `{"R": "collateral_balance"}` makes residual `R` carry a balance equal to outstanding pool balance each period. Used when a residual interest's economics track a non-bond quantity. |
-| `orig_collat_bal_override` | `float` | Override for the original collateral balance used in trigger denominator calculations (when the natural pool balance differs from the trigger reference balance, e.g., tape excludes some loans). |
-| `allow_negative_cashflow_math` | `bool` | Permit transient negative intermediate cash states during rule execution. Used for deals with negative-amortization streams (HECM, certain ARM cases) where cash conservation invariants need temporary relaxation. |
-| `<any_identifier>` | `int \| float` | **Free expression-context globals.** Every numeric value with an identifier-safe key gets injected into the `expr` evaluation context for fee `amount_expr`, rule `max_amount_expr`, calculation `expression`, and trigger thresholds. Example: `{"servicing_fee_bps": 25.0}` lets a fee expression reference `servicing_fee_bps / 10000` directly. |
+| `balance_trackers` | `dict[str, str]` | Maps a residual / pseudo bond's name to a runtime quantity it should mirror. Example: `{"R": "collateral_balance"}` makes residual `R` carry a balance equal to outstanding pool balance each period. |
+| `orig_collat_bal_override` | `float` | Override for the original collateral balance used in trigger denominator calculations. |
+| `allow_negative_cashflow_math` | `bool` | Permit transient negative intermediate cash states during rule execution. Used for deals with negative-amortization streams (HECM, certain ARM cases). |
+| `tieout_thresholds` | `dict[str, float]` | Override the carry tie-out warn/block thresholds (e.g. `{"ok_high_pct": 40.0}`). |
+| `index_rate` / `{INDEX}_rate` | `float` | Index rate for FLOATING and INVERSE_FLOATING bonds (e.g. `{"SOFR_rate": 5.25}`). Per-bond named keys take precedence over the generic `index_rate` fallback. |
+| `<any_identifier>` | `int \| float` | **Free expression-context globals.** Every numeric value with an identifier-safe key gets injected into the `expr` evaluation context for fee `amount_expr`, rule `max_amount_expr`, calculation `expression`, and trigger thresholds. |
+
+**Removed from deal_knobs in Round 3:**
+- `discount_factor` → promoted to typed `DealDefinition.discount_factor_pct` (Phase 7/SR7).
 
 The four functional roles, in plain language:
 
@@ -2151,6 +2171,67 @@ scratch-pad of named scalar overrides for the solver and for
 expression evaluation, with everything behavioral promoted to
 real schema fields.
 
+## Human vs. Machine IR boundaries (SR5/SR6)
+
+Not all fields in a `DealDefinition` are authored by humans. Some are
+generated or modified by the Structuring Studio toolchain. Understanding
+the boundary prevents tools from accidentally overwriting machine-generated
+provenance.
+
+### Human-authored fields
+
+Written by a deal analyst (or migrated from a prospectus):
+
+- `deal_name`, `description`, `series_id`, `origination_date`, `settlement_date`
+- All `BondDef` fields except `schedule_contract` and `schedule_derivation`
+- All `AccountDef` fields
+- All `RuleNode` fields
+- All `FeeDef` fields
+- All `TriggerNode` fields
+- All `CalculationNode` fields
+- `collateral_groups`, `deal_state_trigger`, `initial_deal_state`
+- `discount_factor_pct`
+- `deal_knobs` (user-specified overrides)
+
+### Machine-generated / machine-modified fields
+
+Generated by the Structuring Studio or the backend and **must be
+preserved across Blockly edits** (see `mergeOpaqueIrFields` in
+`scheduleOverlayMerge.ts`):
+
+- **`BondDef.schedule_contract`** — generated by `build_psa_schedule_overlay()`
+  when the user triggers PSA derivation. Never hand-edited.
+- **`BondDef.schedule_derivation`** — provenance block written by the same path;
+  records the PSA inputs (speeds, pool balance/WAC/term, support stack) used to
+  derive the schedule so stale detection can fire when inputs change.
+- **`BondDef.schedule_tolerance_bps`** — can be set by the user but defaults to
+  25 bps when derived by the PSA tool.
+
+### Round-trip guarantees
+
+The Blockly ↔ IR round-trip is **lossless for human-authored fields** when all
+blocks are present. Machine-generated fields survive the round-trip via
+`block.data` stashing and the `mergeOpaqueIrFields` passthrough:
+
+1. On load: `extractOpaqueIrFields(savedIr)` captures the full saved IR.
+2. On every workspace edit: `mergeOpaqueIrFields(freshBlocklyIr, savedBase)`
+   merges saved entities back in so backend-only fields (Phase 6/7/8/9
+   additions, `calculations`, `deal_knobs` etc.) are preserved.
+3. On save: the merged IR is sent to the backend.
+
+Fields that the Blockly workspace **cannot generate** (because there is no
+corresponding block/field):
+- `calculations` (CalculationNode arrays)
+- `deal_state_trigger`, `initial_deal_state`
+- Per-bond NLA fields (`nla_starting_balance`, `required_subordination_pct`, `seniority`)
+- Per-account `minimum_schedule`
+- Per-trigger `window_periods`, `comparison`
+
+These survive edits via `mergeOpaqueIrFields` and are only removable by editing
+the IR JSON directly in the Studio's "IR" tab.
+
+---
+
 ## `BondDef` — every tranche the deal pays
 
 A bond is anything that receives cash from the waterfall. This
@@ -2160,12 +2241,11 @@ sinks for fees.
 ```python
 class BondDef(BaseModel):
     name: str                             # "PA", "Class A-1", "M-1"
-    # NOTE: tranche_type currently has 13 values mixing identity, schedule, coupon, and role.
-    # Round 3 proposal G collapses this to TrancheKind (8 values:
-    # CASH_PAY | PAC | TAC | IO | PO | Z | RESIDUAL | PSEUDO). PAC and TAC remain
-    # because they're real economic identities; the validator enforces that
-    # PAC/TAC kinds require a non-empty schedule_contract. SUPPORT becomes a
-    # derived role; FLOATER/INVERSE_FLOATER live in coupon_type; SEQUENTIAL is
+    # Round 3 (May 2026): TrancheType (13 values) collapsed to TrancheKind (8).
+    # TrancheKind: CASH_PAY | PAC | TAC | IO | PO | Z | RESIDUAL | PSEUDO.
+    # PAC/TAC validator enforces non-empty schedule_contract. FLOATER/INVERSE_FLOATER
+    # live in coupon_type (separate from the structural kind). SEQUENTIAL/SUPPORT
+    # are
     # rule behavior, not bond identity; PAC_II is just a PAC with structural ordering.
     tranche_type: TrancheType             # SEQUENTIAL | PAC | PAC_II | TAC | SUPPORT | Z_BOND | ACCRETION_DIRECTED | FLOATER | INVERSE_FLOATER | IO | PO | PSEUDO | RESIDUAL
     # NOTE: tranche_behavior is fully redundant with the simplified TrancheKind + schedule + pay_mode.
@@ -2209,16 +2289,13 @@ class BondDef(BaseModel):
     schedule_tolerance_bps: float | None
 
     # Tranche relationships — Round 3 H: collapse the next 6 fields into ONE
-    # typed list `relations: list[TrancheRelation]` covering SUPPORTED_BY,
-    # ACCRETES_TO, NOTIONAL_TRACKS, BALANCE_TRACKS, COUPON_INVERSE_OF,
-    # COUPON_LEVERAGE_OF, MACR_EXCHANGE — full coverage of POs, IOs, inverse IOs,
-    # inverse floaters, super floaters, MACR exchange classes.
-    support_tranches: list[str]           # PAC support stack          → relations[?].SUPPORTED_BY
-    supported_by_tranches: list[str]      # Z accretion targets         → relations[?].ACCRETES_TO
-    parent_tranche: str | None            # IO/PO parent for tracking   → relations[?].NOTIONAL_TRACKS / BALANCE_TRACKS
-    relation_type: StructureRelation | None  # FLOATER_INVERSE | IO_PO | Z_ACCRUAL — Round 3 H expands to 7 values
-    notional_ratio: float | None          # IO notional ratio           → relations[?].weights / leverage
-    tracks_bonds: dict[str, list[str]] | None  # legacy IO/PO tracking  → relations[?].targets
+    # Round 3 (May 2026): 6 relationship fields collapsed to relations list.
+    # TrancheRelationType: SUPPORTED_BY | ACCRETES_TO | NOTIONAL_TRACKS |
+    # BALANCE_TRACKS | COUPON_INVERSE_OF | COUPON_LEVERAGE_OF | MACR_EXCHANGE.
+    # Schema-only types (COUPON_INVERSE_OF, COUPON_LEVERAGE_OF, MACR_EXCHANGE)
+    # produce validation warnings; they do not affect cashflow computation.
+    relations: list[TrancheRelation]      # Replaces support_tranches, supported_by_tranches,
+                                          # parent_tranche, relation_type, notional_ratio, tracks_bonds
 
     # Z-bond / accrual
     z_accrual_enabled: bool
@@ -2604,17 +2681,18 @@ bonds:
   - { name: EI,  tranche_type: IO,     tracks_bonds: { balance: [PA, PB, PC, PD] }, ... }
 
   # Aggregate Group II (PAC II / accretion-directed)
-  - { name: TA,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1, ... }
-  - { name: TB,  tranche_type: PAC,    tranche_behavior: PAC, group_id: GROUP_1, ... }
+  - { name: TA, kind: PAC, group_id: GROUP_1, ... }
+  - { name: TB, kind: PAC, group_id: GROUP_1, ... }
 
   # Z-bond (Aggregate Group II support)
-  - { name: Z,   tranche_type: Z_BOND, tranche_behavior: Z, pay_mode: PIK,
-      group_id: GROUP_1, z_accrual_enabled: true, supported_by_tranches: [TA, TB] }
+  - { name: Z, kind: Z, pay_mode: PIK, group_id: GROUP_1,
+      z_accrual_enabled: true,
+      relations: [{relation_type: ACCRETES_TO, targets: [TA, TB]}] }
 
   # Support tranches
-  - { name: WA,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
-  - { name: WB,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
-  - { name: WC,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
+  - { name: WA, kind: CASH_PAY, group_id: GROUP_1, ... }
+  - { name: WB, kind: CASH_PAY, group_id: GROUP_1, ... }
+  - { name: WC, kind: CASH_PAY, group_id: GROUP_1, ... }
   - { name: WD,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
   - { name: WE,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
   - { name: WG,  tranche_type: SUPPORT, group_id: GROUP_1, ... }
