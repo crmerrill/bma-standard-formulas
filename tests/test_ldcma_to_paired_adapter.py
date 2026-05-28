@@ -313,7 +313,7 @@ class TestParity:
             DealDefinition,
             RuleNode,
         )
-        from bma_standard_formulas.deals.schemas.common import RuleType, TrancheType
+        from bma_standard_formulas.deals.schemas.common import RuleType, TrancheKind
 
         loan_g1 = _build_loan(1, "GROUP_1")
         loan_g2 = _build_loan(2, "GROUP_2")
@@ -342,9 +342,9 @@ class TestParity:
                 CollateralGroupDef(group_id="GROUP_2"),
             ],
             bonds=[
-                BondDef(name="R1", tranche_type=TrancheType.RESIDUAL,
+                BondDef(name="R1", kind=TrancheKind.RESIDUAL,
                         is_bond=False, is_pseudo=True, group_id="GROUP_1"),
-                BondDef(name="R2", tranche_type=TrancheType.RESIDUAL,
+                BondDef(name="R2", kind=TrancheKind.RESIDUAL,
                         is_bond=False, is_pseudo=True, group_id="GROUP_2"),
             ],
             waterfall_rules=[

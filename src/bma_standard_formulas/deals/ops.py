@@ -133,7 +133,7 @@ def pay_residual(
     return pmt
 
 
-def pay_to_reserve(
+def pay_to_account(
     source_balances: list[np.ndarray],
     reserve_balance: np.ndarray,
     reserve_principal: np.ndarray,

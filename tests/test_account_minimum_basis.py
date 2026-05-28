@@ -29,7 +29,7 @@ from bma_standard_formulas.deals.schemas.common import (
     CouponType,
     MinimumBasis,
     RuleType,
-    TrancheType,
+    TrancheKind,
 )
 from bma_standard_formulas.deals.schemas.ir import (
     AccountDef,
@@ -65,14 +65,14 @@ def _make_test_deal(
         bonds=[
             BondDef(
                 name="A",
-                tranche_type=TrancheType.SEQUENTIAL,
+                kind=TrancheKind.CASH_PAY,
                 coupon_type=CouponType.FIXED,
                 coupon=5.5,
                 notional_pct_of_collateral=100.0,
             ),
             BondDef(
                 name="R",
-                tranche_type=TrancheType.RESIDUAL,
+                kind=TrancheKind.RESIDUAL,
                 is_bond=False,
                 is_pseudo=True,
             ),

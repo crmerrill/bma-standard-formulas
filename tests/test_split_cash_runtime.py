@@ -30,8 +30,7 @@ from bma_standard_formulas.deals.schemas.common import (
     CouponType,
     PaymentStyle,
     RuleType,
-    TrancheBehavior,
-    TrancheType,
+    TrancheKind,
 )
 from bma_standard_formulas.deals.schemas.input import (
     CollateralCashflows,
@@ -100,19 +99,17 @@ def _two_zero_coupon_bonds(
     return [
         BondDef(
             name=name_a,
-            tranche_type=TrancheType.SEQUENTIAL,
-            tranche_behavior=TrancheBehavior.SEQUENTIAL,
+            kind=TrancheKind.CASH_PAY,
             coupon_type=CouponType.ZERO,
             notional=face_a,
         ),
         BondDef(
             name=name_b,
-            tranche_type=TrancheType.SEQUENTIAL,
-            tranche_behavior=TrancheBehavior.SEQUENTIAL,
+            kind=TrancheKind.CASH_PAY,
             coupon_type=CouponType.ZERO,
             notional=face_b,
         ),
-        BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+        BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
     ]
 
 
@@ -233,21 +230,19 @@ class TestSplitManyToOne:
             bonds=[
                 BondDef(
                     name="A",
-                    tranche_type=TrancheType.SEQUENTIAL,
-                    tranche_behavior=TrancheBehavior.SEQUENTIAL,
+                    kind=TrancheKind.CASH_PAY,
                     coupon_type=CouponType.ZERO,
                     notional=100_000.0,
                 ),
                 BondDef(
                     name="B",
-                    tranche_type=TrancheType.SEQUENTIAL,
-                    tranche_behavior=TrancheBehavior.SEQUENTIAL,
+                    kind=TrancheKind.CASH_PAY,
                     coupon_type=CouponType.ZERO,
                     notional=900_000.0,
                 ),
                 BondDef(
                     name="R",
-                    tranche_type=TrancheType.RESIDUAL,
+                    kind=TrancheKind.RESIDUAL,
                     is_bond=False,
                     is_pseudo=True,
                 ),

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from bma_standard_formulas.deals.schemas.common import TrancheRelationType
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
 from bma_standard_formulas.deals.schemas.solver import (
     ConstraintComparison,
@@ -181,21 +182,57 @@ def _is_cash_paying_bond(bond) -> bool:
     """A bond gets a coupon knob iff it has a non-zero fixed/floating coupon
     AND it is not a residual / notional IO class.
     """
-    tt = getattr(bond.tranche_type, "value", None) if bond.tranche_type else None
-    if tt in {"RESIDUAL", "PSEUDO"}:
+    kind = getattr(bond.kind, "value", None) if bond.kind else None
+    if kind in {"RESIDUAL", "PSEUDO"}:
         return False
-    if getattr(bond, "tracks_bonds", None):
-        # Notional IO classes track an underlying balance and don't have
-        # an editable coupon for tie-out purposes (their coupon = the
-        # underlying class's coupon by construction).
-        if isinstance(bond.tracks_bonds, dict) and "balance" in bond.tracks_bonds:
-            return False
+    relations = getattr(bond, "relations", None) or []
+    if any(
+        rel.relation_type in {
+            TrancheRelationType.NOTIONAL_TRACKS,
+            TrancheRelationType.BALANCE_TRACKS,
+        }
+        for rel in relations
+    ):
+        # Notional IO / PO trackers inherit economics from referenced bonds.
+        return False
     coupon_type = getattr(bond.coupon_type, "value", None) if bond.coupon_type else None
     if coupon_type == "ZERO":
         return False
-    if not bond.coupon or bond.coupon <= 0.0:
+    current_coupon = _coupon_value_at_period(bond, period=1)
+    if current_coupon <= 0.0:
         return False
     return True
+
+
+def _coupon_value_at_period(bond, *, period: int) -> float:
+    coupon = getattr(bond, "coupon", None)
+    if coupon is None:
+        return 0.0
+    if isinstance(coupon, (int, float)):
+        return float(coupon)
+    if isinstance(coupon, list):
+        active = None
+        active_from = None
+        first = None
+        for entry in coupon:
+            if isinstance(entry, dict):
+                from_p = entry.get("from_period")
+                rate = entry.get("rate")
+            else:
+                from_p = getattr(entry, "from_period", None)
+                rate = getattr(entry, "rate", None)
+            if not isinstance(from_p, (int, float)) or not isinstance(rate, (int, float)):
+                continue
+            if first is None:
+                first = float(rate)
+            if int(from_p) <= period and (active_from is None or int(from_p) >= active_from):
+                active_from = int(from_p)
+                active = float(rate)
+        if active is not None:
+            return active
+        if first is not None:
+            return first
+    return 0.0
 
 
 def _resolve_bond_coupon_knobs(
@@ -212,7 +249,7 @@ def _resolve_bond_coupon_knobs(
             continue
         if not _is_cash_paying_bond(bond):
             continue
-        current = float(bond.coupon or 0.0)
+        current = _coupon_value_at_period(bond, period=1)
         if pattern.bps_delta is not None:
             delta_pct = pattern.bps_delta / 100.0
             lower = max(0.0, current - delta_pct)

@@ -144,13 +144,13 @@ export function computePsaScheduleStale(
     if (!b || typeof b !== "object") continue;
     const bond = b as Record<string, unknown>;
     if (bond.schedule_model_type !== "PSA") continue;
-    const behavior = bond.tranche_behavior;
-    if (behavior !== "PAC" && behavior !== "TAC") continue;
+    const kind = bond.kind;
+    if (kind !== "PAC" && kind !== "TAC") continue;
 
     const deriv = bond.schedule_derivation as Record<string, unknown> | undefined;
     const storedInputs = deriv?.inputs as Record<string, unknown> | undefined;
 
-    if (behavior === "PAC") {
+    if (kind === "PAC") {
       const exp = _expectedPacInputs(bond, pool);
       if (!exp) continue;
       if (!_inputsMatch(exp, storedInputs))

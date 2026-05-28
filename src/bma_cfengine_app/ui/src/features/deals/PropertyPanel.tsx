@@ -719,7 +719,7 @@ export default function PropertyPanel({
         name: b.name,
         notional: Math.max(b.sizeDollars, 0),
         coupon_pct: b.coupon,
-        tranche_type: b.bondType,
+        kind: b.bondType,
         pay_mode: b.payMode,
       })),
     });

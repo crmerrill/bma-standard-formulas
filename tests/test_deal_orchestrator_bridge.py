@@ -309,7 +309,7 @@ def test_persist_scenario_artifacts_writes_extended_outputs(monkeypatch, tmp_pat
                 scenario_name="Base Case",
                 parent_tranche_id="B",
                 child_tranche_id="Z",
-                relation_type="z_accrual",
+                relation_type="ACCRETES_TO",
             )
         ],
     )

@@ -10,16 +10,16 @@ from bma_standard_formulas.deals.schemas.common import (
     PaymentStyle,
     PrepayModelType,
     RuleType,
-    TrancheBehavior,
-    TrancheType,
+    TrancheKind,
+    TrancheRelationType,
 )
-from bma_standard_formulas.deals.schemas.ir import BondDef, DealDefinition, RuleNode
+from bma_standard_formulas.deals.schemas.ir import BondDef, DealDefinition, RuleNode, TrancheRelation
 
 
 def _support_bond(name: str = "SUP") -> BondDef:
     return BondDef(
         name=name,
-        tranche_type=TrancheType.SUPPORT,
+        kind=TrancheKind.CASH_PAY,
         notional=1_000_000.0,
         notional_pct_of_collateral=0.0,
     )
@@ -52,12 +52,12 @@ def test_build_overlay_pac_populates_schedule():
     sup = _support_bond()
     pac = BondDef(
         name="PAC_A",
-        tranche_behavior=TrancheBehavior.PAC,
+        kind=TrancheKind.PAC,
         schedule_model_type=PrepayModelType.PSA,
         schedule_speed_low=100.0,
         schedule_speed_high=250.0,
         notional=4_000_000.0,
-        support_tranches=[sup.name],
+        relations=[TrancheRelation(relation_type=TrancheRelationType.SUPPORTED_BY, targets=[sup.name])],
     )
     deal = _one_rule_deal([pac, sup])
     pool = PoolDerivationInputs(
@@ -79,12 +79,12 @@ def test_build_overlay_skips_non_psa_model():
     sup = _support_bond()
     bond = BondDef(
         name="X",
-        tranche_behavior=TrancheBehavior.PAC,
+        kind=TrancheKind.PAC,
         schedule_model_type=PrepayModelType.CPR,
         schedule_speed_low=50.0,
         schedule_speed_high=100.0,
         notional=1_000_000.0,
-        support_tranches=[sup.name],
+        relations=[TrancheRelation(relation_type=TrancheRelationType.SUPPORTED_BY, targets=[sup.name])],
     )
     deal = _one_rule_deal([bond, sup])
     overlay = build_psa_schedule_overlay(
@@ -98,12 +98,12 @@ def test_build_overlay_empty_pool_returns_empty():
     sup = _support_bond()
     bond = BondDef(
         name="P",
-        tranche_behavior=TrancheBehavior.PAC,
+        kind=TrancheKind.PAC,
         schedule_model_type=PrepayModelType.PSA,
         schedule_speed_low=100.0,
         schedule_speed_high=250.0,
         notional=1.0,
-        support_tranches=[sup.name],
+        relations=[TrancheRelation(relation_type=TrancheRelationType.SUPPORTED_BY, targets=[sup.name])],
     )
     deal = _one_rule_deal([bond, sup])
     assert (

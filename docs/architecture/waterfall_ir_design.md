@@ -1954,6 +1954,17 @@ Suggested phase additions (defer until after Phase 5):
 - **Phase 9** — Rolling-window triggers + pay-out events / early
   amortization deal state (gaps 7, 8)
 
+Current implementation status (May 2026):
+- Phase 6 is **in progress** with a first runtime slice now landed:
+  - `BondDef.nla_starting_balance` and `BondDef.required_subordination_pct`
+  - Runtime-tracked per-bond `*_nla_balance` expression variables
+  - Runtime-computed `*_required_subordination` and
+    `*_available_subordination` expression variables
+  - NLA depletion on principal/writedown and on
+    `PAY_INTEREST + coverage_mode=INTEREST_SHORTFALL` (P-to-I path)
+- Remaining Phase 6 work: explicit reimbursement mechanics and richer CC
+  fixture coverage.
+
 These replace the "credit card master trusts" entry under "Asset
 classes still to cover" at the top of this doc.
 

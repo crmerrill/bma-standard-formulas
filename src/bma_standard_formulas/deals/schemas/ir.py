@@ -9,6 +9,7 @@ from .common import (
     AccountCategory,
     AccrualPeriod,
     CapMode,
+    CoverageMode,
     CouponType,
     DayCount,
     Dollars,
@@ -20,10 +21,9 @@ from .common import (
     RuleType,
     ScheduleType,
     PrepayModelType,
-    StructureRelation,
-    TrancheType,
+    TrancheRelationType,
+    TrancheKind,
     TriggerMetricType,
-    TrancheBehavior,
     PayMode,
 )
 
@@ -58,6 +58,28 @@ class CollateralGroupDef(BaseModel):
     description: str = ""
 
 
+class TrancheRelation(BaseModel):
+    """Typed relationship descriptor between this bond and peer bonds."""
+
+    relation_type: TrancheRelationType
+    targets: list[str] = Field(default_factory=list)
+    weights: list[float] | None = None
+    leverage: float | None = None
+    cap: float | None = None
+    floor: float | None = None
+    description: str = ""
+
+
+class RateScheduleEntry(BaseModel):
+    """Piecewise-constant rate schedule entry (active from `from_period`)."""
+
+    from_period: int = Field(ge=0)
+    rate: Rate
+
+
+RateOrSchedule = Rate | list[RateScheduleEntry]
+
+
 class BondDef(BaseModel):
     """Immutable definition of a single tranche in the deal structure."""
 
@@ -67,18 +89,31 @@ class BondDef(BaseModel):
         # Hard cut (Phase 2b): do not accept legacy sizing field names.
         if isinstance(value, dict):
             legacy = [
-                k for k in ("size_dollars", "size_pct", "schedule_speed_target")
+                k for k in (
+                    "size_dollars",
+                    "size_pct",
+                    "schedule_speed_target",
+                    "tranche_type",
+                    "tranche_behavior",
+                    "support_tranches",
+                    "supported_by_tranches",
+                    "parent_tranche",
+                    "relation_type",
+                    "notional_ratio",
+                    "tracks_bonds",
+                )
                 if k in value
             ]
             if legacy:
                 raise ValueError(
                     "BondDef legacy fields are no longer supported; use "
-                    "notional/notional_pct_of_collateral and TAC low/high speed band."
+                    "notional/notional_pct_of_collateral, TAC low/high speed band, "
+                    "and relations: list[TrancheRelation]."
                 )
         return value
 
     name: str = Field(min_length=1)
-    tranche_type: TrancheType = TrancheType.SEQUENTIAL
+    kind: TrancheKind = TrancheKind.CASH_PAY
     is_bond: bool = True
     is_pseudo: bool = False
     group_id: str | None = Field(
@@ -89,15 +124,20 @@ class BondDef(BaseModel):
     )
 
     coupon_type: CouponType = CouponType.FIXED
-    coupon: Rate | None = None
-    margin: Rate | None = None
+    coupon: RateOrSchedule | None = None
+    margin: RateOrSchedule | None = None
     index_name: str | None = None
-    cap: Rate | None = None
-    floor: Rate | None = None
+    cap: RateOrSchedule | None = None
+    floor: RateOrSchedule | None = None
     inverse_multiplier: float | None = None
 
     notional: Dollars | None = None
     notional_pct_of_collateral: float | None = Field(default=None, ge=0.0, le=100.0)
+    # Credit-card master-trust support (Phase 6):
+    # Nominal Liquidation Amount balance tracked parallel to bond balance.
+    nla_starting_balance: Dollars | None = None
+    # Required subordinated amount for this class as % of class balance.
+    required_subordination_pct: float | None = Field(default=None, ge=0.0, le=100.0)
 
     maturity_date: date | None = None
     day_count: DayCount = DayCount.THIRTY_360
@@ -106,7 +146,6 @@ class BondDef(BaseModel):
     seniority: int | None = None
 
     pay_mode: PayMode = PayMode.CASH_PAY
-    tranche_behavior: TrancheBehavior = TrancheBehavior.SEQUENTIAL
 
     # PAC/TAC schedule parameters
     schedule_type: ScheduleType | None = None
@@ -125,22 +164,13 @@ class BondDef(BaseModel):
         description="Provenance when schedule_contract was machine-derived (Phase 1i PSA overlay).",
     )
     schedule_tolerance_bps: float | None = None
-    support_tranches: list[str] = Field(default_factory=list)
-    supported_by_tranches: list[str] = Field(default_factory=list)
+    relations: list[TrancheRelation] = Field(default_factory=list)
 
     # Z-bond / accrual parameters
     accrual_start_period: int | None = None
     accrual_end_period: int | None = None
     z_accrual_enabled: bool = False
     z_release_trigger: str | None = None
-
-    # Parent-child relationships (floater/inverse, IO/PO)
-    parent_tranche: str | None = None
-    relation_type: StructureRelation | None = None
-    notional_ratio: float | None = None
-
-    # Tracking bonds (pseudo bonds that mirror other bonds)
-    tracks_bonds: dict[str, list[str]] | None = None
 
     # Solver knob flags
     solver_knob_coupon: bool = False
@@ -266,6 +296,7 @@ class RuleNode(BaseModel):
     condition_invert: bool = False
     condition_expr: str | None = None
     allow_negative_source: bool = False
+    coverage_mode: CoverageMode = CoverageMode.NORMAL
 
     # `cap_mode` controls how the rule interprets the target bond's
     # `schedule_contract`. See `CapMode` for the full enum semantics. Maps to
@@ -387,6 +418,27 @@ class DealDefinition(BaseModel):
 
         errors: list[str] = []
         for rule in self.waterfall_rules:
+            if (
+                rule.coverage_mode != CoverageMode.NORMAL
+                and rule.rule_type not in {RuleType.PAY_INTEREST, RuleType.PAY_PRINCIPAL}
+            ):
+                errors.append(
+                    f"Rule {rule.rule_id!r}: coverage_mode {rule.coverage_mode.value} "
+                    "is only supported on PAY_INTEREST and PAY_PRINCIPAL"
+                )
+            if rule.coverage_mode != CoverageMode.NORMAL:
+                if len(rule.from_sources) != 1:
+                    errors.append(
+                        f"Rule {rule.rule_id!r}: coverage_mode {rule.coverage_mode.value} "
+                        "requires exactly one from_source"
+                    )
+                else:
+                    src0 = rule.from_sources[0]
+                    if src0 not in bond_names and src0 not in account_names:
+                        errors.append(
+                            f"Rule {rule.rule_id!r}: coverage_mode {rule.coverage_mode.value} "
+                            "requires from_source to be a bond/account name"
+                        )
             for src in rule.from_sources:
                 if src not in valid_sources:
                     errors.append(
@@ -480,20 +532,48 @@ class DealDefinition(BaseModel):
                     )
 
         for bond in self.bonds:
-            if bond.tracks_bonds:
-                for attr, names in bond.tracks_bonds.items():
-                    for n in names:
-                        if n not in bond_names:
-                            errors.append(
-                                f"Bond {bond.name!r}: tracks_bonds references "
-                                f"unknown bond {n!r}"
-                            )
-            if bond.tranche_behavior in {TrancheBehavior.PAC, TrancheBehavior.TAC}:
+            relation_targets_by_type: dict[TrancheRelationType, list[str]] = {}
+            for relation in bond.relations:
+                if not relation.targets:
+                    errors.append(
+                        f"Bond {bond.name!r}: relation {relation.relation_type.value} "
+                        "requires at least one target"
+                    )
+                    continue
+                if relation.weights is not None:
+                    if len(relation.weights) != len(relation.targets):
+                        errors.append(
+                            f"Bond {bond.name!r}: relation {relation.relation_type.value} "
+                            "weights length must match targets length"
+                        )
+                    elif any(float(w) < 0.0 for w in relation.weights):
+                        errors.append(
+                            f"Bond {bond.name!r}: relation {relation.relation_type.value} "
+                            "weights must be non-negative"
+                        )
+                if (
+                    relation.relation_type == TrancheRelationType.COUPON_LEVERAGE_OF
+                    and relation.leverage is None
+                ):
+                    errors.append(
+                        f"Bond {bond.name!r}: relation COUPON_LEVERAGE_OF requires leverage"
+                    )
+                relation_targets_by_type.setdefault(relation.relation_type, []).extend(relation.targets)
+                for target in relation.targets:
+                    if target not in bond_names:
+                        errors.append(
+                            f"Bond {bond.name!r}: relation {relation.relation_type.value} "
+                            f"references unknown bond {target!r}"
+                        )
+
+            support_rel_targets = relation_targets_by_type.get(TrancheRelationType.SUPPORTED_BY, [])
+            accretes_rel_targets = relation_targets_by_type.get(TrancheRelationType.ACCRETES_TO, [])
+            if bond.kind in {TrancheKind.PAC, TrancheKind.TAC}:
                 has_legacy_schedule = bool(bond.schedule_contract)
                 has_model = bond.schedule_model_type is not None
                 if not has_legacy_schedule and not has_model:
                     errors.append(
-                        f"Bond {bond.name!r}: tranche_behavior {bond.tranche_behavior.value} "
+                        f"Bond {bond.name!r}: kind {bond.kind.value} "
                         "requires schedule model or schedule_contract points"
                     )
                 if has_model and bond.schedule_model_type == PrepayModelType.CUSTOM_VECTOR:
@@ -501,13 +581,13 @@ class DealDefinition(BaseModel):
                         errors.append(
                             f"Bond {bond.name!r}: CUSTOM_VECTOR schedule requires schedule_custom_vector."
                         )
-                if has_model and bond.tranche_behavior == TrancheBehavior.PAC:
+                if has_model and bond.kind == TrancheKind.PAC:
                     if bond.schedule_model_type != PrepayModelType.CUSTOM_VECTOR:
                         if bond.schedule_speed_low is None or bond.schedule_speed_high is None:
                             errors.append(
                                 f"Bond {bond.name!r}: PAC schedule requires low/high speed values."
                             )
-                if has_model and bond.tranche_behavior == TrancheBehavior.TAC:
+                if has_model and bond.kind == TrancheKind.TAC:
                     if bond.schedule_model_type != PrepayModelType.CUSTOM_VECTOR:
                         if bond.schedule_speed_low is None or bond.schedule_speed_high is None:
                             errors.append(
@@ -518,19 +598,19 @@ class DealDefinition(BaseModel):
                                 f"Bond {bond.name!r}: TAC schedule requires a degenerate band "
                                 "(schedule_speed_low == schedule_speed_high)."
                             )
-                if not bond.support_tranches and not bond.supported_by_tranches:
+                if not support_rel_targets:
                     errors.append(
-                        f"Bond {bond.name!r}: tranche_behavior {bond.tranche_behavior.value} "
+                        f"Bond {bond.name!r}: kind {bond.kind.value} "
                         "requires explicit support tranche linkage"
                     )
-            if bond.tranche_behavior == TrancheBehavior.Z:
+            if bond.kind == TrancheKind.Z:
                 if not bond.z_accrual_enabled:
                     errors.append(
-                        f"Bond {bond.name!r}: tranche_behavior Z requires z_accrual_enabled=true"
+                        f"Bond {bond.name!r}: kind Z requires z_accrual_enabled=true"
                     )
                 if bond.pay_mode != PayMode.PIK:
                     errors.append(
-                        f"Bond {bond.name!r}: tranche_behavior Z requires pay_mode=PIK"
+                        f"Bond {bond.name!r}: kind Z requires pay_mode=PIK"
                     )
                 if (
                     bond.accrual_start_period is not None
@@ -545,19 +625,15 @@ class DealDefinition(BaseModel):
                         f"Bond {bond.name!r}: z_release_trigger {bond.z_release_trigger!r} "
                         f"not found in triggers"
                     )
-            for support in bond.support_tranches:
-                if support not in bond_names:
-                    errors.append(
-                        f"Bond {bond.name!r}: support_tranches references unknown bond {support!r}"
-                    )
-            for supporter in bond.supported_by_tranches:
-                if supporter not in bond_names:
-                    errors.append(
-                        f"Bond {bond.name!r}: supported_by_tranches references unknown bond {supporter!r}"
-                    )
 
         support_graph: dict[str, set[str]] = {
-            bond.name: set(bond.support_tranches) for bond in self.bonds
+            bond.name: {
+                target
+                for relation in bond.relations
+                if relation.relation_type == TrancheRelationType.SUPPORTED_BY
+                for target in relation.targets
+            }
+            for bond in self.bonds
         }
 
         visited: set[str] = set()

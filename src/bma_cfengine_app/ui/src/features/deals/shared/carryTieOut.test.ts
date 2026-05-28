@@ -19,9 +19,9 @@ function bond(
   name: string,
   notional: number,
   coupon_pct: number,
-  tranche_type = "SENIOR",
+  kind = "CASH_PAY",
 ): BondInput {
-  return { name, notional, coupon_pct, tranche_type };
+  return { name, notional, coupon_pct, kind };
 }
 
 describe("computeStaticCarryTieOut", () => {

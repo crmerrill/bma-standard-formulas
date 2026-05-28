@@ -19,15 +19,15 @@ from bma_standard_formulas.deals.runtime import run_deal
 from bma_standard_formulas.deals.schemas.common import (
     PayMode,
     RuleType,
-    TrancheBehavior,
-    TrancheType,
+    TrancheKind,
+    TrancheRelationType,
 )
 from bma_standard_formulas.deals.schemas.input import (
     CollateralCashflows,
     DealRunInput,
     PooledCollateralInput,
 )
-from bma_standard_formulas.deals.schemas.ir import BondDef, DealDefinition, RuleNode
+from bma_standard_formulas.deals.schemas.ir import BondDef, DealDefinition, RuleNode, TrancheRelation
 
 TOL = 1e-2
 
@@ -101,23 +101,26 @@ class TestPacScheduleEnforcement:
             bonds=[
                 BondDef(
                     name="PAC",
-                    tranche_type=TrancheType.PAC,
-                    tranche_behavior=TrancheBehavior.PAC,
+                    kind=TrancheKind.PAC,
                     coupon=4.0,
                     notional=pac_size,
                     schedule_contract=schedule,
-                    support_tranches=["S"],
+                    relations=[
+                        TrancheRelation(
+                            relation_type=TrancheRelationType.SUPPORTED_BY,
+                            targets=["S"],
+                        )
+                    ],
                 ),
                 BondDef(
                     name="S",
-                    tranche_type=TrancheType.SUPPORT,
-                    tranche_behavior=TrancheBehavior.SEQUENTIAL,
+                    kind=TrancheKind.CASH_PAY,
                     coupon=5.0,
                     notional=support_size,
                 ),
                 BondDef(
                     name="R",
-                    tranche_type=TrancheType.RESIDUAL,
+                    kind=TrancheKind.RESIDUAL,
                     is_bond=False,
                     is_pseudo=True,
                 ),
@@ -232,21 +235,24 @@ class TestTacContractionProtection:
             bonds=[
                 BondDef(
                     name="TAC",
-                    tranche_type=TrancheType.TAC,
-                    tranche_behavior=TrancheBehavior.TAC,
+                    kind=TrancheKind.TAC,
                     coupon=4.5,
                     notional=8_400_000.0,
                     schedule_contract=schedule,
-                    support_tranches=["S"],
+                    relations=[
+                        TrancheRelation(
+                            relation_type=TrancheRelationType.SUPPORTED_BY,
+                            targets=["S"],
+                        )
+                    ],
                 ),
                 BondDef(
                     name="S",
-                    tranche_type=TrancheType.SUPPORT,
-                    tranche_behavior=TrancheBehavior.SEQUENTIAL,
+                    kind=TrancheKind.CASH_PAY,
                     coupon=5.0,
                     notional=3_600_000.0,
                 ),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[
                 RuleNode(rule_id="r_int_tac", rule_type=RuleType.PAY_INTEREST, order=0,
@@ -281,22 +287,25 @@ class TestZAccrual:
             bonds=[
                 BondDef(
                     name="A",
-                    tranche_type=TrancheType.SEQUENTIAL,
-                    tranche_behavior=TrancheBehavior.SEQUENTIAL,
+                    kind=TrancheKind.CASH_PAY,
                     coupon=4.0,
                     notional=senior_size,
                 ),
                 BondDef(
                     name="Z",
-                    tranche_type=TrancheType.Z_BOND,
-                    tranche_behavior=TrancheBehavior.Z,
+                    kind=TrancheKind.Z,
                     pay_mode=PayMode.PIK,
                     coupon=z_coupon,
                     notional=z_size,
                     z_accrual_enabled=True,
-                    supported_by_tranches=["A"],
+                    relations=[
+                        TrancheRelation(
+                            relation_type=TrancheRelationType.ACCRETES_TO,
+                            targets=["A"],
+                        )
+                    ],
                 ),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[
                 RuleNode(rule_id="r_int_a", rule_type=RuleType.PAY_INTEREST, order=0,
@@ -387,8 +396,8 @@ class TestNoSyntheticFinalWritedown:
         deal = DealDefinition(
             deal_name="UnderAmortizing",
             bonds=[
-                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, coupon=4.0, notional=1_000_000.0),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=4.0, notional=1_000_000.0),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[
                 RuleNode(rule_id="r_int", rule_type=RuleType.PAY_INTEREST, order=0,
@@ -403,3 +412,237 @@ class TestNoSyntheticFinalWritedown:
         last = _row(result, "A", n_periods - 1)
         assert last.end_balance > 0.0, "Final-period synthetic writedown still active"
         assert last.writedown == pytest.approx(0.0, abs=TOL), "Writedown should be zero with no losses"
+
+
+# ---------------------------------------------------------------------------
+# RG4: Grouped Z accrual must debit group-specific ACT_INT stream
+# ---------------------------------------------------------------------------
+
+
+class TestGroupedZAccrual:
+    """Verify that Z accrual in a multi-group deal debits the correct group-
+    specific ACT_INT stream so that downstream rules drawing from
+    GROUP_<id>_ACT_INT cannot double-fund the accrued interest.
+    """
+
+    def _build_grouped_z_deal(self):
+        """Build a 2-group deal where Group 1 contains a Z bond.
+
+        Group 1: Z bond + support bond A.
+        Group 2: plain bond B.
+
+        Rules use bare tokens (ACT_INT, ACT_PRIN) tagged with group_id — the
+        runtime's _scope_sources_to_group rewrites them to GROUP_<id>_ACT_INT
+        so each group draws only from its own pool.
+        """
+        from bma_standard_formulas.deals.schemas.ir import CollateralGroupDef
+
+        deal = DealDefinition(
+            deal_name="GroupedZAccrualTest",
+            collateral_groups=[
+                CollateralGroupDef(group_id="GROUP_1", label="Group 1"),
+                CollateralGroupDef(group_id="GROUP_2", label="Group 2"),
+            ],
+            bonds=[
+                BondDef(
+                    name="A",
+                    kind=TrancheKind.CASH_PAY,
+                    coupon=6.0,
+                    notional=100.0,
+                    group_id="GROUP_1",
+                ),
+                BondDef(
+                    name="Z",
+                    kind=TrancheKind.Z,
+                    coupon=6.0,
+                    notional=50.0,
+                    pay_mode=PayMode.PIK,
+                    z_accrual_enabled=True,
+                    relations=[TrancheRelation(
+                        relation_type=TrancheRelationType.ACCRETES_TO,
+                        targets=["A"],
+                    )],
+                    group_id="GROUP_1",
+                ),
+                BondDef(
+                    name="B",
+                    kind=TrancheKind.CASH_PAY,
+                    coupon=6.0,
+                    notional=80.0,
+                    group_id="GROUP_2",
+                ),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                # Bare ACT_INT + group_id; _scope_sources_to_group rewrites to
+                # GROUP_GROUP_1_ACT_INT which routes to interest_avail_by_group["GROUP_1"].
+                RuleNode(
+                    rule_id="g1_int_a",
+                    rule_type=RuleType.PAY_INTEREST,
+                    order=0,
+                    from_sources=["ACT_INT"],
+                    to_targets=["A"],
+                    group_id="GROUP_1",
+                ),
+                RuleNode(
+                    rule_id="g1_prin_a",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=1,
+                    from_sources=["ACT_PRIN"],
+                    to_targets=["A"],
+                    group_id="GROUP_1",
+                ),
+                RuleNode(
+                    rule_id="g2_int_b",
+                    rule_type=RuleType.PAY_INTEREST,
+                    order=2,
+                    from_sources=["ACT_INT"],
+                    to_targets=["B"],
+                    group_id="GROUP_2",
+                ),
+                RuleNode(
+                    rule_id="g2_prin_b",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=3,
+                    from_sources=["ACT_PRIN"],
+                    to_targets=["B"],
+                    group_id="GROUP_2",
+                ),
+                RuleNode(
+                    rule_id="resid",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=4,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+
+        # Build two separate LDCMA-style single-pool run inputs, migrate each
+        # through ldcma_to_paired, then merge their constituents into one
+        # multi-group PortfolioCashflow. This mirrors the FNR combined fixture.
+        from bma_standard_formulas.deals.adapters import ldcma_to_paired
+        from bma_standard_formulas.deals.schemas.input import (
+            DealRunInput,
+            PairedCollateralInput,
+            PooledCollateralInput,
+        )
+        from bma_standard_formulas.engine.portfolio import PortfolioCashflow
+        import dataclasses
+
+        n = 10
+        bal = 100.0
+
+        g1_input = _flat_collateral(
+            initial_balance=bal, n_periods=n, monthly_principal=10.0, annual_coupon=5.0
+        )
+        g2_input = _flat_collateral(
+            initial_balance=bal, n_periods=n, monthly_principal=8.0, annual_coupon=6.0
+        )
+
+        g1_paired = ldcma_to_paired(g1_input, loan_count=1)
+        g2_paired = ldcma_to_paired(g2_input, loan_count=1)
+
+        # Tag each constituent with its group_id then merge.
+        def _retag(constituents, group_id):
+            return [dataclasses.replace(c, group_id=group_id) for c in constituents]
+
+        g1_acts = _retag(g1_paired.collateral.portfolio.actual_constituents(), "GROUP_1")
+        g2_acts = _retag(g2_paired.collateral.portfolio.actual_constituents(), "GROUP_2")
+        from bma_standard_formulas.engine.portfolio import PortfolioMode
+        portfolio = PortfolioCashflow(
+            constituents=g1_acts + g2_acts,
+            mode=PortfolioMode.ACTUAL_ONLY,
+        )
+        run_input = DealRunInput(
+            collateral=PairedCollateralInput(portfolio=portfolio),
+            original_collateral_balance=200.0,
+            loan_count=2,
+        )
+        return deal, run_input
+
+    def test_z_accrual_debits_group1_act_int_not_group2(self):
+        """Z accrual in GROUP_1 must reduce GROUP_1_ACT_INT available to the
+        GROUP_1 interest rule; GROUP_2_ACT_INT must be completely unaffected."""
+        deal, run_input = self._build_grouped_z_deal()
+        from bma_standard_formulas.deals.runtime import run_deal
+        result = run_deal(deal, run_input)
+
+        # Z coupon rate 6% on 50 notional = 0.25/period monthly
+        z_monthly_coupon = 50.0 * 6.0 / 1200.0
+
+        # Bond A gets interest from GROUP_1_ACT_INT; GROUP_1_ACT_INT was
+        # debited by Z accrual first, so A's interest paid must be at most
+        # (g1_act_int - z_accrual). On a ~0.42 GROUP_1 interest with ~0.25
+        # Z accrual, A should receive the remainder (~0.17), not the full 0.42.
+        a_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 1)
+        g1_int_available = 100.0 * 0.05 / 12  # ~0.417
+        a_expected_max = max(0.0, g1_int_available - z_monthly_coupon)
+        # A should not exceed what was available after Z drew from group 1 interest.
+        assert a_p1.interest_paid <= a_expected_max + 1e-6, (
+            f"Bond A period 1 interest {a_p1.interest_paid:.6f} exceeds group-1 "
+            f"available after Z accrual ({a_expected_max:.6f}); Z accrual did not "
+            f"debit the group-specific stream correctly"
+        )
+
+    def test_group2_interest_unaffected_by_group1_z_accrual(self):
+        """GROUP_2_ACT_INT must not be debited by Z accrual in GROUP_1."""
+        deal, run_input = self._build_grouped_z_deal()
+        from bma_standard_formulas.deals.runtime import run_deal
+        result = run_deal(deal, run_input)
+
+        # Bond B draws from GROUP_2_ACT_INT; Z is in GROUP_1 so B's interest
+        # must equal the full GROUP_2 interest available.
+        b_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "B" and r.period == 1)
+        g2_int_available = 100.0 * 0.06 / 12  # ~0.50
+        b_coupon_due = 80.0 * 6.0 / 1200.0   # ~0.40
+        # B's coupon due is less than available; it should be fully paid.
+        assert b_p1.interest_paid == pytest.approx(b_coupon_due, abs=1e-4), (
+            f"Bond B period 1 interest {b_p1.interest_paid:.6f} != expected "
+            f"{b_coupon_due:.6f}; GROUP_2_ACT_INT was incorrectly reduced"
+        )
+
+    def test_single_pool_z_behavior_unchanged(self):
+        """Ensure single-pool Z deals with group_id=None behave identically to before."""
+        deal = DealDefinition(
+            deal_name="SinglePoolZ",
+            bonds=[
+                BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=6.0, notional=100.0),
+                BondDef(
+                    name="Z",
+                    kind=TrancheKind.Z,
+                    coupon=6.0,
+                    notional=50.0,
+                    pay_mode=PayMode.PIK,
+                    z_accrual_enabled=True,
+                    relations=[TrancheRelation(
+                        relation_type=TrancheRelationType.ACCRETES_TO,
+                        targets=["A"],
+                    )],
+                ),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(rule_id="int_a", rule_type=RuleType.PAY_INTEREST, order=0,
+                         from_sources=["ACT_INT"], to_targets=["A"]),
+                RuleNode(rule_id="prin_a", rule_type=RuleType.PAY_PRINCIPAL, order=1,
+                         from_sources=["CASH"], to_targets=["A"]),
+                RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=2,
+                         from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )
+        run_input = _flat_collateral(
+            initial_balance=200.0, n_periods=12,
+            monthly_principal=15.0, annual_coupon=8.0,
+        )
+        result = run_deal(deal, run_input)
+        # Z should still be accruing in period 1 (A balance > 0).
+        z_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "Z" and r.period == 1)
+        assert z_p1.interest_paid == pytest.approx(0.0, abs=1e-6), (
+            "Single-pool Z bond should not receive cash interest while accruing"
+        )
+        z_p1_balance = z_p1.end_balance
+        z_accrual = 50.0 * 6.0 / 1200.0
+        assert z_p1_balance >= 50.0 + z_accrual - 1e-4, (
+            "Single-pool Z balance should grow by accrual each period"
+        )

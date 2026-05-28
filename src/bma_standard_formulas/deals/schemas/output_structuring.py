@@ -1,7 +1,7 @@
 """Output schemas for CMO structuring diagnostics and stress matrices."""
 from pydantic import BaseModel, Field
 
-from .common import Dollars, Pct, ScheduleType, StructureRelation
+from .common import Dollars, Pct, ScheduleType, TrancheRelationType
 
 
 class PacTacDiagnosticsRow(BaseModel):
@@ -31,7 +31,7 @@ class StructureCompositionRow(BaseModel):
     scenario_name: str
     parent_tranche_id: str
     child_tranche_id: str
-    relation_type: StructureRelation
+    relation_type: TrancheRelationType
 
     notional_ratio: float = 0.0
     coupon_identity_error: float = 0.0

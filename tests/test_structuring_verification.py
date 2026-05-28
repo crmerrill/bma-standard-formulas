@@ -3,10 +3,10 @@ from bma_standard_formulas.deals.schemas.common import (
     PayMode,
     PrepayModelType,
     RuleType,
-    TrancheBehavior,
-    TrancheType,
+    TrancheKind,
+    TrancheRelationType,
 )
-from bma_standard_formulas.deals.schemas.ir import BondDef, DealDefinition, FeeDef, RuleNode
+from bma_standard_formulas.deals.schemas.ir import BondDef, DealDefinition, FeeDef, RuleNode, TrancheRelation
 import pytest
 
 
@@ -14,14 +14,13 @@ def test_verification_passes_for_pac_with_support():
     deal = DealDefinition(
         deal_name="VerifyPAC",
         bonds=[
-            BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL),
-            BondDef(name="B", tranche_type=TrancheType.SEQUENTIAL),
+            BondDef(name="A", kind=TrancheKind.CASH_PAY),
+            BondDef(name="B", kind=TrancheKind.CASH_PAY),
             BondDef(
                 name="PAC",
-                tranche_type=TrancheType.SEQUENTIAL,
-                tranche_behavior=TrancheBehavior.PAC,
+                kind=TrancheKind.PAC,
                 schedule_contract=[{"period": 1, "target_principal": 10.0}],
-                support_tranches=["B"],
+                relations=[TrancheRelation(relation_type=TrancheRelationType.SUPPORTED_BY, targets=["B"])],
             ),
         ],
         waterfall_rules=[
@@ -36,14 +35,13 @@ def test_verification_flags_invalid_z_support():
     deal = DealDefinition(
         deal_name="VerifyZ",
         bonds=[
-            BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL),
+            BondDef(name="A", kind=TrancheKind.CASH_PAY),
             BondDef(
                 name="Z",
-                tranche_type=TrancheType.Z_BOND,
-                tranche_behavior=TrancheBehavior.Z,
+                kind=TrancheKind.Z,
                 pay_mode=PayMode.PIK,
                 z_accrual_enabled=True,
-                supported_by_tranches=["A"],
+                relations=[TrancheRelation(relation_type=TrancheRelationType.ACCRETES_TO, targets=["A"])],
             ),
         ],
         waterfall_rules=[
@@ -59,13 +57,12 @@ def test_verification_fails_for_pac_without_support():
         DealDefinition(
             deal_name="VerifyPACNoSupport",
             bonds=[
-                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL),
+                BondDef(name="A", kind=TrancheKind.CASH_PAY),
                 BondDef(
                     name="PAC",
-                    tranche_type=TrancheType.SEQUENTIAL,
-                    tranche_behavior=TrancheBehavior.PAC,
+                    kind=TrancheKind.PAC,
                     schedule_contract=[{"period": 1, "target_principal": 10.0}],
-                    support_tranches=[],
+                    relations=[],
                 ),
             ],
             waterfall_rules=[
@@ -78,16 +75,15 @@ def test_verification_passes_for_pac_model_driven_schedule():
     deal = DealDefinition(
         deal_name="VerifyPACModel",
         bonds=[
-            BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL),
-            BondDef(name="SUP", tranche_type=TrancheType.SEQUENTIAL),
+            BondDef(name="A", kind=TrancheKind.CASH_PAY),
+            BondDef(name="SUP", kind=TrancheKind.CASH_PAY),
             BondDef(
                 name="PAC",
-                tranche_type=TrancheType.SEQUENTIAL,
-                tranche_behavior=TrancheBehavior.PAC,
+                kind=TrancheKind.PAC,
                 schedule_model_type=PrepayModelType.PSA,
                 schedule_speed_low=100.0,
                 schedule_speed_high=275.0,
-                support_tranches=["SUP"],
+                relations=[TrancheRelation(relation_type=TrancheRelationType.SUPPORTED_BY, targets=["SUP"])],
             ),
         ],
         waterfall_rules=[
@@ -102,8 +98,8 @@ def test_verification_allows_fee_name_alias_with_pseudo_bond():
     deal = DealDefinition(
         deal_name="VerifyFeeAlias",
         bonds=[
-            BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL),
-            BondDef(name="SERVICER", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
+            BondDef(name="A", kind=TrancheKind.CASH_PAY),
+            BondDef(name="SERVICER", kind=TrancheKind.PSEUDO, is_bond=False, is_pseudo=True),
         ],
         fees=[FeeDef(name="SERVICER", basis_type="FIXED_DOLLAR", amount=100.0)],
         waterfall_rules=[

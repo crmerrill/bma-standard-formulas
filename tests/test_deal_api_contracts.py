@@ -441,7 +441,7 @@ def test_ensure_canonical_deal_normalizes_legacy_enums(monkeypatch):
                 "bonds": [
                     {
                         "name": "A",
-                        "tranche_type": "SEQUENTIAL",
+                        "kind": "SEQUENTIAL",
                         "coupon_type": "FIXED",
                         "coupon": 5.0,
                         "notional": 100.0,
@@ -485,19 +485,23 @@ def test_ensure_canonical_deal_normalizes_legacy_enums(monkeypatch):
 def test_post_derive_psa_schedules_contract():
     from tests.test_psa_schedule_overlay import _one_rule_deal, _support_bond
 
-    from bma_standard_formulas.deals.schemas.common import PrepayModelType, TrancheBehavior
-    from bma_standard_formulas.deals.schemas.ir import BondDef
+    from bma_standard_formulas.deals.schemas.common import (
+        PrepayModelType,
+        TrancheKind,
+        TrancheRelationType,
+    )
+    from bma_standard_formulas.deals.schemas.ir import BondDef, TrancheRelation
 
     client = TestClient(app)
     sup = _support_bond()
     pac = BondDef(
         name="PAC_A",
-        tranche_behavior=TrancheBehavior.PAC,
+        kind=TrancheKind.PAC,
         schedule_model_type=PrepayModelType.PSA,
         schedule_speed_low=100.0,
         schedule_speed_high=250.0,
         notional=4_000_000.0,
-        support_tranches=[sup.name],
+        relations=[TrancheRelation(relation_type=TrancheRelationType.SUPPORTED_BY, targets=[sup.name])],
     )
     deal = _one_rule_deal([pac, sup])
     res = client.post(
@@ -517,3 +521,88 @@ def test_post_derive_psa_schedules_contract():
     assert "PAC_A" in body["overlay"]
     assert body["derived_bond_names"] == ["PAC_A"]
     assert len(body["overlay"]["PAC_A"]["schedule_contract"]) > 0
+
+
+def test_get_deal_normalizes_legacy_ir(monkeypatch, tmp_path):
+    """GET /deals/{id} must normalize legacy IR fields before returning.
+
+    Specifically: a snapshot saved with old `tranche_type`, `account_type`,
+    and legacy rule types must be returned with 2.0-canonical field names so
+    that UI pages reading `kind`, `account_category`, etc. work without
+    needing a separate migration step.
+    """
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    legacy_snapshot = {
+        "deal_id": "legacy_deal",
+        "deal_name": "LegacyDeal",
+        "version": 1,
+        "ir": {
+            "deal_name": "LegacyDeal",
+            "bonds": [
+                {"name": "A", "tranche_type": "SEQUENTIAL", "coupon": 5.0},
+                {"name": "R", "kind": "RESIDUAL", "is_bond": False, "is_pseudo": True},
+            ],
+            "accounts": [
+                {"name": "RSRV", "account_type": "RESERVE", "starting_amount": 10.0},
+            ],
+            "waterfall_rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_type": "PAY_TO_RESERVE",
+                    "order": 0,
+                    "from_sources": ["CASH"],
+                    "to_targets": ["RSRV"],
+                    "payment_style": "SEQUENTIAL",
+                },
+                {
+                    "rule_id": "r2",
+                    "rule_type": "PAY_RESIDUAL",
+                    "order": 1,
+                    "from_sources": ["CASH"],
+                    "to_targets": ["R"],
+                    "payment_style": "SEQUENTIAL",
+                },
+            ],
+        },
+    }
+
+    monkeypatch.setattr(
+        deals_router,
+        "load_studio_snapshot",
+        lambda deal_id, version=None: legacy_snapshot,
+    )
+
+    client = TestClient(app)
+    res = client.get("/api/deals/legacy_deal")
+    assert res.status_code == 200
+    body = res.json()
+
+    ir = body["ir"]
+    bond_a = next(b for b in ir["bonds"] if b["name"] == "A")
+    account = ir["accounts"][0]
+    rule_r1 = next(r for r in ir["waterfall_rules"] if r["rule_id"] == "r1")
+
+    # tranche_type → kind
+    assert "tranche_type" not in bond_a, "legacy tranche_type must be removed"
+    assert bond_a["kind"] == "CASH_PAY", "SEQUENTIAL must map to CASH_PAY"
+
+    # account_type → account_category
+    assert "account_type" not in account, "legacy account_type must be removed"
+    assert account["account_category"] == "RESERVE"
+
+    # PAY_TO_RESERVE → PAY_TO_ACCOUNT
+    assert rule_r1["rule_type"] == "PAY_TO_ACCOUNT", "PAY_TO_RESERVE must be renamed"
+
+
+def test_get_deal_returns_404_for_missing_deal(monkeypatch):
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    monkeypatch.setattr(
+        deals_router,
+        "load_studio_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("not found")),
+    )
+    client = TestClient(app)
+    res = client.get("/api/deals/does_not_exist")
+    assert res.status_code == 404

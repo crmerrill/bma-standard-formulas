@@ -139,8 +139,8 @@ export default function StructuredDealAnalysisPage({
         for (const node of bonds as Array<Record<string, unknown>>) {
           const name = String(node?.name ?? "").trim();
           if (!name) continue;
-          const trancheType = String(node?.tranche_type ?? "").toUpperCase();
-          if (trancheType === "PSEUDO") continue;
+          const kind = String(node?.kind ?? "").toUpperCase();
+          if (kind === "PSEUDO") continue;
           names.push(name);
         }
         setDealBondIdsByDealId((prev) => ({ ...prev, [dealId]: Array.from(new Set(names)) }));

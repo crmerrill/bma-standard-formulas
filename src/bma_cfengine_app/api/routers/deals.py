@@ -9,7 +9,11 @@ from pydantic import BaseModel, Field, model_validator
 
 from bma_standard_formulas.deals.schemas.input import DealRunInput
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
-from bma_standard_formulas.deals.schemas.migrations import migrate_deal_payload
+from bma_standard_formulas.deals.schemas.migrations import (
+    migrate_deal_payload,
+    LEGACY_RULE_TYPE_MAP,
+    LEGACY_TRANCHE_KIND_MAP as _MIGRATIONS_TRANCHE_KIND_MAP,
+)
 from bma_standard_formulas.deals.schemas.solver import (
     ConstraintComparison,
     ObjectiveType,
@@ -84,6 +88,10 @@ _LEGACY_RULE_SOURCE_MAP = {
     "ESCROW": "CASH",
     "YIELD_SUPPLEMENT": "CASH",
 }
+
+# Re-use the canonical map from the migration module so there is a single
+# source of truth.  The local alias keeps call-sites in this file unchanged.
+_LEGACY_TRANCHE_KIND_MAP = _MIGRATIONS_TRANCHE_KIND_MAP
 
 
 class StudioDealSaveBody(BaseModel):
@@ -266,10 +274,35 @@ async def list_deals():
 
 @router.get("/deals/{deal_id}")
 async def get_deal(deal_id: str, version: int | None = Query(None)):
+    """Return a studio snapshot with all legacy IR fields normalized to 2.0 form.
+
+    Normalization runs `_normalize_legacy_studio_ir` + `migrate_deal_payload`
+    on the snapshot's `ir` block before returning so UI pages that read `kind`,
+    `account_category`, `notional`, `relations`, etc. always see 2.0-shaped IR
+    regardless of when the deal was saved.  The raw snapshot file is NOT
+    modified — normalization is applied in memory on each GET.
+    """
     try:
-        return load_studio_snapshot(deal_id, version=version)
+        snapshot = load_studio_snapshot(deal_id, version=version)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+    if not isinstance(snapshot, dict):
+        return snapshot
+
+    raw_ir = snapshot.get("ir")
+    if not isinstance(raw_ir, dict):
+        return snapshot
+
+    try:
+        normalized_ir = _normalize_legacy_studio_ir(raw_ir)
+        migrated_ir = migrate_deal_payload(normalized_ir)
+    except Exception:
+        # If migration fails (e.g. ambiguous PAY_FROM_RESERVE), return the
+        # raw snapshot so the UI can still display it and the user can fix it.
+        return snapshot
+
+    return {**snapshot, "ir": migrated_ir}
 
 
 @router.post("/deals")
@@ -365,6 +398,34 @@ def _normalize_legacy_studio_ir(raw_ir: Any) -> dict[str, Any]:
                 else:
                     normalized_sources.append(source)
             next_node["from_sources"] = normalized_sources
+
+        # Hard-cut TrancheKind migration: normalize legacy kind/type/behavior
+        # payloads before schema validation.
+        kind_value = next_node.get("kind")
+        if isinstance(kind_value, str) and kind_value in _LEGACY_TRANCHE_KIND_MAP:
+            next_node["kind"] = _LEGACY_TRANCHE_KIND_MAP[kind_value]
+        elif isinstance(next_node.get("tranche_behavior"), str):
+            legacy = str(next_node["tranche_behavior"])
+            mapped = _LEGACY_TRANCHE_KIND_MAP.get(legacy)
+            if mapped:
+                next_node["kind"] = mapped
+        elif isinstance(next_node.get("tranche_type"), str):
+            legacy = str(next_node["tranche_type"])
+            mapped = _LEGACY_TRANCHE_KIND_MAP.get(legacy)
+            if mapped:
+                next_node["kind"] = mapped
+        if "tranche_type" in next_node:
+            next_node.pop("tranche_type", None)
+        if "tranche_behavior" in next_node:
+            next_node.pop("tranche_behavior", None)
+
+        # Normalize removed rule types so that legacy studio snapshots survive
+        # migration even when loaded through the API normalizer path.
+        rule_type = next_node.get("rule_type")
+        if isinstance(rule_type, str) and rule_type in LEGACY_RULE_TYPE_MAP:
+            new_rule_type, default_mode = LEGACY_RULE_TYPE_MAP[rule_type]
+            next_node["rule_type"] = new_rule_type
+            next_node.setdefault("coverage_mode", default_mode)
 
         return next_node
 

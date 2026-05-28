@@ -7,7 +7,8 @@
 
 interface BondDefIR {
   name: string;
-  tranche_type: string;
+  kind: "CASH_PAY" | "PAC" | "TAC" | "IO" | "PO" | "Z" | "RESIDUAL" | "PSEUDO";
+  group_id?: string | null;
   coupon: number;
   notional_pct_of_collateral: number;
   notional: number;
@@ -17,7 +18,6 @@ interface BondDefIR {
   index_name: string | null;
   margin: number | null;
   pay_mode: "CASH_PAY" | "PIK";
-  tranche_behavior: "SEQUENTIAL" | "PAC" | "TAC" | "Z" | "ACCRETION_DIRECTED";
   schedule_model_type: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR" | null;
   schedule_priority_tier: number | null;
   schedule_depends_on: string | null;
@@ -26,8 +26,7 @@ interface BondDefIR {
   schedule_custom_vector: string | null;
   schedule_contract: Array<{ period: number; target_principal: number }>;
   schedule_tolerance_bps: number | null;
-  support_tranches: string[];
-  supported_by_tranches: string[];
+  relations: Array<{ relation_type: string; targets: string[] }>;
   z_accrual_enabled: boolean;
   z_release_trigger: string | null;
 }
@@ -65,6 +64,9 @@ interface RuleNodeIR {
   max_amount_fixed: number | null;
   condition_trigger: string | null;
   condition_invert: boolean;
+  group_id?: string | null;
+  cap_mode?: string | null;
+  coverage_mode?: string | null;
 }
 
 export interface DealDefinitionIR {
@@ -124,8 +126,11 @@ const TRIGGER_METRIC_MAP: Record<string, string> = {
 
 const RULE_SOURCE_MAP: Record<string, string> = {
   COLLECTION: "CASH",
-  PRIN_COLLECTION: "CASH",
-  INT_COLLECTION: "CASH",
+  // Legacy UI source dropdown values that mapped to interest / principal streams.
+  // Preserve the split-stream semantics: INT_COLLECTION -> ACT_INT, not CASH.
+  PRIN_COLLECTION: "ACT_PRIN",
+  INT_COLLECTION:  "ACT_INT",
+  // Old token aliases kept for backward compat; all collapse to CASH.
   DISTRIBUTION: "CASH",
   RESERVE: "CASH",
   PREFUNDING: "CASH",
@@ -137,6 +142,10 @@ const RULE_SOURCE_MAP: Record<string, string> = {
   YIELD_SUPPLEMENT: "CASH",
   COLLATERAL: "CASH",
   CASH: "CASH",
+  // Current canonical tokens pass through unchanged.
+  ACT_INT:  "ACT_INT",
+  ACT_PRIN: "ACT_PRIN",
+  LOSS:     "LOSS",
 };
 
 function normalizeRuleSource(source: string | null | undefined): string {
@@ -159,7 +168,8 @@ interface TargetInfo {
   margin?: number | null;
   accrual?: string;
   payMode?: "CASH_PAY" | "PIK";
-  trancheBehavior?: "SEQUENTIAL" | "PAC" | "TAC" | "Z" | "ACCRETION_DIRECTED";
+  kind?: "CASH_PAY" | "PAC" | "TAC" | "IO" | "PO" | "Z" | "RESIDUAL" | "PSEUDO";
+  groupId?: string | null;
   scheduleModelType?: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR";
   schedulePriorityTier?: number | null;
   scheduleDependsOn?: string | null;
@@ -169,7 +179,9 @@ interface TargetInfo {
   scheduleContract?: Array<{ period: number; target_principal: number }>;
   scheduleToleranceBps?: number | null;
   supportTranches?: string[];
+  relations?: Array<{ relation_type: string; targets: string[] }>;
   zReleaseTrigger?: string | null;
+  zAccrualEnabled?: boolean;
   accountType?: string;
   /** PCT_STACK = % of total bond face; FIXED_DOLLAR = $ */
   initialMode?: string;
@@ -180,6 +192,50 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
   const targets: TargetInfo[] = [];
   for (const t of getStatementChain(ruleBlock, inputName)) {
     if (t.type === "bond_target") {
+      // Parse the full block.data payload stashed by irToBlocklyState._bondDataPayload.
+      // This recovers all IR fields that have no native Blockly field: kind, group_id,
+      // schedule_contract, relations, z_accrual_enabled, coupon_type.
+      let kindFromData: string | undefined;
+      let groupIdFromData: string | null | undefined;
+      let relationData: Array<{ relation_type: string; targets: string[] }> = [];
+      let scheduleContractFromData: Array<{ period: number; target_principal: number }> = [];
+      let zAccrualEnabledFromData: boolean | undefined;
+      if (typeof t.data === "string" && t.data.trim()) {
+        try {
+          const parsed = JSON.parse(t.data) as Record<string, unknown>;
+          if (typeof parsed.kind === "string" && parsed.kind) {
+            kindFromData = parsed.kind;
+          }
+          if (typeof parsed.group_id === "string") {
+            groupIdFromData = parsed.group_id || null;
+          }
+          if (Array.isArray(parsed.relations)) {
+            relationData = parsed.relations
+              .filter((r) => typeof r === "object" && r !== null)
+              .map((r) => {
+                const rel = r as { relation_type?: unknown; targets?: unknown };
+                return {
+                  relation_type: String(rel.relation_type || "").toUpperCase(),
+                  targets: Array.isArray(rel.targets) ? rel.targets.map((x) => String(x)) : [],
+                };
+              })
+              .filter((r) => r.relation_type.length > 0 && r.targets.length > 0);
+          }
+          if (Array.isArray(parsed.schedule_contract)) {
+            scheduleContractFromData = (parsed.schedule_contract as Array<Record<string, unknown>>)
+              .filter((e) => typeof e === "object" && e !== null)
+              .map((e) => ({
+                period: Number(e.period ?? 0),
+                target_principal: Number(e.target_principal ?? 0),
+              }));
+          }
+          if (parsed.z_accrual_enabled === true) {
+            zAccrualEnabledFromData = true;
+          }
+        } catch {
+          // Ignore malformed block.data; fall back to visible fields.
+        }
+      }
       const bondType = t.getFieldValue("BOND_TYPE") || "FIXED";
       const payMode = (t.getFieldValue("PAY_MODE") || "CASH_PAY") as "CASH_PAY" | "PIK";
       targets.push({
@@ -193,10 +249,14 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
         indexName: bondType === "FLOATING" ? (t.getFieldValue("INDEX_NAME") || null) : null,
         margin: bondType === "FLOATING" ? Number(t.getFieldValue("MARGIN") || 0) : null,
         accrual: t.getFieldValue("ACCRUAL") || "30_360",
-        scheduleContract: [],
+        kind: kindFromData as TargetInfo["kind"],
+        groupId: groupIdFromData,
+        scheduleContract: scheduleContractFromData.length > 0 ? scheduleContractFromData : [],
         scheduleToleranceBps: null,
         supportTranches: [],
+        relations: relationData,
         zReleaseTrigger: null,
+        zAccrualEnabled: zAccrualEnabledFromData,
       });
     } else if (t.type === "residual_target") {
       targets.push({
@@ -219,6 +279,21 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
     }
   }
   return targets;
+}
+
+/** Parse the rule-level block.data payload stashed by irToBlocklyState. */
+function extractRuleBlockData(block: any): { ruleId?: string; groupId?: string | null; capMode?: string | null } {
+  if (typeof block.data !== "string" || !block.data.trim()) return {};
+  try {
+    const parsed = JSON.parse(block.data) as Record<string, unknown>;
+    return {
+      ruleId: typeof parsed.rule_id === "string" ? parsed.rule_id : undefined,
+      groupId: typeof parsed.group_id === "string" ? parsed.group_id : null,
+      capMode: typeof parsed.cap_mode === "string" ? parsed.cap_mode : null,
+    };
+  } catch {
+    return {};
+  }
 }
 
 function extractSupportBondNames(ruleBlock: any): string[] {
@@ -268,19 +343,43 @@ function registerTargets(targets: TargetInfo[], ctx: Ctx): void {
         ctx.bonds.set(t.name, t);
         continue;
       }
+      // Merge semantics: prefer the first non-empty / non-null value for
+      // economic fields so the data stashed by irToBlocklyState on the
+      // FIRST occurrence of a bond target is not overwritten by a second
+      // (potentially empty) occurrence of the same bond name in a later rule.
       ctx.bonds.set(t.name, {
         ...existing,
         ...t,
+        // Economic fields: keep non-empty value; fall back to whichever is non-empty.
+        kind:
+          (existing.kind && existing.kind !== "CASH_PAY") ? existing.kind
+          : (t.kind && t.kind !== "CASH_PAY") ? t.kind
+          : existing.kind || t.kind,
+        groupId:
+          existing.groupId != null ? existing.groupId : t.groupId,
         scheduleContract:
-          (t.scheduleContract && t.scheduleContract.length > 0)
-            ? t.scheduleContract
-            : existing.scheduleContract,
+          (existing.scheduleContract && existing.scheduleContract.length > 0)
+            ? existing.scheduleContract
+            : (t.scheduleContract && t.scheduleContract.length > 0)
+              ? t.scheduleContract
+              : existing.scheduleContract,
         scheduleToleranceBps:
-          t.scheduleToleranceBps != null ? t.scheduleToleranceBps : existing.scheduleToleranceBps,
+          existing.scheduleToleranceBps != null ? existing.scheduleToleranceBps
+          : t.scheduleToleranceBps,
         supportTranches:
-          (t.supportTranches && t.supportTranches.length > 0)
-            ? t.supportTranches
-            : existing.supportTranches,
+          (existing.supportTranches && existing.supportTranches.length > 0)
+            ? existing.supportTranches
+            : (t.supportTranches && t.supportTranches.length > 0)
+              ? t.supportTranches
+              : existing.supportTranches,
+        relations:
+          (existing.relations && existing.relations.length > 0)
+            ? existing.relations
+            : (t.relations && t.relations.length > 0)
+              ? t.relations
+              : existing.relations,
+        zAccrualEnabled:
+          existing.zAccrualEnabled || t.zAccrualEnabled,
       });
     } else if (t.accountType) {
       if (!ctx.accounts.has(t.name)) ctx.accounts.set(t.name, t);
@@ -375,7 +474,7 @@ function applyPacTacSemantics(
     if (!target.isBond) return target;
     return {
       ...target,
-      trancheBehavior: behavior,
+      kind: behavior,
       scheduleModelType: modelType,
       schedulePriorityTier: priorityTier,
       scheduleDependsOn: dependsOn,
@@ -396,10 +495,11 @@ function emitSequential(block: any, ctx: Ctx): void {
   const targets = extractTargets(block, "TARGETS");
   registerTargets(targets, ctx);
   const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
+  const { ruleId: savedRuleId, groupId, capMode } = extractRuleBlockData(block);
 
   targets.forEach((t, i) => {
     ctx.rules.push({
-      rule_id: `rule_${ctx.order}`,
+      rule_id: savedRuleId || `rule_${ctx.order}`,
       rule_type: ruleType,
       order: ctx.order,
       from_sources: [source],
@@ -408,6 +508,8 @@ function emitSequential(block: any, ctx: Ctx): void {
       max_amount_fixed: maxPay > 0 && i === 0 ? maxPay : null,
       condition_trigger: ctx.activeTrigger,
       condition_invert: ctx.conditionInvert,
+      group_id: groupId,
+      cap_mode: capMode,
     });
     ctx.order++;
   });
@@ -423,9 +525,10 @@ function emitProRata(block: any, ctx: Ctx): void {
   if (targets.length === 0) return;
 
   const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
+  const { ruleId: savedRuleId, groupId, capMode } = extractRuleBlockData(block);
 
   ctx.rules.push({
-    rule_id: `rule_${ctx.order}`,
+    rule_id: savedRuleId || `rule_${ctx.order}`,
     rule_type: ruleType,
     order: ctx.order,
     from_sources: [source],
@@ -434,6 +537,8 @@ function emitProRata(block: any, ctx: Ctx): void {
     max_amount_fixed: maxPay > 0 ? maxPay : null,
     condition_trigger: ctx.activeTrigger,
     condition_invert: ctx.conditionInvert,
+    group_id: groupId,
+    cap_mode: capMode,
   });
   ctx.order++;
 }
@@ -606,14 +711,11 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
   // Build bond defs from collected targets
   const bonds: BondDefIR[] = [];
   for (const [name, info] of ctx.bonds) {
+    const resolvedKind = info.kind || (info.payMode === "PIK" ? "Z" : "CASH_PAY");
     bonds.push({
       name,
-      tranche_type:
-        info.trancheBehavior === "Z" || info.payMode === "PIK"
-          ? "Z_BOND"
-          : info.trancheBehavior === "ACCRETION_DIRECTED"
-            ? "ACCRETION_DIRECTED"
-            : "SEQUENTIAL",
+      kind: resolvedKind,
+      group_id: info.groupId ?? null,
       coupon: info.coupon || 0,
       notional_pct_of_collateral: Number(info.sizePctPool || 0),
       notional: info.faceAmt || 0,
@@ -623,7 +725,6 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       index_name: info.bondType === "FLOATING" ? (info.indexName ?? null) : null,
       margin: info.bondType === "FLOATING" ? Number(info.margin || 0) : null,
       pay_mode: info.payMode || "CASH_PAY",
-      tranche_behavior: info.trancheBehavior || (info.payMode === "PIK" ? "Z" : "SEQUENTIAL"),
       schedule_model_type: info.scheduleModelType ?? null,
       schedule_priority_tier: info.schedulePriorityTier ?? null,
       schedule_depends_on: info.scheduleDependsOn ?? null,
@@ -632,25 +733,33 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       schedule_custom_vector: info.scheduleCustomVector ?? null,
       schedule_contract: info.scheduleContract || [],
       schedule_tolerance_bps:
-        info.trancheBehavior === "PAC" || info.trancheBehavior === "TAC"
+        resolvedKind === "PAC" || resolvedKind === "TAC"
           ? (info.scheduleToleranceBps ?? 25)
           : null,
-      support_tranches: info.supportTranches || [],
-      supported_by_tranches: info.supportTranches || [],
-      z_accrual_enabled: (info.trancheBehavior || (info.payMode === "PIK" ? "Z" : "SEQUENTIAL")) === "Z",
+      relations: (() => {
+        if (info.relations && info.relations.length > 0) return info.relations;
+        if (resolvedKind === "PAC" || resolvedKind === "TAC") {
+          const supports = (info.supportTranches || []).filter(Boolean);
+          return supports.length > 0
+            ? [{ relation_type: "SUPPORTED_BY", targets: supports }]
+            : [];
+        }
+        return [];
+      })(),
+      z_accrual_enabled: info.zAccrualEnabled ?? resolvedKind === "Z",
       z_release_trigger: info.zReleaseTrigger ?? null,
     });
   }
 
   // Always add residual
-  if (!ctx.bonds.has("R") && !bonds.find((b) => b.tranche_type === "RESIDUAL")) {
+  if (!ctx.bonds.has("R") && !bonds.find((b) => b.kind === "RESIDUAL")) {
     bonds.push({
-      name: "R", tranche_type: "RESIDUAL", coupon: 0, notional_pct_of_collateral: 0, notional: 0,
+      name: "R", kind: "RESIDUAL", coupon: 0, notional_pct_of_collateral: 0, notional: 0,
       is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
       pay_mode: "CASH_PAY",
-      tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
+      schedule_contract: [], schedule_tolerance_bps: null,
       schedule_model_type: null, schedule_priority_tier: null, schedule_depends_on: null, schedule_speed_low: null, schedule_speed_high: null, schedule_custom_vector: null,
-      support_tranches: [], supported_by_tranches: [], z_accrual_enabled: false, z_release_trigger: null,
+      relations: [], z_accrual_enabled: false, z_release_trigger: null,
     });
   }
 
@@ -674,19 +783,19 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
   for (const fee of ctx.fees) {
     if (!bondNames.has(fee.name)) {
       bonds.push({
-        name: fee.name, tranche_type: "PSEUDO", coupon: 0, notional_pct_of_collateral: 0, notional: 0,
+        name: fee.name, kind: "PSEUDO", coupon: 0, notional_pct_of_collateral: 0, notional: 0,
         is_bond: false, is_pseudo: true, coupon_type: "FIXED", index_name: null, margin: null,
         pay_mode: "CASH_PAY",
-        tranche_behavior: "SEQUENTIAL", schedule_contract: [], schedule_tolerance_bps: null,
+        schedule_contract: [], schedule_tolerance_bps: null,
         schedule_model_type: null, schedule_priority_tier: null, schedule_depends_on: null, schedule_speed_low: null, schedule_speed_high: null, schedule_custom_vector: null,
-        support_tranches: [], supported_by_tranches: [], z_accrual_enabled: false, z_release_trigger: null,
+        relations: [], z_accrual_enabled: false, z_release_trigger: null,
       });
       bondNames.add(fee.name);
     }
   }
 
   return {
-    schema_version: "1.0.0",
+    schema_version: "2.0.0",
     deal_name: "Deal",
     bonds,
     accounts,

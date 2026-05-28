@@ -20,7 +20,7 @@ IR translation:
   - Per-bond `schedule_contract` is derived from the published Aggregate
     Group I / Group II planned balance vectors via
     ``_per_bond_planned_balance_schedule`` (sequential apportionment).
-  - Z is modeled with ``tranche_behavior=Z``, ``pay_mode=PIK``,
+  - Z is modeled with ``kind=Z``, ``pay_mode=PIK``,
     ``supported_by_tranches=["TA", "TB"]``.
   - Step 4 face-weighted split is expressed with the IR's ``SPLIT_CASH``
     primitive: ACT_PRIN -> WAWG_BUCKET / PO_BUCKET (95.65 / 4.35), each
@@ -55,14 +55,15 @@ from bma_standard_formulas.deals.schemas.common import (
     PayMode,
     PaymentStyle,
     RuleType,
-    TrancheBehavior,
-    TrancheType,
+    TrancheKind,
+    TrancheRelationType,
 )
 from bma_standard_formulas.deals.schemas.ir import (
     BondDef,
     CollateralGroupDef,
     DealDefinition,
     RuleNode,
+    TrancheRelation,
 )
 
 from . import (
@@ -145,13 +146,17 @@ def build_fnr_2006_018_group_1_deal(
         )
         bonds.append(BondDef(
             name=spec["name"],
-            tranche_type=TrancheType.PAC,
-            tranche_behavior=TrancheBehavior.PAC,
+            kind=TrancheKind.PAC,
             coupon_type=CouponType.FIXED if spec["type"] == "PAC" else CouponType.ZERO,
             coupon=spec["coupon_pct"] if spec["coupon_pct"] > 0 else None,
             notional=spec["size"],
             schedule_contract=per_bond,
-            support_tranches=[s["name"] for s in sup_bond_specs] + ["PO"],
+            relations=[
+                TrancheRelation(
+                    relation_type=TrancheRelationType.SUPPORTED_BY,
+                    targets=[s["name"] for s in sup_bond_specs] + ["PO"],
+                )
+            ],
         ))
     for spec in pac_ii_bond_specs:
         per_bond = _per_bond_planned_balance_schedule(
@@ -159,30 +164,37 @@ def build_fnr_2006_018_group_1_deal(
         )
         bonds.append(BondDef(
             name=spec["name"],
-            tranche_type=TrancheType.PAC,
-            tranche_behavior=TrancheBehavior.PAC,
+            kind=TrancheKind.PAC,
             coupon_type=CouponType.FIXED,
             coupon=spec["coupon_pct"],
             notional=spec["size"],
             schedule_contract=per_bond,
-            support_tranches=[s["name"] for s in sup_bond_specs] + ["PO"],
+            relations=[
+                TrancheRelation(
+                    relation_type=TrancheRelationType.SUPPORTED_BY,
+                    targets=[s["name"] for s in sup_bond_specs] + ["PO"],
+                )
+            ],
         ))
     bonds.append(BondDef(
         name=z_bond_spec["name"],
-        tranche_type=TrancheType.Z_BOND,
-        tranche_behavior=TrancheBehavior.Z,
+        kind=TrancheKind.Z,
         pay_mode=PayMode.PIK,
         coupon_type=CouponType.FIXED,
         coupon=z_bond_spec["coupon_pct"],
         notional=z_bond_spec["size"],
         z_accrual_enabled=True,
         # Z accrual is paid as principal of TA then TB until each reaches zero.
-        supported_by_tranches=["TA", "TB"],
+        relations=[
+            TrancheRelation(
+                relation_type=TrancheRelationType.ACCRETES_TO,
+                targets=["TA", "TB"],
+            )
+        ],
     ))
     bonds.append(BondDef(
         name=sup_po_spec["name"],
-        tranche_type=TrancheType.PO,
-        tranche_behavior=TrancheBehavior.SEQUENTIAL,
+        kind=TrancheKind.CASH_PAY,
         coupon_type=CouponType.ZERO,
         coupon=None,
         notional=sup_po_spec["size"],
@@ -190,15 +202,14 @@ def build_fnr_2006_018_group_1_deal(
     for spec in sup_bond_specs:
         bonds.append(BondDef(
             name=spec["name"],
-            tranche_type=TrancheType.SUPPORT,
-            tranche_behavior=TrancheBehavior.SEQUENTIAL,
+            kind=TrancheKind.CASH_PAY,
             coupon_type=CouponType.FIXED,
             coupon=spec["coupon_pct"],
             notional=spec["size"],
         ))
     bonds.append(BondDef(
         name="R",
-        tranche_type=TrancheType.RESIDUAL,
+        kind=TrancheKind.RESIDUAL,
         is_bond=False,
         is_pseudo=True,
     ))
@@ -381,8 +392,7 @@ def build_fnr_2006_018_group_2_deal(n_periods: int = 240) -> DealDefinition:
     for spec in seq_specs:
         bonds.append(BondDef(
             name=spec["name"],
-            tranche_type=TrancheType.SEQUENTIAL,
-            tranche_behavior=TrancheBehavior.SEQUENTIAL,
+            kind=TrancheKind.CASH_PAY,
             coupon_type=CouponType.FIXED,
             coupon=spec["coupon_pct"],
             notional=spec["size"],
@@ -390,8 +400,7 @@ def build_fnr_2006_018_group_2_deal(n_periods: int = 240) -> DealDefinition:
     # DO: zero-coupon principal-only.
     bonds.append(BondDef(
         name=seq_po["name"],
-        tranche_type=TrancheType.PO,
-        tranche_behavior=TrancheBehavior.SEQUENTIAL,
+        kind=TrancheKind.CASH_PAY,
         coupon_type=CouponType.ZERO,
         coupon=None,
         notional=seq_po["size"],
@@ -403,16 +412,20 @@ def build_fnr_2006_018_group_2_deal(n_periods: int = 240) -> DealDefinition:
     # coupon / 1200 -- the IO accrues only on the unpaid DO balance.
     bonds.append(BondDef(
         name=ntl_io["name"],
-        tranche_type=TrancheType.IO,
-        tranche_behavior=TrancheBehavior.SEQUENTIAL,
+        kind=TrancheKind.CASH_PAY,
         coupon_type=CouponType.FIXED,
         coupon=ntl_io["coupon_pct"],
         notional=ntl_io["size"],
-        tracks_bonds={"balance": [seq_po["name"]]},
+        relations=[
+            TrancheRelation(
+                relation_type=TrancheRelationType.NOTIONAL_TRACKS,
+                targets=[seq_po["name"]],
+            )
+        ],
     ))
     bonds.append(BondDef(
         name="R",
-        tranche_type=TrancheType.RESIDUAL,
+        kind=TrancheKind.RESIDUAL,
         is_bond=False,
         is_pseudo=True,
     ))

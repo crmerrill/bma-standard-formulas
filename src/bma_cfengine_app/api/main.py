@@ -49,10 +49,13 @@ app.include_router(deals.router, prefix="/api")
 @app.get("/api/health")
 async def health():
     from bma_cfengine_app.api import models as api_models
+    from bma_standard_formulas.deals.schemas.common import SCHEMA_VERSION
 
     return {
         "status": "ok",
         "workspace": str(workspace_path()),
+        # Clients can use this to detect schema version mismatches before attempting runs.
+        "deal_schema_version": SCHEMA_VERSION,
         # If false, the running process is not loading this repo's models (stale install / wrong PYTHONPATH).
         "group_id_in_allowlist": "group_id" in api_models.ALL_CANONICAL_FIELDS,
     }

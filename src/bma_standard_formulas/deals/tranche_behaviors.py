@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from .schemas.common import ScheduleType, StructureRelation, TrancheBehavior
+from .schemas.common import ScheduleType, TrancheKind, TrancheRelationType
 from .schemas.ir import DealDefinition
 from .schemas.output_structuring import PacTacDiagnosticsRow, StructureCompositionRow
 
@@ -26,9 +26,9 @@ def build_tranche_behavior_diagnostics(
 
     for bond in deal.bonds:
         rows = by_tranche.get(bond.name, [])
-        if bond.tranche_behavior in {TrancheBehavior.PAC, TrancheBehavior.TAC} and rows:
+        if bond.kind in {TrancheKind.PAC, TrancheKind.TAC} and rows:
             schedule_type = (
-                ScheduleType.PAC if bond.tranche_behavior == TrancheBehavior.PAC else ScheduleType.TAC
+                ScheduleType.PAC if bond.kind == TrancheKind.PAC else ScheduleType.TAC
             )
             # Build per-period scheduled principal from either legacy
             # `target_principal` entries or new `target_balance` entries.
@@ -86,9 +86,15 @@ def build_tranche_behavior_diagnostics(
                     )
                 )
 
-        if bond.tranche_behavior == TrancheBehavior.Z and rows:
+        if bond.kind == TrancheKind.Z and rows:
+            accretes_to_targets = [
+                target
+                for relation in (bond.relations or [])
+                if relation.relation_type == TrancheRelationType.ACCRETES_TO
+                for target in relation.targets
+            ]
             accrued_interest = sum(float(getattr(row, "interest_shortfall", 0.0) or 0.0) for row in rows)
-            for support_name in bond.supported_by_tranches or []:
+            for support_name in accretes_to_targets:
                 support_rows = by_tranche.get(support_name, [])
                 support_principal = sum(
                     float(getattr(row, "total_principal", 0.0) or 0.0) for row in support_rows
@@ -99,7 +105,7 @@ def build_tranche_behavior_diagnostics(
                         scenario_name=scenario_name,
                         parent_tranche_id=support_name,
                         child_tranche_id=bond.name,
-                        relation_type=StructureRelation.Z_ACCRUAL,
+                        relation_type=TrancheRelationType.ACCRETES_TO,
                         notional_ratio=(
                             float(getattr(rows[0], "begin_balance", 0.0) or 0.0)
                             / float(getattr(support_rows[0], "begin_balance", 1.0) or 1.0)

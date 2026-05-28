@@ -426,7 +426,7 @@ class TestDealDefinitionConstruction:
 
     def test_pac_bonds_have_schedule_contracts(self):
         deal = build_fnr_2006_018_group_1_deal(n_periods=360)
-        pac_bonds = [b for b in deal.bonds if b.tranche_behavior.value in ("PAC", "TAC")]
+        pac_bonds = [b for b in deal.bonds if b.kind.value in ("PAC", "TAC")]
         assert pac_bonds, "expected PAC bonds"
         for b in pac_bonds:
             assert b.schedule_contract, f"{b.name} missing schedule_contract"
@@ -434,11 +434,17 @@ class TestDealDefinitionConstruction:
     def test_z_bond_configured(self):
         deal = build_fnr_2006_018_group_1_deal(n_periods=360)
         z = next(b for b in deal.bonds if b.name == "Z")
-        assert z.tranche_behavior.value == "Z"
+        assert z.kind.value == "Z"
         assert z.pay_mode.value == "PIK"
         assert z.z_accrual_enabled
-        assert "TA" in z.supported_by_tranches
-        assert "TB" in z.supported_by_tranches
+        accretes_to = [
+            target
+            for relation in z.relations
+            if relation.relation_type.value == "ACCRETES_TO"
+            for target in relation.targets
+        ]
+        assert "TA" in accretes_to
+        assert "TB" in accretes_to
 
 
 class TestRuntimeAggregateGroupITieOut:

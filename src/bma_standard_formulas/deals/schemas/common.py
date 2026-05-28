@@ -10,7 +10,60 @@ from pydantic import BaseModel, Field
 # Schema versioning
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "1.0.0"
+# Bumped to 2.0.0 — contains intentional hard-cut breaking changes relative
+# to 1.x payloads.  The migrate_deal_payload() helper in
+# bma_standard_formulas.deals.schemas.migrations rewrites 1.x payloads to
+# current form before Pydantic validation; every API and studio-load path
+# MUST call it before attempting model_validate().
+SCHEMA_VERSION = "2.0.0"
+
+# Machine-readable compatibility notes consumed by migrations and API error
+# messages.  Each entry describes one class of 1.x → 2.0 breaking change.
+SCHEMA_COMPATIBILITY: dict[str, str] = {
+    "account_type_removed": (
+        "AccountDef.account_type was renamed to account_category in 2.0. "
+        "migrate_deal_payload() rewrites the field automatically."
+    ),
+    "size_dollars_removed": (
+        "BondDef.size_dollars was renamed to notional in 2.0. "
+        "migrate_deal_payload() rewrites the field automatically."
+    ),
+    "size_pct_removed": (
+        "BondDef.size_pct was renamed to notional_pct_of_collateral in 2.0. "
+        "migrate_deal_payload() rewrites the field automatically."
+    ),
+    "schedule_speed_target_removed": (
+        "BondDef.schedule_speed_target was removed in 2.0. TAC is now a "
+        "degenerate band where schedule_speed_low == schedule_speed_high."
+    ),
+    "tranche_type_removed": (
+        "BondDef.tranche_type (13 values) and tranche_behavior (4 values) "
+        "were collapsed into BondDef.kind (TrancheKind, 8 values) in 2.0. "
+        "migrate_deal_payload() rewrites using LEGACY_TRANCHE_KIND_MAP."
+    ),
+    "relation_fields_removed": (
+        "BondDef.support_tranches, supported_by_tranches, tracks_bonds, "
+        "parent_tranche, relation_type, notional_ratio were replaced by "
+        "BondDef.relations: list[TrancheRelation] in 2.0. "
+        "migrate_deal_payload() converts legacy fields automatically."
+    ),
+    "pay_to_reserve_renamed": (
+        "RuleType.PAY_TO_RESERVE was renamed to PAY_TO_ACCOUNT in 2.0. "
+        "migrate_deal_payload() rewrites the rule_type automatically."
+    ),
+    "reserve_recourse_rules_removed": (
+        "RuleType values PAY_FROM_RESERVE_INTEREST, PAY_FROM_RESERVE_PRINCIPAL, "
+        "PAY_FROM_RESERVE, PAY_RECOURSE_INTEREST, and PAY_RECOURSE_PRINCIPAL "
+        "were removed in 2.0.  migrate_deal_payload() rewrites them to "
+        "PAY_INTEREST / PAY_PRINCIPAL with the appropriate coverage_mode."
+    ),
+    "token_rename": (
+        "Collateral source tokens INT_CASH and PRIN_CASH were renamed to "
+        "ACT_INT and ACT_PRIN in 2.0.  The COLLATERAL token was removed "
+        "(use CASH).  migrate_deal_payload() does NOT rewrite token strings "
+        "inside IR expressions; update deal IR directly."
+    ),
+}
 
 
 class SchemaMetadata(BaseModel):
@@ -60,27 +113,15 @@ class AccrualPeriod(str, Enum):
     ANNUAL = "ANNUAL"
 
 
-class TrancheType(str, Enum):
-    SEQUENTIAL = "SEQUENTIAL"
+class TrancheKind(str, Enum):
+    CASH_PAY = "CASH_PAY"
     PAC = "PAC"
-    PAC_II = "PAC_II"
     TAC = "TAC"
-    SUPPORT = "SUPPORT"
-    Z_BOND = "Z_BOND"
-    ACCRETION_DIRECTED = "ACCRETION_DIRECTED"
-    FLOATER = "FLOATER"
-    INVERSE_FLOATER = "INVERSE_FLOATER"
     IO = "IO"
     PO = "PO"
-    PSEUDO = "PSEUDO"
-    RESIDUAL = "RESIDUAL"
-
-
-class TrancheBehavior(str, Enum):
-    SEQUENTIAL = "SEQUENTIAL"
-    PAC = "PAC"
-    TAC = "TAC"
     Z = "Z"
+    RESIDUAL = "RESIDUAL"
+    PSEUDO = "PSEUDO"
 
 
 class PayMode(str, Enum):
@@ -122,6 +163,12 @@ class PaymentStyle(str, Enum):
     PRO_RATA = "PRO_RATA"
 
 
+class CoverageMode(str, Enum):
+    NORMAL = "NORMAL"
+    INTEREST_SHORTFALL = "INTEREST_SHORTFALL"
+    PRINCIPAL_ACCELERATION = "PRINCIPAL_ACCELERATION"
+
+
 class CapMode(str, Enum):
     """How a PAY_PRINCIPAL rule interprets the target bond's `schedule_contract`.
 
@@ -154,12 +201,7 @@ class RuleType(str, Enum):
     PAY_PRINCIPAL = "PAY_PRINCIPAL"
     PAY_WRITEDOWN = "PAY_WRITEDOWN"
     PAY_FEE = "PAY_FEE"
-    PAY_TO_RESERVE = "PAY_TO_RESERVE"
-    PAY_FROM_RESERVE_INTEREST = "PAY_FROM_RESERVE_INTEREST"
-    PAY_FROM_RESERVE_PRINCIPAL = "PAY_FROM_RESERVE_PRINCIPAL"
-    PAY_FROM_RESERVE = "PAY_FROM_RESERVE"
-    PAY_RECOURSE_INTEREST = "PAY_RECOURSE_INTEREST"
-    PAY_RECOURSE_PRINCIPAL = "PAY_RECOURSE_PRINCIPAL"
+    PAY_TO_ACCOUNT = "PAY_TO_ACCOUNT"
     PAY_RESIDUAL = "PAY_RESIDUAL"
     # Cash-flow plumbing: split one stream into N target streams (or merge N
     # streams into one) using explicit per-target weights. The targets are
@@ -168,6 +210,13 @@ class RuleType(str, Enum):
     # 2006-018 supports 95.65 / 4.35) and stream-of-streams plumbing
     # (interest-vs-principal sub-cascades, sweep-back paths, etc.).
     SPLIT_CASH = "SPLIT_CASH"
+    # Credit-card master-trust mechanics (Phase 6):
+    # Reimbursement of previously-depleted Nominal Liquidation Amount (NLA)
+    # from available cash (typically excess spread). Debits from_sources and
+    # credits the NLA balance of each target bond up to the bond's starting
+    # NLA (i.e., does not inflate NLA above the original face amount).
+    # Does NOT change the bond's economic balance — only the NLA tracker.
+    REIMBURSE_NLA = "REIMBURSE_NLA"
 
 
 class TriggerMetricType(str, Enum):
@@ -199,10 +248,14 @@ class PrepayModelType(str, Enum):
     CUSTOM_VECTOR = "CUSTOM_VECTOR"
 
 
-class StructureRelation(str, Enum):
-    FLOATER_INVERSE = "floater_inverse"
-    IO_PO = "io_po"
-    Z_ACCRUAL = "z_accrual"
+class TrancheRelationType(str, Enum):
+    SUPPORTED_BY = "SUPPORTED_BY"
+    ACCRETES_TO = "ACCRETES_TO"
+    NOTIONAL_TRACKS = "NOTIONAL_TRACKS"
+    BALANCE_TRACKS = "BALANCE_TRACKS"
+    COUPON_INVERSE_OF = "COUPON_INVERSE_OF"
+    COUPON_LEVERAGE_OF = "COUPON_LEVERAGE_OF"
+    MACR_EXCHANGE = "MACR_EXCHANGE"
 
 
 class CollateralInputMode(str, Enum):

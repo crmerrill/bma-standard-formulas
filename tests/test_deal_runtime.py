@@ -31,13 +31,15 @@ from bma_standard_formulas.deals.schemas.ir import (
     DealDefinition,
     FeeDef,
     RuleNode,
+    TrancheRelation,
     TriggerNode,
 )
 from bma_standard_formulas.deals.schemas.common import (
+    CoverageMode,
     PayMode,
     RuleType,
-    TrancheBehavior,
-    TrancheType,
+    TrancheKind,
+    TrancheRelationType,
     TriggerMetricType,
 )
 
@@ -189,8 +191,8 @@ class TestThreeClass:
         deal = DealDefinition(
             deal_name="FeeBpsDeal",
             bonds=[
-                BondDef(name="SERVICER_FEE", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="SERVICER_FEE", kind=TrancheKind.PSEUDO, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             fees=[
                 FeeDef(
@@ -232,8 +234,8 @@ class TestThreeClass:
         deal = DealDefinition(
             deal_name="FeeBpsQuarterly",
             bonds=[
-                BondDef(name="SERVICER_FEE", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="SERVICER_FEE", kind=TrancheKind.PSEUDO, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             fees=[
                 FeeDef(
@@ -276,8 +278,8 @@ class TestThreeClass:
         deal = DealDefinition(
             deal_name="FeeBpsAnnual",
             bonds=[
-                BondDef(name="SERVICER_FEE", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="SERVICER_FEE", kind=TrancheKind.PSEUDO, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             fees=[
                 FeeDef(
@@ -431,7 +433,7 @@ class TestSchemaValidation:
         with pytest.raises(Exception):
             DealDefinition(
                 deal_name="PACNeedsSchedule",
-                bonds=[BondDef(name="A", tranche_behavior=TrancheBehavior.PAC)],
+                bonds=[BondDef(name="A", kind=TrancheKind.PAC)],
                 waterfall_rules=[
                     RuleNode(
                         rule_id="r1",
@@ -448,8 +450,14 @@ class TestSchemaValidation:
             DealDefinition(
                 deal_name="SupportCycle",
                 bonds=[
-                    BondDef(name="A", support_tranches=["B"]),
-                    BondDef(name="B", support_tranches=["A"]),
+                    BondDef(
+                        name="A",
+                        relations=[TrancheRelation(relation_type=TrancheRelationType.SUPPORTED_BY, targets=["B"])],
+                    ),
+                    BondDef(
+                        name="B",
+                        relations=[TrancheRelation(relation_type=TrancheRelationType.SUPPORTED_BY, targets=["A"])],
+                    ),
                 ],
                 waterfall_rules=[
                     RuleNode(
@@ -470,19 +478,18 @@ class TestGeneralizedRuntime:
             bonds=[
                 BondDef(
                     name="A",
-                    tranche_type=TrancheType.SEQUENTIAL,
-                    tranche_behavior=TrancheBehavior.PAC,
+                    kind=TrancheKind.PAC,
                     notional=80_000_000.0,
                     schedule_contract=[{"period": 1, "target_principal": 500_000.0}],
                     schedule_tolerance_bps=5.0,
-                    support_tranches=["B"],
+                    relations=[TrancheRelation(relation_type=TrancheRelationType.SUPPORTED_BY, targets=["B"])],
                 ),
                 BondDef(
                     name="B",
-                    tranche_type=TrancheType.SEQUENTIAL,
+                    kind=TrancheKind.CASH_PAY,
                     notional=10_000_000.0,
                 ),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[
                 RuleNode(
@@ -510,17 +517,16 @@ class TestGeneralizedRuntime:
         deal = DealDefinition(
             deal_name="ZSupportDiag",
             bonds=[
-                BondDef(name="B", tranche_type=TrancheType.SEQUENTIAL, notional=30_000_000.0),
+                BondDef(name="B", kind=TrancheKind.CASH_PAY, notional=30_000_000.0),
                 BondDef(
                     name="Z",
-                    tranche_type=TrancheType.Z_BOND,
-                    tranche_behavior=TrancheBehavior.Z,
+                    kind=TrancheKind.Z,
                     pay_mode=PayMode.PIK,
                     z_accrual_enabled=True,
-                    supported_by_tranches=["B"],
+                    relations=[TrancheRelation(relation_type=TrancheRelationType.ACCRETES_TO, targets=["B"])],
                     notional=10_000_000.0,
                 ),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[
                 RuleNode(
@@ -557,14 +563,13 @@ class TestGeneralizedRuntime:
             bonds=[
                 BondDef(
                     name="Z",
-                    tranche_type=TrancheType.Z_BOND,
-                    tranche_behavior=TrancheBehavior.Z,
+                    kind=TrancheKind.Z,
                     pay_mode=PayMode.PIK,
                     z_accrual_enabled=True,
                     notional=10_000_000.0,
                     coupon=12.0,
                 ),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[
                 RuleNode(
@@ -588,12 +593,12 @@ class TestGeneralizedRuntime:
             bonds=[
                 BondDef(
                     name="A",
-                    tranche_type=TrancheType.SEQUENTIAL,
+                    kind=TrancheKind.CASH_PAY,
                     notional=21_000_000.0,
                     notional_pct_of_collateral=40.0,
                     coupon=0.0,
                 ),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[
                 RuleNode(
@@ -622,8 +627,8 @@ class TestGeneralizedRuntime:
         deal = DealDefinition(
             deal_name="MaxAmountExpr",
             bonds=[
-                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, notional_pct_of_collateral=100.0, coupon=0.0),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="A", kind=TrancheKind.CASH_PAY, notional_pct_of_collateral=100.0, coupon=0.0),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             waterfall_rules=[
                 RuleNode(
@@ -659,8 +664,8 @@ class TestGeneralizedRuntime:
         deal = DealDefinition(
             deal_name="FeeExpr",
             bonds=[
-                BondDef(name="FEE", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="FEE", kind=TrancheKind.PSEUDO, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             fees=[
                 FeeDef(
@@ -691,13 +696,13 @@ class TestGeneralizedRuntime:
         deal = DealDefinition(
             deal_name="AccountLedger",
             bonds=[
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             accounts=[
                 AccountDef(name="RESV", account_category="RESERVE", starting_amount=100.0)
             ],
             waterfall_rules=[
-                RuleNode(rule_id="fund", rule_type=RuleType.PAY_TO_RESERVE, order=0, from_sources=["CASH"], to_targets=["RESV"], max_amount_fixed=50.0),
+                RuleNode(rule_id="fund", rule_type=RuleType.PAY_TO_ACCOUNT, order=0, from_sources=["CASH"], to_targets=["RESV"], max_amount_fixed=50.0),
                 RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=1, from_sources=["CASH"], to_targets=["R"]),
             ],
         )
@@ -714,13 +719,201 @@ class TestGeneralizedRuntime:
         assert reserve_rows[0].deposit == pytest.approx(50.0, rel=1e-6)
         assert reserve_rows[0].account_category == "RESERVE"
 
+    def test_pay_interest_and_principal_can_source_from_account_balance(self):
+        deal = DealDefinition(
+            deal_name="AccountAsSource",
+            bonds=[
+                BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=12.0, notional=100.0),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            accounts=[
+                AccountDef(name="RESV", account_category="RESERVE", starting_amount=25.0),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="int_from_resv",
+                    rule_type=RuleType.PAY_INTEREST,
+                    order=0,
+                    from_sources=["RESV"],
+                    to_targets=["A"],
+                ),
+                RuleNode(
+                    rule_id="prin_from_resv",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=1,
+                    from_sources=["RESV"],
+                    to_targets=["A"],
+                    max_amount_fixed=5.0,
+                ),
+                RuleNode(
+                    rule_id="resid",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=2,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=0.0,
+            n_periods=3,
+            monthly_principal_rate=0.0,
+            annual_coupon=0.0,
+            monthly_loss_rate=0.0,
+        )
+        result = run_deal(deal, run_input)
+        a_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 1)
+        assert a_p1.interest_paid == pytest.approx(1.0, abs=1e-6)   # 100 * 12% / 12
+        assert a_p1.total_principal == pytest.approx(5.0, abs=1e-6)
+        resv_p1 = next(r for r in result.deal_accounts if r.account_id == "RESV" and r.period == 1)
+        assert resv_p1.end_balance == pytest.approx(19.0, abs=1e-6)
+
+    def test_coverage_mode_routes_to_shortfall_and_acceleration_paths(self):
+        deal = DealDefinition(
+            deal_name="CoverageModeRouting",
+            bonds=[
+                BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=12.0, notional=100.0),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            accounts=[
+                AccountDef(name="RESV", account_category="RESERVE", starting_amount=20.0),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="interest_shortfall_from_resv",
+                    rule_type=RuleType.PAY_INTEREST,
+                    order=0,
+                    from_sources=["RESV"],
+                    to_targets=["A"],
+                    coverage_mode=CoverageMode.INTEREST_SHORTFALL,
+                ),
+                RuleNode(
+                    rule_id="principal_accel_from_resv",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=1,
+                    from_sources=["RESV"],
+                    to_targets=["A"],
+                    max_amount_fixed=5.0,
+                    coverage_mode=CoverageMode.PRINCIPAL_ACCELERATION,
+                ),
+                RuleNode(
+                    rule_id="resid",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=2,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                ),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=0.0,
+            n_periods=4,
+            monthly_principal_rate=0.0,
+            annual_coupon=0.0,
+            monthly_loss_rate=0.0,
+        )
+        result = run_deal(deal, run_input)
+        # Interest shortfall mode pays prior-period shortfall from reserve.
+        a_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 2)
+        assert a_p2.interest_paid == pytest.approx(1.0, abs=1e-6)
+        # Principal acceleration mode still pays principal from same reserve source.
+        a_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 1)
+        assert a_p1.total_principal == pytest.approx(5.0, abs=1e-6)
+
+    def test_nla_debits_when_principal_is_reallocated_to_interest(self):
+        deal = DealDefinition(
+            deal_name="NlaDebitOnPToI",
+            bonds=[
+                BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=12.0, notional=100.0, seniority=1),
+                BondDef(name="B", kind=TrancheKind.CASH_PAY, coupon=0.0, notional=50.0, nla_starting_balance=50.0, seniority=2),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="p_to_i",
+                    rule_type=RuleType.PAY_INTEREST,
+                    order=0,
+                    from_sources=["B"],
+                    to_targets=["A"],
+                    coverage_mode=CoverageMode.INTEREST_SHORTFALL,
+                ),
+                RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=1, from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=0.0,
+            n_periods=5,
+            monthly_principal_rate=0.0,
+            annual_coupon=0.0,
+            monthly_loss_rate=0.0,
+        )
+        result = run_deal(deal, run_input)
+        # Period 2 pays prior shortfall (1.0) from B source.
+        a_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 2)
+        b_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "B" and r.period == 2)
+        assert a_p2.interest_paid == pytest.approx(1.0, abs=1e-6)
+        assert b_p2.end_balance == pytest.approx(49.0, abs=1e-6)
+
+    def test_required_available_subordination_caps_reallocation_expr(self):
+        deal = DealDefinition(
+            deal_name="SubordinationCapExpr",
+            bonds=[
+                BondDef(
+                    name="A",
+                    kind=TrancheKind.CASH_PAY,
+                    coupon=12.0,
+                    notional=100.0,
+                    seniority=1,
+                    required_subordination_pct=39.5,
+                ),
+                BondDef(
+                    name="B",
+                    kind=TrancheKind.CASH_PAY,
+                    coupon=0.0,
+                    notional=50.0,
+                    nla_starting_balance=40.0,
+                    seniority=2,
+                ),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="p_to_i_capped",
+                    rule_type=RuleType.PAY_INTEREST,
+                    order=0,
+                    from_sources=["B"],
+                    to_targets=["A"],
+                    coverage_mode=CoverageMode.INTEREST_SHORTFALL,
+                    max_amount_expr=(
+                        "A_available_subordination - A_required_subordination "
+                        "if A_available_subordination > A_required_subordination else 0"
+                    ),
+                ),
+                RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=1, from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )
+        run_input, _ = _make_simple_collateral(
+            initial_balance=0.0,
+            n_periods=6,
+            monthly_principal_rate=0.0,
+            annual_coupon=0.0,
+            monthly_loss_rate=0.0,
+        )
+        result = run_deal(deal, run_input)
+        a_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 2)
+        a_p3 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 3)
+        # At period 2: available=40, required=39.5 => cap=0.5.
+        assert a_p2.interest_paid == pytest.approx(0.5, abs=1e-6)
+        # NLA depletion from period 2 drives available ~= required by period 3.
+        assert a_p3.interest_paid == pytest.approx(0.0, abs=1e-6)
+
     def test_trigger_uses_calculation_refs(self):
         deal = DealDefinition(
             deal_name="TriggerCalcRef",
             bonds=[
-                BondDef(name="A", tranche_type=TrancheType.SEQUENTIAL, notional_pct_of_collateral=100.0, coupon=0.0),
-                BondDef(name="TRIG", tranche_type=TrancheType.PSEUDO, is_bond=False, is_pseudo=True),
-                BondDef(name="R", tranche_type=TrancheType.RESIDUAL, is_bond=False, is_pseudo=True),
+                BondDef(name="A", kind=TrancheKind.CASH_PAY, notional_pct_of_collateral=100.0, coupon=0.0),
+                BondDef(name="TRIG", kind=TrancheKind.PSEUDO, is_bond=False, is_pseudo=True),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
             ],
             calculations=[
                 CalculationNode(name="metric_calc", expression="collateral_loss * 2"),
@@ -779,10 +972,12 @@ class TestGeneralizedRuntime:
         assert "max_amount_expr" in migrated["waterfall_rules"][0]
 
 
-def test_account_type_field_is_rejected_after_hard_cut():
+def test_account_type_field_is_migrated_to_account_category():
+    # In schema 2.0 the migration layer converts account_type → account_category
+    # before Pydantic validation so legacy snapshots load without error.
     payload = {
         "deal_name": "Acct",
-        "bonds": [{"name": "R", "tranche_type": "RESIDUAL", "is_bond": False, "is_pseudo": True}],
+        "bonds": [{"name": "R", "kind": "RESIDUAL", "is_bond": False, "is_pseudo": True}],
         "accounts": [
             {"name": "RESV", "account_type": "RESERVE", "starting_amount": 10.0},
         ],
@@ -797,24 +992,31 @@ def test_account_type_field_is_rejected_after_hard_cut():
         ],
     }
     migrated = migrate_deal_payload(payload)
-    with pytest.raises(Exception, match="account_category"):
-        DealDefinition.model_validate(migrated)
+    # account_type must be removed and account_category populated by the migrator.
+    assert "account_type" not in migrated["accounts"][0]
+    assert migrated["accounts"][0]["account_category"] == "RESERVE"
+    # And the deal must validate cleanly after migration.
+    deal = DealDefinition.model_validate(migrated)
+    assert deal.accounts[0].account_category.value == "RESERVE"
 
 
-def test_schedule_speed_target_is_rejected_after_hard_cut():
+def test_schedule_speed_target_is_stripped_by_migration():
+    # In schema 2.0 migrate_deal_payload() silently removes schedule_speed_target
+    # so that legacy TAC snapshots load without a validation error.
     payload = {
         "deal_name": "TacLegacy",
         "bonds": [
             {
                 "name": "A",
-                "tranche_type": "SEQUENTIAL",
-                "tranche_behavior": "TAC",
+                "kind": "TAC",
                 "schedule_model_type": "PSA",
-                "schedule_speed_target": 175.0,
+                "schedule_speed_low": 175.0,
+                "schedule_speed_high": 175.0,
+                "schedule_speed_target": 175.0,  # legacy field; must be stripped
                 "support_tranches": ["S"],
             },
-            {"name": "S", "tranche_type": "SUPPORT"},
-            {"name": "R", "tranche_type": "RESIDUAL", "is_bond": False, "is_pseudo": True},
+            {"name": "S", "kind": "SUPPORT"},
+            {"name": "R", "kind": "RESIDUAL", "is_bond": False, "is_pseudo": True},
         ],
         "waterfall_rules": [
             {
@@ -834,5 +1036,59 @@ def test_schedule_speed_target_is_rejected_after_hard_cut():
         ],
     }
     migrated = migrate_deal_payload(payload)
-    with pytest.raises(Exception, match="legacy fields"):
-        DealDefinition.model_validate(migrated)
+    # schedule_speed_target must be removed by the migrator.
+    assert "schedule_speed_target" not in migrated["bonds"][0]
+    # The deal must validate cleanly after migration (TAC requires SUPPORTED_BY
+    # relation which the migrator builds from support_tranches).
+    deal = DealDefinition.model_validate(migrated)
+    assert deal.deal_name == "TacLegacy"
+
+
+def test_tranche_type_and_behavior_fields_are_migrated_to_kind():
+    payload = {
+        "deal_name": "LegacyTrancheFields",
+        "bonds": [
+            {
+                "name": "A",
+                "tranche_type": "SEQUENTIAL",
+                "tranche_behavior": "PAC",
+                "schedule_model_type": "PSA",
+                "schedule_speed_low": 100.0,
+                "schedule_speed_high": 150.0,
+                "support_tranches": ["S"],
+            },
+            {"name": "S", "kind": "CASH_PAY", "coupon": 0.0, "notional": 10_000.0},
+            {"name": "R", "kind": "RESIDUAL", "is_bond": False, "is_pseudo": True},
+        ],
+        "waterfall_rules": [
+            {"rule_id": "r0", "rule_type": "PAY_PRINCIPAL", "order": 0, "from_sources": ["ACT_PRIN"], "to_targets": ["A"]},
+            {"rule_id": "r1", "rule_type": "PAY_PRINCIPAL", "order": 1, "from_sources": ["ACT_PRIN"], "to_targets": ["S"]},
+            {"rule_id": "r2", "rule_type": "PAY_RESIDUAL", "order": 2, "from_sources": ["CASH"], "to_targets": ["R"]},
+        ],
+    }
+    migrated = migrate_deal_payload(payload)
+    deal = DealDefinition.model_validate(migrated)
+    bond_a = next(b for b in deal.bonds if b.name == "A")
+    assert bond_a.kind.value == "PAC"
+    assert any(
+        rel.relation_type.value == "SUPPORTED_BY" and rel.targets == ["S"]
+        for rel in bond_a.relations
+    )
+
+
+def test_coverage_mode_rejected_for_non_interest_principal_rules():
+    with pytest.raises(Exception, match="coverage_mode"):
+        DealDefinition(
+            deal_name="InvalidCoverageModeUsage",
+            bonds=[BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True)],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="bad_cov",
+                    rule_type=RuleType.PAY_RESIDUAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["R"],
+                    coverage_mode=CoverageMode.INTEREST_SHORTFALL,
+                )
+            ],
+        )

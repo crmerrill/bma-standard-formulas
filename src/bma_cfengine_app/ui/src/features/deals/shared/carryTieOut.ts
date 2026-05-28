@@ -56,7 +56,7 @@ export interface BondInput {
   /** Bond coupon, annual percent (e.g., 5.5 for 5.5%). */
   coupon_pct: number;
   /** Used to skip residual classes from the regular tranche stack. */
-  tranche_type: string;
+  kind: string;
   /** PIK bonds accrue rather than pay cash interest; we still include
    *  them in the carry math at their stated coupon as the implied cost
    *  of capital, since the residual ultimately bears the PIK accretion. */
@@ -131,12 +131,12 @@ const DEFAULT_BANDS = {
   warn_ceiling_pct: 50,
 } as const;
 
-const RESIDUAL_TRANCHE_TYPES = new Set([
+const RESIDUAL_TRANCHE_KINDS = new Set([
   "RESIDUAL",
   "PSEUDO",
 ]);
 
-const ZERO_RATE_TYPES = new Set(["PSEUDO"]);
+const ZERO_RATE_KINDS = new Set(["PSEUDO"]);
 
 export function computeStaticCarryTieOut(
   inputs: CarryTieOutInputs,
@@ -144,10 +144,10 @@ export function computeStaticCarryTieOut(
   const projection = projectPoolAtBaseCPR(inputs.pool);
 
   const allBonds = inputs.bonds.filter(
-    (b) => !ZERO_RATE_TYPES.has(b.tranche_type),
+    (b) => !ZERO_RATE_KINDS.has(b.kind),
   );
   const cashBonds = allBonds.filter(
-    (b) => !RESIDUAL_TRANCHE_TYPES.has(b.tranche_type) && b.notional > 0,
+    (b) => !RESIDUAL_TRANCHE_KINDS.has(b.kind) && b.notional > 0,
   );
   const totalBondNotional = sum(cashBonds.map((b) => b.notional));
   const residualBalance = Math.max(

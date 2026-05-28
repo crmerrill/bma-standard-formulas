@@ -26,8 +26,8 @@
  *
  * Round-trip preservation:
  *
- *   The PAC schedule_contract, Z accrual flags, support_tranches,
- *   cap_mode, tranche_type, tranche_behavior, group_id, and other IR
+ *   The PAC schedule_contract, Z accrual flags, relations,
+ *   cap_mode, kind, group_id, and other IR
  *   fields that don't have a corresponding visible Blockly field are
  *   stashed on each block's ``data`` field as JSON. When the user
  *   saves the deal back through ``irGenerator``, that helper reads
@@ -45,8 +45,7 @@
 
 interface IRBond {
   name: string;
-  tranche_type?: string;
-  tranche_behavior?: string;
+  kind?: string;
   coupon?: number | null;
   notional?: number;
   notional_pct_of_collateral?: number | null;
@@ -57,10 +56,16 @@ interface IRBond {
   is_pseudo?: boolean;
   group_id?: string | null;
   schedule_contract?: Array<{ period: number; target_principal?: number; target_balance?: number }>;
-  support_tranches?: string[];
-  supported_by_tranches?: string[];
+  relations?: Array<{
+    relation_type: string;
+    targets: string[];
+    weights?: number[] | null;
+    leverage?: number | null;
+    cap?: number | null;
+    floor?: number | null;
+    description?: string;
+  }>;
   z_accrual_enabled?: boolean;
-  tracks_bonds?: Record<string, string[]> | null;
 }
 
 interface IRFee {
@@ -174,7 +179,7 @@ interface BlocklyBlock {
   next?: { block: BlocklyBlock };
   /** Per-block free-form payload. Round-trips through serialize/deserialize.
    *  We use it to stash IR fields that have no native UI representation
-   *  (cap_mode, tranche_behavior, schedule_contract, support_tranches,
+   *  (cap_mode, kind, schedule_contract, relations,
    *  group_id, etc.) so a follow-up irGenerator pass can recover them. */
   data?: string;
   /** x/y are only set on top-level blocks. */
@@ -513,12 +518,12 @@ function targetToBlock(
       type: "residual_target",
       fields: { NAME: name, SHARE_PCT: 0 },
     };
-    _attachData(block, { tranche_type: "RESIDUAL" });
+    _attachData(block, { kind: "RESIDUAL" });
     return block;
   }
   const bond = bondByName.get(name);
   if (bond) {
-    if (RESIDUAL_TYPES.has(bond.tranche_type ?? "")) {
+    if (RESIDUAL_TYPES.has(bond.kind ?? "")) {
       const block: BlocklyBlock = {
         type: "residual_target",
         fields: { NAME: name, SHARE_PCT: 0 },
@@ -584,27 +589,20 @@ function _bondTargetBlock(bond: IRBond): BlocklyBlock {
  * Bundle the IR-level fields that don't have a native bond_target
  * field equivalent so a future round-trip can recover them.
  *
- * Specifically: `tranche_type` (PAC/TAC/Z/IO/PO/etc), `tranche_behavior`,
+ * Specifically: `kind` (PAC/TAC/Z/IO/PO/etc),
  * `group_id`, the PAC `schedule_contract`, support relationships, Z
  * accrual flags, and notional-tracking pointers (IO classes).
  */
 function _bondDataPayload(bond: IRBond): Record<string, unknown> {
   const data: Record<string, unknown> = {};
-  if (bond.tranche_type) data.tranche_type = bond.tranche_type;
-  if (bond.tranche_behavior) data.tranche_behavior = bond.tranche_behavior;
+  if (bond.kind) data.kind = bond.kind;
   if (bond.group_id) data.group_id = bond.group_id;
   if (bond.coupon_type) data.coupon_type = bond.coupon_type;
   if (bond.schedule_contract && bond.schedule_contract.length > 0) {
     data.schedule_contract = bond.schedule_contract;
   }
-  if (bond.support_tranches && bond.support_tranches.length > 0) {
-    data.support_tranches = bond.support_tranches;
-  }
-  if (bond.supported_by_tranches && bond.supported_by_tranches.length > 0) {
-    data.supported_by_tranches = bond.supported_by_tranches;
-  }
+  if (bond.relations && bond.relations.length > 0) data.relations = bond.relations;
   if (bond.z_accrual_enabled) data.z_accrual_enabled = true;
-  if (bond.tracks_bonds) data.tracks_bonds = bond.tracks_bonds;
   return data;
 }
 

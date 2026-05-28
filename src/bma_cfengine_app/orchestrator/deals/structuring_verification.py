@@ -8,8 +8,8 @@ from bma_standard_formulas.deals.schemas.common import (
     CapMode,
     PayMode,
     RuleType,
-    TrancheBehavior,
-    TrancheType,
+    TrancheKind,
+    TrancheRelationType,
 )
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
 
@@ -34,10 +34,19 @@ def verify_structure(
             errors.append(message)
 
     bond_by_name = {bond.name: bond for bond in deal.bonds}
+
+    def _relation_targets(bond, relation_type: TrancheRelationType) -> list[str]:
+        out: list[str] = []
+        for relation in getattr(bond, "relations", []) or []:
+            if getattr(relation, "relation_type", None) != relation_type:
+                continue
+            out.extend([str(t) for t in getattr(relation, "targets", []) or [] if str(t or "").strip()])
+        return out
+
     behavior_bonds = [
         bond
         for bond in deal.bonds
-        if bond.tranche_behavior != TrancheBehavior.SEQUENTIAL or bond.pay_mode == PayMode.PIK
+        if bond.kind != TrancheKind.CASH_PAY or bond.pay_mode == PayMode.PIK
     ]
     if behavior_bonds:
         suggestions.append(
@@ -45,20 +54,20 @@ def verify_structure(
         )
 
     for bond in behavior_bonds:
-        if bond.tranche_behavior in {TrancheBehavior.PAC, TrancheBehavior.TAC}:
+        if bond.kind in {TrancheKind.PAC, TrancheKind.TAC}:
             if not bond.schedule_contract and bond.schedule_model_type is None:
                 errors.append(
-                    f"{bond.name}: {bond.tranche_behavior.value} requires a prepayment model or schedule points."
+                    f"{bond.name}: {bond.kind.value} requires a prepayment model or schedule points."
                 )
                 suggestions.append(
-                    f"Set schedule model/speeds on the {bond.tranche_behavior.value} block for {bond.name}."
+                    f"Set schedule model/speeds on the {bond.kind.value} block for {bond.name}."
                 )
-            if not bond.support_tranches and not bond.supported_by_tranches:
+            if not _relation_targets(bond, TrancheRelationType.SUPPORTED_BY):
                 errors.append(
-                    f"{bond.name}: {bond.tranche_behavior.value} requires support tranche linkage."
+                    f"{bond.name}: {bond.kind.value} requires support tranche linkage."
                 )
                 suggestions.append(
-                    f"Populate support tranche list on the {bond.tranche_behavior.value} payment block."
+                    f"Populate support tranche list on the {bond.kind.value} payment block."
                 )
             if bond.schedule_model_type is not None and not bond.schedule_contract:
                 suggestions.append(
@@ -72,12 +81,12 @@ def verify_structure(
                 suggestions.append(
                     f"{bond.name}: depends_on={bond.schedule_depends_on}. Verify referenced schedule tier is paid earlier in waterfall."
                 )
-        if bond.tranche_behavior == TrancheBehavior.Z:
+        if bond.kind == TrancheKind.Z:
             if not bond.z_accrual_enabled:
                 errors.append(f"{bond.name}: Z behavior requires accrual enabled.")
             if bond.pay_mode != PayMode.PIK:
                 warnings.append(f"{bond.name}: Z behavior is usually paired with pay_mode=PIK.")
-            if not bond.supported_by_tranches and not bond.support_tranches:
+            if not _relation_targets(bond, TrancheRelationType.ACCRETES_TO):
                 warnings.append(
                     f"{bond.name}: Z bond has no explicit support linkage; verify support stack semantics."
                 )
@@ -85,11 +94,11 @@ def verify_structure(
                     f"Link one or more support tranches to {bond.name} using support fields."
                 )
 
-        for support_name in bond.support_tranches:
+        for support_name in _relation_targets(bond, TrancheRelationType.SUPPORTED_BY):
             support_bond = bond_by_name.get(support_name)
             if not support_bond:
                 continue
-            if support_bond.tranche_behavior == TrancheBehavior.Z:
+            if support_bond.kind == TrancheKind.Z:
                 errors.append(
                     f"{bond.name}: support tranche {support_name} cannot be Z behavior."
                 )
@@ -105,13 +114,21 @@ def verify_structure(
     # cash routes to PAC bonds beyond their planned balances only when
     # supports are exhausted. Placing cleanup rules before supports causes
     # premature PAC paydown; missing cleanup rules let pool excess get stuck.
-    sup_class_names = {
-        bond.name for bond in deal.bonds
-        if bond.tranche_type in {TrancheType.SUPPORT, TrancheType.PO, TrancheType.PSEUDO}
+    explicit_support_names = {
+        n
+        for bond in deal.bonds
+        for n in _relation_targets(bond, TrancheRelationType.SUPPORTED_BY)
     }
+    sup_class_names = (
+        explicit_support_names
+        | {
+            bond.name for bond in deal.bonds
+            if bond.kind in {TrancheKind.PO, TrancheKind.PSEUDO}
+        }
+    )
     pac_classes_with_schedule = {
         bond.name for bond in deal.bonds
-        if bond.tranche_behavior in {TrancheBehavior.PAC, TrancheBehavior.TAC}
+        if bond.kind in {TrancheKind.PAC, TrancheKind.TAC}
         and bond.schedule_contract
     }
     cleanup_targets: set[str] = set()

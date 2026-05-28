@@ -185,12 +185,12 @@ export default function DealEditor({
   const hasPsaStructuringBonds = useMemo(() => {
     try {
       const ir = JSON.parse(irJson || "{}") as {
-        bonds?: Array<{ tranche_behavior?: string; schedule_model_type?: string }>;
+        bonds?: Array<{ kind?: string; schedule_model_type?: string }>;
       };
       return (
         ir.bonds?.some(
           (b) =>
-            (b.tranche_behavior === "PAC" || b.tranche_behavior === "TAC")
+            (b.kind === "PAC" || b.kind === "TAC")
             && b.schedule_model_type === "PSA",
         ) ?? false
       );

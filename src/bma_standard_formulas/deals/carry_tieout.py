@@ -36,6 +36,7 @@ from .risk import (
     monthly_to_cbe,
     solve_monthly_irr,
 )
+from .schemas.common import TrancheRelationType
 from .schemas.input import DealRunInput
 from .schemas.ir import BondDef, DealDefinition
 from .schemas.output_bond import (
@@ -209,17 +210,62 @@ def _wal_years(rows: list[BondCashflowRow]) -> float:
 
 def _is_io_bond(bond_def: BondDef) -> bool:
     """Notional IO classes track another bond's balance."""
-    if not bond_def.tracks_bonds:
-        return False
-    if not isinstance(bond_def.tracks_bonds, dict):
-        return False
-    return "balance" in bond_def.tracks_bonds
+    return any(
+        relation.relation_type in {
+            TrancheRelationType.NOTIONAL_TRACKS,
+            TrancheRelationType.BALANCE_TRACKS,
+        }
+        for relation in (bond_def.relations or [])
+    )
+
+
+def _tracked_targets(bond_def: BondDef) -> list[str]:
+    targets: list[str] = []
+    for relation in (bond_def.relations or []):
+        if relation.relation_type in {
+            TrancheRelationType.NOTIONAL_TRACKS,
+            TrancheRelationType.BALANCE_TRACKS,
+        }:
+            targets.extend([str(t) for t in relation.targets])
+    return targets
+
+
+def _rate_value_at_period(value: Any, *, period: int) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, list):
+        active_rate: float | None = None
+        active_from: int | None = None
+        first_rate: float | None = None
+        for entry in value:
+            if isinstance(entry, dict):
+                from_p = entry.get("from_period")
+                rate = entry.get("rate")
+            else:
+                from_p = getattr(entry, "from_period", None)
+                rate = getattr(entry, "rate", None)
+            if not isinstance(from_p, (int, float)) or not isinstance(rate, (int, float)):
+                continue
+            from_period = int(from_p)
+            rate_f = float(rate)
+            if first_rate is None:
+                first_rate = rate_f
+            if from_period <= period and (active_from is None or from_period >= active_from):
+                active_from = from_period
+                active_rate = rate_f
+        if active_rate is not None:
+            return active_rate
+        if first_rate is not None:
+            return first_rate
+    return 0.0
 
 
 def _is_residual_bond(bond_def: BondDef) -> bool:
     return (
-        bond_def.tranche_type is not None
-        and bond_def.tranche_type.value == "RESIDUAL"
+        bond_def.kind is not None
+        and bond_def.kind.value == "RESIDUAL"
     )
 
 
@@ -252,10 +298,10 @@ def _solve_tranche_ytm(
     if face <= 0.0:
         return 0.0, 0.0
     if _is_io_bond(bond_def):
-        underlying_names = bond_def.tracks_bonds["balance"]
+        underlying_names = _tracked_targets(bond_def)
         # IO cashflows = sum of underlyings (typically one).
         cf = np.zeros(0)
-        coupon_pct = float(bond_def.coupon or 0.0)
+        coupon_pct = _rate_value_at_period(bond_def.coupon, period=1)
         for u_name in underlying_names:
             uflow = _io_total_cashflows(bond_cashflows, u_name, coupon_pct)
             if len(uflow) > len(cf):
@@ -518,9 +564,9 @@ def compute_carry_tieout(
         wal = _wal_years(rows)
         if _is_io_bond(bond_def):
             io_tranche_ids.add(bond_def.name)
-            if wal == 0.0 and bond_def.tracks_bonds:
+            if wal == 0.0 and bond_def.relations:
                 # IOs have no principal cashflow; copy underlying WAL.
-                for u_name in bond_def.tracks_bonds.get("balance", []):
+                for u_name in _tracked_targets(bond_def):
                     under = _rows_for_tranche(scenario.bond_cashflows, u_name)
                     u_wal = _wal_years(under)
                     if u_wal > 0.0:
@@ -531,7 +577,7 @@ def compute_carry_tieout(
                 scenario_name=scenario.scenario_name,
                 tranche_id=bond_def.name,
                 notional=float(bond_def.notional or 0.0),
-                coupon_pct=float(bond_def.coupon or 0.0),
+                coupon_pct=_rate_value_at_period(bond_def.coupon, period=1),
                 ytm_cbe_pct=ytm,
                 modified_duration_years=dur,
                 wal_years=wal,

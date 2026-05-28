@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from bma_standard_formulas.deals.schemas.common import PrepayModelType, TrancheBehavior
+from bma_standard_formulas.deals.schemas.common import PrepayModelType, TrancheKind
 from bma_standard_formulas.deals.schemas.ir import BondDef, DealDefinition
 
 from .schedule_derivation import build_schedule_provenance, derive_pac_schedule, derive_tac_schedule
@@ -61,7 +61,7 @@ def build_psa_schedule_overlay(
         if face <= 0:
             continue
 
-        if bond.tranche_behavior == TrancheBehavior.PAC:
+        if bond.kind == TrancheKind.PAC:
             lo = (
                 bond.schedule_speed_low
                 if bond.schedule_speed_low is not None
@@ -97,7 +97,7 @@ def build_psa_schedule_overlay(
                 "schedule_derivation": prov,
             }
 
-        elif bond.tranche_behavior == TrancheBehavior.TAC:
+        elif bond.kind == TrancheKind.TAC:
             lo = bond.schedule_speed_low
             hi = bond.schedule_speed_high
             if lo is not None and hi is not None:

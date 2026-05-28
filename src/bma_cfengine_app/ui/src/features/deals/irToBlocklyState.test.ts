@@ -6,7 +6,7 @@ const SIMPLE_DEAL: IRForSynthesis = {
     { name: "A", coupon: 5, notional: 21_201_742, notional_pct_of_collateral: 50, pay_mode: "CASH_PAY", coupon_type: "FIXED" },
     { name: "B", coupon: 6, notional: 4_240_348, notional_pct_of_collateral: 10, pay_mode: "CASH_PAY", coupon_type: "FIXED" },
     { name: "C", coupon: 7, notional: 8_480_696, notional_pct_of_collateral: 20, pay_mode: "CASH_PAY", coupon_type: "FIXED" },
-    { name: "R", tranche_type: "RESIDUAL" },
+    { name: "R", kind: "RESIDUAL" },
   ],
   fees: [
     // irGenerator stores `rate = amount_bps / 100`, so a 10-bps annual
@@ -102,7 +102,7 @@ describe("synthesizeWorkspaceState", () => {
     const dealWithResidual: IRForSynthesis = {
       bonds: [
         { name: "A", coupon: 5, notional: 80_000_000 },
-        { name: "R", tranche_type: "RESIDUAL" },
+        { name: "R", kind: "RESIDUAL" },
       ],
       waterfall_rules: [
         {
@@ -248,7 +248,7 @@ describe("synthesizeWorkspaceState", () => {
       const deal: IRForSynthesis = {
         bonds: [
           { name: "A", coupon: 5, notional: 80_000_000 },
-          { name: "R", tranche_type: "RESIDUAL", is_pseudo: true },
+          { name: "R", kind: "RESIDUAL", is_pseudo: true },
         ],
         waterfall_rules: [
           {
@@ -268,13 +268,12 @@ describe("synthesizeWorkspaceState", () => {
       expect(seq.inputs?.TARGETS?.block.type).toBe("residual_target");
     });
 
-    it("preserves the PAC schedule and tranche_type on bond data fields", () => {
+    it("preserves the PAC schedule and kind on bond data fields", () => {
       const deal: IRForSynthesis = {
         bonds: [
           {
             name: "PA",
-            tranche_type: "PAC",
-            tranche_behavior: "PAC",
+            kind: "PAC",
             coupon: 5.5,
             notional: 33_710_000,
             coupon_type: "FIXED",
@@ -282,7 +281,7 @@ describe("synthesizeWorkspaceState", () => {
               { period: 1, target_balance: 33_710_000 },
               { period: 12, target_balance: 30_000_000 },
             ],
-            support_tranches: ["WA", "WB", "PO"],
+            relations: [{ relation_type: "SUPPORTED_BY", targets: ["WA", "WB", "PO"] }],
           },
         ],
         waterfall_rules: [
@@ -301,9 +300,8 @@ describe("synthesizeWorkspaceState", () => {
       expect(target?.type).toBe("bond_target");
       expect(target?.fields?.NAME).toBe("PA");
       const data = JSON.parse(target!.data!) as Record<string, unknown>;
-      expect(data.tranche_type).toBe("PAC");
-      expect(data.tranche_behavior).toBe("PAC");
-      expect(data.support_tranches).toEqual(["WA", "WB", "PO"]);
+      expect(data.kind).toBe("PAC");
+      expect(data.relations).toEqual([{ relation_type: "SUPPORTED_BY", targets: ["WA", "WB", "PO"] }]);
       expect((data.schedule_contract as unknown[]).length).toBe(2);
     });
 
@@ -312,13 +310,12 @@ describe("synthesizeWorkspaceState", () => {
         bonds: [
           {
             name: "Z",
-            tranche_type: "Z_BOND",
-            tranche_behavior: "Z",
+            kind: "Z",
             coupon: 5.5,
             notional: 5_000_000,
             pay_mode: "PIK",
             z_accrual_enabled: true,
-            supported_by_tranches: ["TA", "TB"],
+            relations: [{ relation_type: "ACCRETES_TO", targets: ["TA", "TB"] }],
           },
         ],
         waterfall_rules: [
@@ -337,19 +334,18 @@ describe("synthesizeWorkspaceState", () => {
       expect(target?.fields?.PAY_MODE).toBe("PIK");
       const data = JSON.parse(target!.data!) as Record<string, unknown>;
       expect(data.z_accrual_enabled).toBe(true);
-      expect(data.supported_by_tranches).toEqual(["TA", "TB"]);
+      expect(data.relations).toEqual([{ relation_type: "ACCRETES_TO", targets: ["TA", "TB"] }]);
     });
 
-    it("preserves IO tracks_bonds field on notional bonds", () => {
+    it("preserves IO NOTIONAL_TRACKS relation on notional bonds", () => {
       const deal: IRForSynthesis = {
         bonds: [
           {
             name: "DI",
-            tranche_type: "IO",
-            tranche_behavior: "SEQUENTIAL",
+            kind: "IO",
             coupon: 5.5,
             notional: 11_925_424,
-            tracks_bonds: { balance: ["DO"] },
+            relations: [{ relation_type: "NOTIONAL_TRACKS", targets: ["DO"] }],
           },
         ],
         waterfall_rules: [
@@ -366,7 +362,7 @@ describe("synthesizeWorkspaceState", () => {
       const state = synthesizeWorkspaceState(deal);
       const target = state!.blocks.blocks[0].inputs?.TARGETS?.block;
       const data = JSON.parse(target!.data!) as Record<string, unknown>;
-      expect(data.tracks_bonds).toEqual({ balance: ["DO"] });
+      expect(data.relations).toEqual([{ relation_type: "NOTIONAL_TRACKS", targets: ["DO"] }]);
     });
 
     it("preserves cap_mode=NONE on cleanup rules", () => {
@@ -473,24 +469,22 @@ describe("synthesizeWorkspaceState", () => {
         bonds: [
           {
             name: "PA",
-            tranche_type: "PAC",
-            tranche_behavior: "PAC",
+            kind: "PAC",
             coupon: 5.5,
             notional: 33_710_000,
             group_id: "GROUP_1",
             schedule_contract: [{ period: 1, target_balance: 33_710_000 }],
-            support_tranches: ["WA"],
+            relations: [{ relation_type: "SUPPORTED_BY", targets: ["WA"] }],
           },
           {
             name: "Z",
-            tranche_type: "Z_BOND",
-            tranche_behavior: "Z",
+            kind: "Z",
             coupon: 5.5,
             notional: 5_000_000,
             pay_mode: "PIK",
             group_id: "GROUP_1",
             z_accrual_enabled: true,
-            supported_by_tranches: ["TA"],
+            relations: [{ relation_type: "ACCRETES_TO", targets: ["TA"] }],
           },
           {
             name: "BA",
@@ -498,7 +492,7 @@ describe("synthesizeWorkspaceState", () => {
             notional: 100_000_000,
             group_id: "GROUP_2",
           },
-          { name: "R", tranche_type: "RESIDUAL", is_pseudo: true },
+          { name: "R", kind: "RESIDUAL", is_pseudo: true },
         ],
         waterfall_rules: [
           {
@@ -565,7 +559,7 @@ describe("synthesizeWorkspaceState", () => {
       // Group 1 PA bond_target carries the PAC schedule on data.
       const paBlock = g1.inputs?.TARGETS?.block;
       const paData = JSON.parse(paBlock!.data!) as Record<string, unknown>;
-      expect(paData.tranche_type).toBe("PAC");
+      expect(paData.kind).toBe("PAC");
       expect((paData.schedule_contract as unknown[]).length).toBeGreaterThan(0);
       // Group 2 chain: 1 rule.
       const g2 = state!.blocks.blocks[1];

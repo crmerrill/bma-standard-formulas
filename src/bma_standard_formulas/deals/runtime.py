@@ -9,15 +9,12 @@ import numpy as np
 from .ops import (
     finalize_bond_ws,
     pay_fee,
-    pay_from_reserve,
     pay_interest,
     pay_interest_from_reserve,
     pay_principal,
     pay_principal_from_reserve,
-    pay_recourse_interest,
-    pay_recourse_principal,
     pay_residual,
-    pay_to_reserve,
+    pay_to_account,
     pay_writedown,
     update_bonds_post_ws,
     update_bonds_pre_ws,
@@ -27,7 +24,7 @@ from bma_standard_formulas.formulas.cashflows import (
     BMAScheduledCashflow,
 )
 
-from .schemas.common import MinimumBasis, RuleType, TriggerState
+from .schemas.common import MinimumBasis, RuleType, TriggerState, TrancheRelationType
 from .schemas.input import (
     CollateralCashflows,
     DealRunInput,
@@ -69,9 +66,16 @@ class BondWorkspace:
     xs_spread: np.ndarray
     xs_spread_cpn: np.ndarray
     tracks_bonds: dict[str, list[str]] | None = None
+    nla_balance: np.ndarray | None = None
+    seniority: int | None = None
+    required_subordination_pct: float | None = None
+    # Collateral group this bond belongs to (from BondDef.group_id). None for
+    # single-pool deals. Used by _apply_z_accrual to debit the correct
+    # group-specific interest stream in addition to the aggregate stream.
+    group_id: str | None = None
 
-    # Tranche behavior fields (PAC/TAC schedule-first enforcement and Z accrual).
-    tranche_behavior: str = "SEQUENTIAL"
+    # Tranche kind fields (PAC/TAC schedule-first enforcement and Z accrual).
+    kind: str = "CASH_PAY"
     schedule_cap: np.ndarray | None = None  # length cf_len when PAC/TAC, else None.
     support_tranches: tuple[str, ...] = ()
     supported_by_tranches: tuple[str, ...] = ()
@@ -122,6 +126,7 @@ class CompiledRulePlan:
     # Per-target weights for SPLIT_CASH rules; one entry per target_name,
     # summing to <= 1.0. None for non-SPLIT_CASH rules.
     target_weights: tuple[float, ...] | None = None
+    coverage_mode: str = "NORMAL"
 
 
 @dataclass
@@ -297,6 +302,44 @@ def _build_schedule_cap(bond_def: Any, cf_len: int) -> np.ndarray | None:
     return None
 
 
+def _resolve_rate_or_schedule(
+    value: Any,
+    *,
+    period: int,
+) -> float | None:
+    """Resolve a scalar-or-schedule rate value for a given period."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, list):
+        if not value:
+            return None
+        best_from: int | None = None
+        best_rate: float | None = None
+        first_rate: float | None = None
+        for entry in value:
+            if isinstance(entry, dict):
+                from_period_raw = entry.get("from_period")
+                rate_raw = entry.get("rate")
+            else:
+                from_period_raw = getattr(entry, "from_period", None)
+                rate_raw = getattr(entry, "rate", None)
+            if not isinstance(from_period_raw, (int, float)) or not isinstance(rate_raw, (int, float)):
+                continue
+            from_period = int(from_period_raw)
+            rate = float(rate_raw)
+            if first_rate is None:
+                first_rate = rate
+            if from_period <= period and (best_from is None or from_period >= best_from):
+                best_from = from_period
+                best_rate = rate
+        if best_rate is not None:
+            return best_rate
+        return first_rate
+    return None
+
+
 def _allocate_bond_workspace(
     bond_def: Any,
     cf_len: int,
@@ -319,18 +362,41 @@ def _allocate_bond_workspace(
     if bond_def.is_pseudo and not bond_def.is_bond:
         balance[:] = 0.0
         balance[0] = initial_balance
-        tranche_type = getattr(getattr(bond_def, "tranche_type", None), "value", None)
-        if tranche_type == "RESIDUAL" and balance[0] <= 0.0:
+        kind = getattr(getattr(bond_def, "kind", None), "value", None)
+        if kind == "RESIDUAL" and balance[0] <= 0.0:
             # LDCMA initializes residual pseudo bond with collateral start balance.
             balance[0] = collateral_balance_0
 
     opt_coupons = np.zeros(cf_len)
     if bond_def.is_bond and not bond_def.is_pseudo:
-        if bond_def.coupon_type.value == "FIXED" and bond_def.coupon is not None:
-            opt_coupons[:] = bond_def.coupon
+        if bond_def.coupon_type.value == "FIXED":
+            for i in range(cf_len):
+                resolved_coupon = _resolve_rate_or_schedule(bond_def.coupon, period=i)
+                opt_coupons[i] = float(resolved_coupon or 0.0)
 
-    behavior = getattr(getattr(bond_def, "tranche_behavior", None), "value", "SEQUENTIAL")
-    schedule_cap = _build_schedule_cap(bond_def, cf_len) if behavior in ("PAC", "TAC") else None
+    kind = getattr(getattr(bond_def, "kind", None), "value", "CASH_PAY")
+    schedule_cap = _build_schedule_cap(bond_def, cf_len) if kind in ("PAC", "TAC") else None
+
+    def _relation_targets(relation_type: TrancheRelationType) -> tuple[str, ...]:
+        out: list[str] = []
+        for relation in getattr(bond_def, "relations", []) or []:
+            rt = getattr(getattr(relation, "relation_type", None), "value", None)
+            if rt != relation_type.value:
+                continue
+            for target in getattr(relation, "targets", []) or []:
+                t = str(target or "").strip()
+                if t:
+                    out.append(t)
+        return tuple(dict.fromkeys(out))
+
+    support_tranches = _relation_targets(TrancheRelationType.SUPPORTED_BY)
+    supported_by_tranches = _relation_targets(TrancheRelationType.ACCRETES_TO)
+    track_targets = tuple(
+        dict.fromkeys(
+            list(_relation_targets(TrancheRelationType.NOTIONAL_TRACKS))
+            + list(_relation_targets(TrancheRelationType.BALANCE_TRACKS))
+        )
+    )
 
     return BondWorkspace(
         name=bond_def.name,
@@ -351,11 +417,27 @@ def _allocate_bond_workspace(
         trigger_event=[""] * cf_len,
         xs_spread=np.zeros(cf_len),
         xs_spread_cpn=np.zeros(cf_len),
-        tracks_bonds=bond_def.tracks_bonds,
-        tranche_behavior=behavior,
+        tracks_bonds={"balance": list(track_targets)} if track_targets else None,
+        nla_balance=(
+            np.full(
+                cf_len,
+                float(
+                    getattr(bond_def, "nla_starting_balance", None)
+                    if getattr(bond_def, "nla_starting_balance", None) is not None
+                    else initial_balance
+                ),
+                dtype=float,
+            )
+            if (bond_def.is_bond and not bond_def.is_pseudo)
+            else None
+        ),
+        seniority=getattr(bond_def, "seniority", None),
+        required_subordination_pct=getattr(bond_def, "required_subordination_pct", None),
+        group_id=getattr(bond_def, "group_id", None) or None,
+        kind=kind,
         schedule_cap=schedule_cap,
-        support_tranches=tuple(getattr(bond_def, "support_tranches", []) or []),
-        supported_by_tranches=tuple(getattr(bond_def, "supported_by_tranches", []) or []),
+        support_tranches=support_tranches,
+        supported_by_tranches=supported_by_tranches,
         z_accrual_enabled=bool(getattr(bond_def, "z_accrual_enabled", False)),
         z_released=False,
         z_release_trigger=getattr(bond_def, "z_release_trigger", None),
@@ -506,12 +588,8 @@ _OP_WRITEDOWN = 4
 _OP_FEE = 5
 _OP_RESIDUAL = 6
 _OP_TO_RESERVE = 7
-_OP_FROM_RESERVE_INT = 8
-_OP_FROM_RESERVE_PRIN = 9
-_OP_FROM_RESERVE = 10
-_OP_RECOURSE_INT = 11
-_OP_RECOURSE_PRIN = 12
-_OP_SPLIT_CASH = 13
+_OP_SPLIT_CASH = 8
+_OP_REIMBURSE_NLA = 9
 
 _RULE_TYPE_TO_TAG: dict[RuleType, int] = {
     _RT.PAY_INTEREST: _OP_INTEREST,
@@ -520,13 +598,9 @@ _RULE_TYPE_TO_TAG: dict[RuleType, int] = {
     _RT.PAY_WRITEDOWN: _OP_WRITEDOWN,
     _RT.PAY_FEE: _OP_FEE,
     _RT.PAY_RESIDUAL: _OP_RESIDUAL,
-    _RT.PAY_TO_RESERVE: _OP_TO_RESERVE,
-    _RT.PAY_FROM_RESERVE_INTEREST: _OP_FROM_RESERVE_INT,
-    _RT.PAY_FROM_RESERVE_PRINCIPAL: _OP_FROM_RESERVE_PRIN,
-    _RT.PAY_FROM_RESERVE: _OP_FROM_RESERVE,
-    _RT.PAY_RECOURSE_INTEREST: _OP_RECOURSE_INT,
-    _RT.PAY_RECOURSE_PRINCIPAL: _OP_RECOURSE_PRIN,
+    _RT.PAY_TO_ACCOUNT: _OP_TO_RESERVE,
     _RT.SPLIT_CASH: _OP_SPLIT_CASH,
+    _RT.REIMBURSE_NLA: _OP_REIMBURSE_NLA,
 }
 
 
@@ -599,9 +673,57 @@ def _compile_rules(deal: DealDefinition) -> list[CompiledRulePlan]:
                 cap_mode=cap_mode_str,
                 ignore_schedule_cap=ignore_flag,
                 target_weights=weights,
+                coverage_mode=(
+                    rule.coverage_mode.value
+                    if hasattr(rule.coverage_mode, "value")
+                    else str(rule.coverage_mode)
+                ),
             )
         )
     return compiled
+
+
+def _resolve_coverage_source_workspace(
+    ctx: ExecutionContext,
+    source_keys: tuple[str, ...],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the (balance, debit_ledger) arrays for a coverage-mode source.
+
+    For `PAY_INTEREST coverage_mode=INTEREST_SHORTFALL` and
+    `PAY_PRINCIPAL coverage_mode=PRINCIPAL_ACCELERATION`, the rule's single
+    from_source must name a bond or account whose balance funds the payment.
+
+    The IR validator already ensures exactly one source that is a bond or
+    account name, so a failure here is a runtime invariant violation.
+
+    Semantics note:
+      - `INTEREST_SHORTFALL` routes to `pay_interest_from_reserve(...,
+        shortfall=True)`, which fills the bond's `int_shortfall` ledger
+        (accumulated unpaid prior-period coupon), NOT the current-period
+        `opt_interest`.  This matches the reserve-account model where the
+        reserve tops up *past* shortfalls, not the current coupon accrual.
+        If legacy `PAY_FROM_RESERVE_INTEREST` rules topped up the current
+        coupon instead, add `CoverageMode.CURRENT_INTEREST` once golden-vector
+        parity is confirmed (Phase RG5 follow-up).
+      - `PRINCIPAL_ACCELERATION` routes to `pay_principal_from_reserve`,
+        which debits the source balance and pays down the target bond balance.
+    """
+    if len(source_keys) != 1:
+        raise RuntimeError(
+            f"coverage_mode rule requires exactly one source; got {source_keys!r}"
+        )
+    source = source_keys[0]
+    acct = ctx.accounts.get(source)
+    if acct is not None:
+        return acct.balance, acct.withdrawal
+    bond = ctx.bonds.get(source)
+    if bond is not None:
+        return bond.balance, bond.principal
+    raise RuntimeError(
+        f"coverage_mode source {source!r} not found in bonds or accounts; "
+        f"the IR validator should have caught this — check that validate_references "
+        f"ran before executing the deal."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1427,9 +1549,29 @@ def _build_expr_context(
     for name, ws in bonds.items():
         if name.isidentifier():
             ctx[f"{name}_balance"] = float(ws.balance[i])
+            if ws.nla_balance is not None:
+                ctx[f"{name}_nla_balance"] = float(ws.nla_balance[i])
             ctx[f"{name}_principal"] = float(ws.principal[i])
             ctx[f"{name}_interest"] = float(ws.interest[i])
             ctx[f"{name}_shortfall"] = float(ws.int_shortfall[i])
+    for name, ws in bonds.items():
+        if not name.isidentifier():
+            continue
+        if ws.required_subordination_pct is None or ws.seniority is None:
+            continue
+        required = float(ws.balance[i]) * float(ws.required_subordination_pct) / 100.0
+        available = 0.0
+        for other in bonds.values():
+            if not other.is_bond or other.is_pseudo:
+                continue
+            if other.seniority is None or other.seniority <= ws.seniority:
+                continue
+            if other.nla_balance is not None:
+                available += float(other.nla_balance[i])
+            else:
+                available += float(other.balance[i])
+        ctx[f"{name}_required_subordination"] = required
+        ctx[f"{name}_available_subordination"] = available
     for name, ws in accounts.items():
         if name.isidentifier():
             ctx[f"{name}_balance"] = float(ws.balance[i])
@@ -1751,7 +1893,7 @@ def _apply_z_accrual(ctx: ExecutionContext, period: int) -> None:
          mark Z as released for next period.
     """
     for ws in ctx.bonds.values():
-        if ws.tranche_behavior != "Z":
+        if ws.kind != "Z":
             continue
         if not ws.z_accrual_enabled or ws.pay_mode != "PIK":
             continue
@@ -1798,15 +1940,23 @@ def _apply_z_accrual(ctx: ExecutionContext, period: int) -> None:
             accrual_paid_to_supports += pmt
 
         # Z accrual is pool interest re-routed to support principal. Decrement
-        # the explicit `ACT_INT` stream so a deal that runs interest rules
-        # against `ACT_INT` does not double-fund the accrual amount. The
-        # combined `CASH` stream is left alone because deals using it have
-        # opted into combined-stream semantics by their rule definitions.
-        if accrual_paid_to_supports > 0.0 and ctx.interest_avail is not None:
-            ctx.interest_avail[period] = max(
-                0.0,
-                float(ctx.interest_avail[period]) - accrual_paid_to_supports,
-            )
+        # both the aggregate `ACT_INT` stream AND — for grouped deals — the
+        # group-specific `GROUP_<id>_ACT_INT` stream so that downstream rules
+        # drawing from either token cannot double-fund the accrual amount.
+        # The combined `CASH` stream is intentionally left alone because deals
+        # that route through `CASH` have opted into combined-stream semantics.
+        if accrual_paid_to_supports > 0.0:
+            if ctx.interest_avail is not None:
+                ctx.interest_avail[period] = max(
+                    0.0,
+                    float(ctx.interest_avail[period]) - accrual_paid_to_supports,
+                )
+            if ws.group_id and ws.group_id in ctx.interest_avail_by_group:
+                grp_arr = ctx.interest_avail_by_group[ws.group_id]
+                grp_arr[period] = max(
+                    0.0,
+                    float(grp_arr[period]) - accrual_paid_to_supports,
+                )
 
         # Z's interest does not pay in cash this period; clear after accrual posted.
         ws.opt_interest[period] = 0.0
@@ -2014,6 +2164,9 @@ def run_deal(
 
     for i in range(1, cf_len):
         update_bonds_pre_ws(bonds, i)
+        for ws in bonds.values():
+            if ws.nla_balance is not None:
+                ws.nla_balance[i] = ws.nla_balance[i - 1]
         for acct in accounts.values():
             acct.balance[i] = acct.balance[i - 1]
         # Refresh required_minimum[i] for any accounts whose minimum tracks
@@ -2282,6 +2435,8 @@ def run_deal(
                         tgt = bonds[name]
                         tgt.principal[i] += alloc
                         tgt.balance[i] -= alloc
+                        if tgt.nla_balance is not None:
+                            tgt.nla_balance[i] = max(0.0, float(tgt.nla_balance[i]) - float(alloc))
                         for src in sources:
                             src[i] -= alloc
                         remaining -= alloc
@@ -2334,20 +2489,37 @@ def run_deal(
 
                 pmt = 0.0
                 if tgt is None and acct_tgt is not None and rule.tag == _OP_TO_RESERVE:
-                    pmt = pay_to_reserve(sources, acct_tgt.balance, acct_tgt.withdrawal, i, max_amount=target_max_amt if target_max_amt is not None else 0.0)
+                    pmt = pay_to_account(sources, acct_tgt.balance, acct_tgt.withdrawal, i, max_amount=target_max_amt if target_max_amt is not None else 0.0)
                     acct_tgt.deposit[i] += pmt
                     acct_tgt.withdrawal[i] = max(0.0, acct_tgt.withdrawal[i] - pmt)
                 elif tgt is not None:
                     if rule.tag == _OP_INTEREST:
-                        pmt = pay_interest(
-                            sources,
-                            tgt.interest,
-                            tgt.opt_interest,
-                            tgt.int_shortfall,
-                            i,
-                            max_amount=target_max_amt,
-                            allow_negative=allow_negative_cash_math,
-                        )
+                        if rule.coverage_mode == "INTEREST_SHORTFALL":
+                            reserve_balance, reserve_withdrawal = _resolve_coverage_source_workspace(
+                                ctx,
+                                rule.source_keys,
+                            )
+                            pmt = pay_interest_from_reserve(
+                                [],
+                                tgt.interest,
+                                tgt.opt_interest,
+                                tgt.int_shortfall,
+                                reserve_balance,
+                                reserve_withdrawal,
+                                i,
+                                max_amount=target_max_amt,
+                                shortfall=True,
+                            )
+                        else:
+                            pmt = pay_interest(
+                                sources,
+                                tgt.interest,
+                                tgt.opt_interest,
+                                tgt.int_shortfall,
+                                i,
+                                max_amount=target_max_amt,
+                                allow_negative=allow_negative_cash_math,
+                            )
                     elif rule.tag == _OP_INTEREST_SF:
                         pmt = pay_interest(
                             sources,
@@ -2360,21 +2532,36 @@ def run_deal(
                             allow_negative=allow_negative_cash_math,
                         )
                     elif rule.tag == _OP_PRINCIPAL:
-                        # Schedule-first cap composes with rule-level cap so PAC/TAC bonds
-                        # never exceed their published principal contract for this period,
-                        # unless the rule sets `ignore_schedule_cap` (cleanup-rule pattern).
-                        if rule.ignore_schedule_cap:
-                            effective_max = target_max_amt
+                        if rule.coverage_mode == "PRINCIPAL_ACCELERATION":
+                            reserve_balance, reserve_withdrawal = _resolve_coverage_source_workspace(
+                                ctx,
+                                rule.source_keys,
+                            )
+                            pmt = pay_principal_from_reserve(
+                                [],
+                                tgt.principal,
+                                tgt.balance,
+                                reserve_balance,
+                                reserve_withdrawal,
+                                i,
+                                max_amount=target_max_amt,
+                            )
                         else:
-                            effective_max = _effective_principal_cap(tgt, i, target_max_amt)
-                        pmt = pay_principal(
-                            sources,
-                            tgt.principal,
-                            tgt.balance,
-                            i,
-                            max_amount=effective_max,
-                            allow_negative=allow_negative_cash_math,
-                        )
+                            # Schedule-first cap composes with rule-level cap so PAC/TAC bonds
+                            # never exceed their published principal contract for this period,
+                            # unless the rule sets `ignore_schedule_cap` (cleanup-rule pattern).
+                            if rule.ignore_schedule_cap:
+                                effective_max = target_max_amt
+                            else:
+                                effective_max = _effective_principal_cap(tgt, i, target_max_amt)
+                            pmt = pay_principal(
+                                sources,
+                                tgt.principal,
+                                tgt.balance,
+                                i,
+                                max_amount=effective_max,
+                                allow_negative=allow_negative_cash_math,
+                            )
                     elif rule.tag == _OP_WRITEDOWN:
                         pmt = pay_writedown(
                             sources,
@@ -2419,38 +2606,41 @@ def run_deal(
                             allow_negative=allow_negative_cash_math,
                         )
                     elif rule.tag == _OP_TO_RESERVE:
-                        pmt = pay_to_reserve(sources, tgt.balance, tgt.principal, i, max_amount=target_max_amt if target_max_amt is not None else 0.0)
-                    elif rule.tag == _OP_FROM_RESERVE_INT:
-                        if rule.reserve_name and rule.reserve_name in bonds:
-                            rsv = bonds[rule.reserve_name]
-                            pmt = pay_interest_from_reserve([], tgt.interest, tgt.opt_interest, tgt.int_shortfall, rsv.balance, rsv.principal, i, max_amount=target_max_amt)
-                        elif rule.reserve_name and rule.reserve_name in accounts:
-                            rsv_a = accounts[rule.reserve_name]
-                            pmt = pay_interest_from_reserve([], tgt.interest, tgt.opt_interest, tgt.int_shortfall, rsv_a.balance, rsv_a.withdrawal, i, max_amount=target_max_amt)
-                            rsv_a.withdrawal[i] += pmt
-                    elif rule.tag == _OP_FROM_RESERVE_PRIN:
-                        if rule.reserve_name and rule.reserve_name in bonds:
-                            rsv = bonds[rule.reserve_name]
-                            pmt = pay_principal_from_reserve([], tgt.principal, tgt.balance, rsv.balance, rsv.principal, i, max_amount=target_max_amt)
-                        elif rule.reserve_name and rule.reserve_name in accounts:
-                            rsv_a = accounts[rule.reserve_name]
-                            pmt = pay_principal_from_reserve([], tgt.principal, tgt.balance, rsv_a.balance, rsv_a.withdrawal, i, max_amount=target_max_amt)
-                            rsv_a.withdrawal[i] += pmt
-                    elif rule.tag == _OP_FROM_RESERVE:
-                        if rule.reserve_name and rule.reserve_name in bonds:
-                            rsv = bonds[rule.reserve_name]
-                            pmt = pay_from_reserve([], tgt.interest, rsv.balance, rsv.principal, i, target_max_amt)
-                        elif rule.reserve_name and rule.reserve_name in accounts:
-                            rsv_a = accounts[rule.reserve_name]
-                            pmt = pay_from_reserve([], tgt.interest, rsv_a.balance, rsv_a.withdrawal, i, target_max_amt)
-                            rsv_a.withdrawal[i] += pmt
-                    elif rule.tag == _OP_RECOURSE_INT and len(rule.source_keys) == 1 and rule.source_keys[0] in bonds:
-                        src_bond = bonds[rule.source_keys[0]]
-                        pmt = pay_recourse_interest(src_bond.principal, src_bond.balance, tgt.interest, tgt.opt_interest, tgt.int_shortfall, i)
-                    elif rule.tag == _OP_RECOURSE_PRIN and len(rule.source_keys) == 1 and rule.source_keys[0] in bonds:
-                        src_bond = bonds[rule.source_keys[0]]
-                        rec_amt = max_amt or 0.0
-                        pmt = pay_recourse_principal(src_bond.principal, src_bond.balance, tgt.principal, tgt.balance, i, rec_amt)
+                        pmt = pay_to_account(sources, tgt.balance, tgt.principal, i, max_amount=target_max_amt if target_max_amt is not None else 0.0)
+                    elif rule.tag == _OP_REIMBURSE_NLA:
+                        # Debit sources and credit the target bond's NLA balance.
+                        # NLA reimbursement does NOT change the economic bond balance;
+                        # it only rebuilds the NLA tracker up to the starting balance
+                        # (nla_balance may never exceed nla_starting_balance).
+                        if tgt.nla_balance is not None:
+                            nla_cap = float(getattr(bond_def if (bond_def := deal.bonds_by_name.get(tgt_name)) else tgt, "nla_starting_balance", None) or tgt.nla_balance[0])
+                            nla_deficit = max(0.0, nla_cap - float(tgt.nla_balance[i]))
+                            reimbursable = nla_deficit
+                            if target_max_amt is not None:
+                                reimbursable = min(reimbursable, target_max_amt)
+                            avail = float(min(src[i] for src in sources)) if sources else 0.0
+                            reimbursable = max(0.0, min(reimbursable, avail))
+                            if reimbursable > 0.0:
+                                for src in sources:
+                                    src[i] -= reimbursable
+                                tgt.nla_balance[i] = min(nla_cap, float(tgt.nla_balance[i]) + reimbursable)
+                                pmt = reimbursable
+
+                    # Phase 6: maintain Nominal Liquidation Amount (NLA) balances.
+                    if pmt > 0.0:
+                        if rule.tag in {_OP_PRINCIPAL, _OP_WRITEDOWN} and tgt.nla_balance is not None:
+                            tgt.nla_balance[i] = max(0.0, float(tgt.nla_balance[i]) - float(pmt))
+                        if (
+                            rule.tag == _OP_INTEREST
+                            and rule.coverage_mode == "INTEREST_SHORTFALL"
+                            and len(rule.source_keys) == 1
+                        ):
+                            src_bond = bonds.get(rule.source_keys[0])
+                            if src_bond is not None and src_bond.nla_balance is not None:
+                                src_bond.nla_balance[i] = max(
+                                    0.0,
+                                    float(src_bond.nla_balance[i]) - float(pmt),
+                                )
 
                 if trace_buf is not None:
                     trace_buf.append(
@@ -2483,7 +2673,7 @@ def run_deal(
         for ws in bonds.values():
             if ws.pay_mode != "PIK":
                 continue
-            if ws.tranche_behavior == "Z" and ws.z_accrual_enabled and not ws.z_released:
+            if ws.kind == "Z" and ws.z_accrual_enabled and not ws.z_released:
                 # Already handled pre-waterfall; opt_interest was zeroed.
                 continue
             pik_accrual = max(0.0, float(ws.opt_interest[i]))
