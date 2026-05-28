@@ -67,6 +67,13 @@ interface RuleNodeIR {
   group_id?: string | null;
   cap_mode?: string | null;
   coverage_mode?: string | null;
+  target_weights?: number[] | null;
+}
+
+export interface CollateralGroupDefIR {
+  group_id: string;
+  label: string;
+  description: string;
 }
 
 export interface DealDefinitionIR {
@@ -77,6 +84,7 @@ export interface DealDefinitionIR {
   fees: FeeDefIR[];
   triggers: TriggerNodeIR[];
   waterfall_rules: RuleNodeIR[];
+  collateral_groups: CollateralGroupDefIR[];
   deal_knobs: Record<string, number>;
 }
 
@@ -150,7 +158,13 @@ const RULE_SOURCE_MAP: Record<string, string> = {
 
 function normalizeRuleSource(source: string | null | undefined): string {
   const token = source || "COLLECTION";
-  return RULE_SOURCE_MAP[token] || "CASH";
+  // If the token is in the map, use the mapped value.
+  // If not, pass the token through unchanged so that account/bond names
+  // used as coverage-mode sources are not silently collapsed to CASH.
+  if (Object.prototype.hasOwnProperty.call(RULE_SOURCE_MAP, token)) {
+    return RULE_SOURCE_MAP[token];
+  }
+  return token;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +211,7 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
       // schedule_contract, relations, z_accrual_enabled, coupon_type.
       let kindFromData: string | undefined;
       let groupIdFromData: string | null | undefined;
+      let couponTypeFromData: string | undefined;
       let relationData: Array<{ relation_type: string; targets: string[] }> = [];
       let scheduleContractFromData: Array<{ period: number; target_principal: number }> = [];
       let zAccrualEnabledFromData: boolean | undefined;
@@ -209,34 +224,56 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
           if (typeof parsed.group_id === "string") {
             groupIdFromData = parsed.group_id || null;
           }
+          if (typeof parsed.coupon_type === "string" && parsed.coupon_type) {
+            couponTypeFromData = parsed.coupon_type;
+          }
           if (Array.isArray(parsed.relations)) {
+            // Preserve the full relation payload including weights, leverage,
+            // cap, floor, description so the backend schema is not truncated.
             relationData = parsed.relations
               .filter((r) => typeof r === "object" && r !== null)
               .map((r) => {
-                const rel = r as { relation_type?: unknown; targets?: unknown };
-                return {
+                const rel = r as Record<string, unknown>;
+                const entry: Record<string, unknown> = {
                   relation_type: String(rel.relation_type || "").toUpperCase(),
                   targets: Array.isArray(rel.targets) ? rel.targets.map((x) => String(x)) : [],
                 };
+                if (Array.isArray(rel.weights)) entry.weights = rel.weights.map(Number);
+                if (typeof rel.leverage === "number") entry.leverage = rel.leverage;
+                if (typeof rel.cap === "number") entry.cap = rel.cap;
+                if (typeof rel.floor === "number") entry.floor = rel.floor;
+                if (typeof rel.description === "string") entry.description = rel.description;
+                return entry as { relation_type: string; targets: string[] };
               })
               .filter((r) => r.relation_type.length > 0 && r.targets.length > 0);
           }
           if (Array.isArray(parsed.schedule_contract)) {
+            // Preserve both target_principal and target_balance entries so
+            // planned-balance schedules (target_balance) are not corrupted.
             scheduleContractFromData = (parsed.schedule_contract as Array<Record<string, unknown>>)
               .filter((e) => typeof e === "object" && e !== null)
-              .map((e) => ({
-                period: Number(e.period ?? 0),
-                target_principal: Number(e.target_principal ?? 0),
-              }));
+              .map((e) => {
+                const entry: Record<string, unknown> = { period: Number(e.period ?? 0) };
+                if ("target_balance" in e) {
+                  entry.target_balance = Number(e.target_balance);
+                } else {
+                  entry.target_principal = Number(e.target_principal ?? 0);
+                }
+                return entry as { period: number; target_principal: number };
+              });
           }
-          if (parsed.z_accrual_enabled === true) {
-            zAccrualEnabledFromData = true;
+          // Read z_accrual_enabled as explicit boolean (including false).
+          if (typeof parsed.z_accrual_enabled === "boolean") {
+            zAccrualEnabledFromData = parsed.z_accrual_enabled;
           }
         } catch {
           // Ignore malformed block.data; fall back to visible fields.
         }
       }
-      const bondType = t.getFieldValue("BOND_TYPE") || "FIXED";
+      // coupon_type from block.data overrides the visible BOND_TYPE dropdown so
+      // PO (ZERO) and IO classes survive round-trip even when the dropdown shows FIXED.
+      const bondTypeFromField = t.getFieldValue("BOND_TYPE") || "FIXED";
+      const bondType = couponTypeFromData || bondTypeFromField;
       const payMode = (t.getFieldValue("PAY_MODE") || "CASH_PAY") as "CASH_PAY" | "PIK";
       targets.push({
         name: t.getFieldValue("NAME") || "X",
@@ -282,14 +319,24 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
 }
 
 /** Parse the rule-level block.data payload stashed by irToBlocklyState. */
-function extractRuleBlockData(block: any): { ruleId?: string; groupId?: string | null; capMode?: string | null } {
+function extractRuleBlockData(block: any): {
+  ruleId?: string;
+  groupId?: string | null;
+  capMode?: string | null;
+  coverageMode?: string | null;
+  targetWeights?: number[] | null;
+  extraTargets?: string[];
+} {
   if (typeof block.data !== "string" || !block.data.trim()) return {};
   try {
     const parsed = JSON.parse(block.data) as Record<string, unknown>;
     return {
-      ruleId: typeof parsed.rule_id === "string" ? parsed.rule_id : undefined,
-      groupId: typeof parsed.group_id === "string" ? parsed.group_id : null,
-      capMode: typeof parsed.cap_mode === "string" ? parsed.cap_mode : null,
+      ruleId:        typeof parsed.rule_id === "string" ? parsed.rule_id : undefined,
+      groupId:       typeof parsed.group_id === "string" ? parsed.group_id : null,
+      capMode:       typeof parsed.cap_mode === "string" ? parsed.cap_mode : null,
+      coverageMode:  typeof parsed.coverage_mode === "string" ? parsed.coverage_mode : null,
+      targetWeights: Array.isArray(parsed.target_weights) ? parsed.target_weights.map(Number) : null,
+      extraTargets:  Array.isArray(parsed.extra_targets) ? parsed.extra_targets.map(String) : [],
     };
   } catch {
     return {};
@@ -320,6 +367,38 @@ interface Ctx {
   conditionInvert: boolean;
 }
 
+function emitSplitCash(block: any, ctx: Ctx): void {
+  const source = normalizeRuleSource(block.getFieldValue("SOURCE"));
+  const out1 = String(block.getFieldValue("OUT_1") || "").trim();
+  const out2 = String(block.getFieldValue("OUT_2") || "").trim();
+  const { ruleId, groupId, targetWeights, extraTargets } = extractRuleBlockData(block);
+
+  const targets: string[] = [];
+  if (out1) targets.push(out1);
+  if (out2) targets.push(out2);
+  if (extraTargets) targets.push(...extraTargets);
+
+  if (targets.length === 0) return;
+
+  ctx.rules.push({
+    rule_id: ruleId || `split_${ctx.order}`,
+    rule_type: "SPLIT_CASH",
+    order: ctx.order,
+    from_sources: [source],
+    to_targets: targets,
+    payment_style: "SEQUENTIAL",
+    max_amount_fixed: null,
+    condition_trigger: ctx.activeTrigger,
+    condition_invert: ctx.conditionInvert,
+    group_id: groupId,
+    // Restore target_weights from block.data; fall back to equal split.
+    ...(targetWeights && targetWeights.length === targets.length
+      ? { target_weights: targetWeights }
+      : {}),
+  });
+  ctx.order++;
+}
+
 function walkWaterfall(blocks: any[], ctx: Ctx): void {
   for (const b of blocks) {
     switch (b.type) {
@@ -330,7 +409,7 @@ function walkWaterfall(blocks: any[], ctx: Ctx): void {
       case "pay_accretion_redirect": emitAccretionRedirect(b, ctx); break;
       case "pay_fee": emitFee(b, ctx); break;
       case "trigger_wrapper": emitTrigger(b, ctx); break;
-      case "split_account": break; // account-level, no rule emitted
+      case "split_account": emitSplitCash(b, ctx); break;
     }
   }
 }
@@ -378,8 +457,11 @@ function registerTargets(targets: TargetInfo[], ctx: Ctx): void {
             : (t.relations && t.relations.length > 0)
               ? t.relations
               : existing.relations,
+        // Explicit boolean merge: first defined value wins (false from data is meaningful).
         zAccrualEnabled:
-          existing.zAccrualEnabled || t.zAccrualEnabled,
+          existing.zAccrualEnabled !== undefined ? existing.zAccrualEnabled
+          : t.zAccrualEnabled !== undefined ? t.zAccrualEnabled
+          : undefined,
       });
     } else if (t.accountType) {
       if (!ctx.accounts.has(t.name)) ctx.accounts.set(t.name, t);
@@ -495,7 +577,7 @@ function emitSequential(block: any, ctx: Ctx): void {
   const targets = extractTargets(block, "TARGETS");
   registerTargets(targets, ctx);
   const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
-  const { ruleId: savedRuleId, groupId, capMode } = extractRuleBlockData(block);
+  const { ruleId: savedRuleId, groupId, capMode, coverageMode } = extractRuleBlockData(block);
 
   targets.forEach((t, i) => {
     ctx.rules.push({
@@ -510,6 +592,7 @@ function emitSequential(block: any, ctx: Ctx): void {
       condition_invert: ctx.conditionInvert,
       group_id: groupId,
       cap_mode: capMode,
+      coverage_mode: coverageMode,
     });
     ctx.order++;
   });
@@ -525,7 +608,7 @@ function emitProRata(block: any, ctx: Ctx): void {
   if (targets.length === 0) return;
 
   const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
-  const { ruleId: savedRuleId, groupId, capMode } = extractRuleBlockData(block);
+  const { ruleId: savedRuleId, groupId, capMode, coverageMode } = extractRuleBlockData(block);
 
   ctx.rules.push({
     rule_id: savedRuleId || `rule_${ctx.order}`,
@@ -539,6 +622,7 @@ function emitProRata(block: any, ctx: Ctx): void {
     condition_invert: ctx.conditionInvert,
     group_id: groupId,
     cap_mode: capMode,
+    coverage_mode: coverageMode,
   });
   ctx.order++;
 }
@@ -572,9 +656,10 @@ function emitPacTacSchedule(block: any, ctx: Ctx, behavior: "PAC" | "TAC"): void
   });
   registerTargets([...targets, ...supportTargets], ctx);
 
+  const { ruleId: pacRuleId, groupId: pacGroupId, capMode: pacCapMode } = extractRuleBlockData(block);
   targets.forEach((target) => {
     ctx.rules.push({
-      rule_id: `${behavior.toLowerCase()}_rule_${ctx.order}`,
+      rule_id: pacRuleId || `${behavior.toLowerCase()}_rule_${ctx.order}`,
       rule_type: "PAY_PRINCIPAL",
       order: ctx.order,
       from_sources: [source],
@@ -583,6 +668,8 @@ function emitPacTacSchedule(block: any, ctx: Ctx, behavior: "PAC" | "TAC"): void
       max_amount_fixed: null,
       condition_trigger: ctx.activeTrigger,
       condition_invert: ctx.conditionInvert,
+      group_id: pacGroupId,
+      cap_mode: pacCapMode,
     });
     ctx.order++;
   });
@@ -593,9 +680,10 @@ function emitAccretionRedirect(block: any, ctx: Ctx): void {
   const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
   const targets = extractTargets(block, "TARGETS");
   registerTargets(targets, ctx);
+  const { ruleId: arRuleId, groupId: arGroupId } = extractRuleBlockData(block);
   targets.forEach((target, idx) => {
     ctx.rules.push({
-      rule_id: `accretion_redirect_${ctx.order}`,
+      rule_id: arRuleId || `accretion_redirect_${ctx.order}`,
       rule_type: "PAY_PRINCIPAL",
       order: ctx.order,
       from_sources: [source],
@@ -604,6 +692,7 @@ function emitAccretionRedirect(block: any, ctx: Ctx): void {
       max_amount_fixed: maxPay > 0 && idx === 0 ? maxPay : null,
       condition_trigger: ctx.activeTrigger,
       condition_invert: ctx.conditionInvert,
+      group_id: arGroupId,
     });
     ctx.order++;
   });
@@ -617,6 +706,7 @@ function emitFee(block: any, ctx: Ctx): void {
   const amount = Number(block.getFieldValue("AMOUNT")) || 0;
   const frequency = block.getFieldValue("FREQ") || "MONTHLY";
   const isPctPoolBps = basis === "PCT_POOL";
+  const { ruleId: feeRuleId, groupId: feeGroupId } = extractRuleBlockData(block);
 
   ctx.fees.push({
     name: payee,
@@ -628,7 +718,7 @@ function emitFee(block: any, ctx: Ctx): void {
   });
 
   ctx.rules.push({
-    rule_id: `fee_${ctx.order}`,
+    rule_id: feeRuleId || `fee_${ctx.order}`,
     rule_type: "PAY_FEE",
     order: ctx.order,
     from_sources: [source],
@@ -637,6 +727,7 @@ function emitFee(block: any, ctx: Ctx): void {
     max_amount_fixed: !isPctPoolBps && amount > 0 ? amount : null,
     condition_trigger: ctx.activeTrigger,
     condition_invert: ctx.conditionInvert,
+    group_id: feeGroupId,
   });
   ctx.order++;
 }
@@ -794,6 +885,22 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
     }
   }
 
+  // Derive collateral_groups from unique non-null group_id values on bonds and rules.
+  // This is required: the backend rejects any group_id on bonds/rules when
+  // collateral_groups is absent or empty.
+  const groupIdSet = new Set<string>();
+  for (const b of bonds) {
+    if (b.group_id) groupIdSet.add(b.group_id);
+  }
+  for (const r of ctx.rules) {
+    if (r.group_id) groupIdSet.add(r.group_id);
+  }
+  const collateral_groups: CollateralGroupDefIR[] = Array.from(groupIdSet).sort().map((gid) => ({
+    group_id: gid,
+    label: gid,
+    description: "",
+  }));
+
   return {
     schema_version: "2.0.0",
     deal_name: "Deal",
@@ -802,6 +909,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
     fees: ctx.fees,
     triggers: ctx.triggers,
     waterfall_rules: ctx.rules,
+    collateral_groups,
     deal_knobs: {},
   };
 }

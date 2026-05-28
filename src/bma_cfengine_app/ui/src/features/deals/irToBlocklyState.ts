@@ -27,14 +27,18 @@
  * Round-trip preservation:
  *
  *   The PAC schedule_contract, Z accrual flags, relations,
- *   cap_mode, kind, group_id, and other IR
+ *   cap_mode, coverage_mode, kind, group_id, and other IR
  *   fields that don't have a corresponding visible Blockly field are
  *   stashed on each block's ``data`` field as JSON. When the user
  *   saves the deal back through ``irGenerator``, that helper reads
  *   the data field and merges those fields into the regenerated IR so
- *   PAC schedules etc. are not lost. A separate irGenerator change
- *   reads the data fields; until that lands, opening + saving a
- *   synthesized deal will round-trip the visible fields only.
+ *   PAC schedules and other economic fields are not lost on save.
+ *
+ *   Bond block data keys: kind, group_id, coupon_type, schedule_contract,
+ *     relations (full payload including weights/leverage/cap/floor),
+ *     z_accrual_enabled (explicit boolean).
+ *   Rule block data keys: rule_id, group_id, cap_mode, coverage_mode,
+ *     target_weights, extra_targets.
  */
 
 // ---------------------------------------------------------------------------
@@ -95,6 +99,7 @@ interface IRRule {
   condition_invert?: boolean | null;
   target_weights?: number[] | null;
   cap_mode?: string | null;
+  coverage_mode?: string | null;
 }
 
 interface IRGroup {
@@ -419,6 +424,7 @@ function feeRuleToBlock(
     rule_id: rule.rule_id,
     group_id: rule.group_id,
     cap_mode: rule.cap_mode,
+    coverage_mode: rule.coverage_mode,
   });
   return block;
 }
@@ -470,6 +476,7 @@ function waterfallRuleToBlock(
     rule_id: rule.rule_id,
     group_id: rule.group_id,
     cap_mode: rule.cap_mode,
+    coverage_mode: rule.coverage_mode,
   });
   return block;
 }
@@ -602,7 +609,11 @@ function _bondDataPayload(bond: IRBond): Record<string, unknown> {
     data.schedule_contract = bond.schedule_contract;
   }
   if (bond.relations && bond.relations.length > 0) data.relations = bond.relations;
-  if (bond.z_accrual_enabled) data.z_accrual_enabled = true;
+  // Stash z_accrual_enabled as an explicit boolean (including false) so the
+  // round-trip can distinguish "not-Z" (undefined) from "Z with accrual off".
+  if (typeof bond.z_accrual_enabled === "boolean") {
+    data.z_accrual_enabled = bond.z_accrual_enabled;
+  }
   return data;
 }
 

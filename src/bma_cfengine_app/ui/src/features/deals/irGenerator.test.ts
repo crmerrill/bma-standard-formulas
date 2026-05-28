@@ -1,0 +1,361 @@
+/**
+ * Tests for irGenerator.ts — verifies that generateDealIR correctly reads
+ * block.data payloads stashed by irToBlocklyState and produces a DealDefinitionIR
+ * that preserves all economic fields through the Blockly round-trip.
+ *
+ * These tests use mock Blockly block objects with `data` fields populated as
+ * irToBlocklyState would produce them.
+ */
+import { describe, it, expect } from "vitest";
+import { generateDealIR } from "./irGenerator";
+
+// ---------------------------------------------------------------------------
+// Minimal mock Blockly block factory
+// The mocks implement the Blockly block API surface used by irGenerator:
+//   - getFieldValue(name): returns a field value
+//   - getNextBlock():       returns the next chained block (or null)
+//   - getInputTargetBlock(name): returns the first block connected to input `name`
+// ---------------------------------------------------------------------------
+
+type MockBlock = {
+  type: string;
+  data?: string;
+  _fields: Record<string, string | number | boolean>;
+  _nextBlock: MockBlock | null;
+  _inputs: Record<string, MockBlock | null>;
+  getFieldValue(name: string): string | number | boolean | null;
+  getNextBlock(): MockBlock | null;
+  getInputTargetBlock(name: string): MockBlock | null;
+};
+
+function makeMockBlock(
+  type: string,
+  fields: Record<string, string | number | boolean>,
+  inputs: Record<string, MockBlock | null> = {},
+  dataPayload?: Record<string, unknown>,
+): MockBlock {
+  const block: MockBlock = {
+    type,
+    data: dataPayload ? JSON.stringify(dataPayload) : undefined,
+    _fields: fields,
+    _nextBlock: null,
+    _inputs: inputs,
+    getFieldValue(name: string) { return this._fields[name] ?? null; },
+    getNextBlock() { return this._nextBlock; },
+    getInputTargetBlock(name: string) { return this._inputs[name] ?? null; },
+  };
+  return block;
+}
+
+/** Link blocks as a chain: each block's getNextBlock() returns the next one. */
+function linkChain(...blocks: MockBlock[]): MockBlock {
+  for (let i = 0; i < blocks.length - 1; i++) {
+    blocks[i]._nextBlock = blocks[i + 1];
+  }
+  return blocks[0];
+}
+
+function bondTargetBlock(
+  name: string,
+  face: number,
+  dataPayload?: Record<string, unknown>,
+): MockBlock {
+  return makeMockBlock(
+    "bond_target",
+    { NAME: name, BOND_TYPE: "FIXED", PAY_MODE: "CASH_PAY", FACE_AMT: face, SIZE_PCT_POOL: 0, COUPON: 5, ACCRUAL: "30_360" },
+    {},
+    dataPayload,
+  );
+}
+
+function residualBlock(name = "R"): MockBlock {
+  return makeMockBlock("residual_target", { NAME: name }, {}, { kind: "RESIDUAL" });
+}
+
+function paySequentialBlock(
+  source: string,
+  targets: MockBlock[],
+  dataPayload?: Record<string, unknown>,
+): MockBlock {
+  const targetChain = linkChain(...targets);
+  return makeMockBlock(
+    "pay_sequential",
+    { PAY_TYPE: "INTEREST", SOURCE: source, MAX_PAY: 0 },
+    { TARGETS: targetChain },
+    dataPayload,
+  );
+}
+
+function splitAccountBlock(
+  source: string,
+  out1: string,
+  out2: string,
+  dataPayload?: Record<string, unknown>,
+): MockBlock {
+  return makeMockBlock(
+    "split_account",
+    { SOURCE: source, OUT_1: out1, OUT_2: out2 },
+    {},
+    dataPayload,
+  );
+}
+
+function makeWorkspace(topBlocks: MockBlock[]) {
+  return {
+    getTopBlocks: () => topBlocks,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function run(workspace: ReturnType<typeof makeWorkspace>) {
+  return generateDealIR(workspace as any);
+}
+
+// ---------------------------------------------------------------------------
+// Tests: kind + group_id round-trip (B1 + general data reading)
+// ---------------------------------------------------------------------------
+
+describe("generateDealIR block.data round-trip", () => {
+  it("preserves kind from bond block.data", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("PAC_A", 100, { kind: "PAC", schedule_contract: [{ period: 1, target_principal: 10 }] }),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const pac = ir.bonds.find((b) => b.name === "PAC_A");
+    expect(pac?.kind).toBe("PAC");
+  });
+
+  it("preserves group_id on bond and derives collateral_groups", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock(
+        "CASH",
+        [bondTargetBlock("A", 100, { kind: "CASH_PAY", group_id: "GROUP_1" })],
+        { rule_id: "r1", group_id: "GROUP_1" },
+      ),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const bond = ir.bonds.find((b) => b.name === "A");
+    expect(bond?.group_id).toBe("GROUP_1");
+    expect(ir.collateral_groups.map((g) => g.group_id)).toContain("GROUP_1");
+    expect(ir.collateral_groups.length).toBe(1);
+  });
+
+  it("derives collateral_groups from multiple group_ids across bonds and rules", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock(
+        "CASH",
+        [bondTargetBlock("A", 100, { kind: "CASH_PAY", group_id: "GROUP_1" })],
+        { rule_id: "r1", group_id: "GROUP_1" },
+      ),
+      paySequentialBlock(
+        "CASH",
+        [bondTargetBlock("B", 80, { kind: "CASH_PAY", group_id: "GROUP_2" })],
+        { rule_id: "r2", group_id: "GROUP_2" },
+      ),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const gids = ir.collateral_groups.map((g) => g.group_id);
+    expect(gids).toContain("GROUP_1");
+    expect(gids).toContain("GROUP_2");
+    expect(ir.collateral_groups.length).toBe(2);
+  });
+
+  it("emits empty collateral_groups when no group_id is set", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [bondTargetBlock("A", 100)]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    expect(ir.collateral_groups).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------
+  // B2: schedule_contract preserves target_balance entries
+  // -------------------------------------------------------------------
+
+  it("preserves target_balance in schedule_contract from block.data (B2)", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("PAC_A", 100, {
+          kind: "PAC",
+          schedule_contract: [
+            { period: 1, target_balance: 90 },
+            { period: 2, target_balance: 80 },
+          ],
+        }),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const pac = ir.bonds.find((b) => b.name === "PAC_A");
+    expect(pac?.schedule_contract[0]).toHaveProperty("target_balance", 90);
+    expect(pac?.schedule_contract[1]).toHaveProperty("target_balance", 80);
+  });
+
+  // -------------------------------------------------------------------
+  // B3: coverage_mode round-trip
+  // -------------------------------------------------------------------
+
+  it("preserves coverage_mode on rules from block.data (B3)", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("A", 100),
+      ], {
+        rule_id: "r_sf",
+        coverage_mode: "INTEREST_SHORTFALL",
+      }),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const r = ir.waterfall_rules.find((r) => r.rule_id === "r_sf");
+    expect(r?.coverage_mode).toBe("INTEREST_SHORTFALL");
+  });
+
+  // -------------------------------------------------------------------
+  // B4: SPLIT_CASH emission from split_account blocks
+  // -------------------------------------------------------------------
+
+  it("emits SPLIT_CASH rule for split_account block (B4)", () => {
+    const ws = makeWorkspace([
+      splitAccountBlock("CASH", "BUCKET_1", "BUCKET_2", {
+        rule_id: "split_r1",
+        target_weights: [0.6, 0.4],
+      }),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const split = ir.waterfall_rules.find((r) => r.rule_type === "SPLIT_CASH");
+    expect(split).toBeDefined();
+    expect(split?.to_targets).toEqual(["BUCKET_1", "BUCKET_2"]);
+    expect(split?.target_weights).toEqual([0.6, 0.4]);
+    expect(split?.rule_id).toBe("split_r1");
+  });
+
+  // -------------------------------------------------------------------
+  // M6: z_accrual_enabled explicit boolean (including false)
+  // -------------------------------------------------------------------
+
+  it("preserves z_accrual_enabled:false when stashed in block.data (M6)", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("Z", 50, { kind: "Z", z_accrual_enabled: false }),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const z = ir.bonds.find((b) => b.name === "Z");
+    expect(z?.z_accrual_enabled).toBe(false);
+  });
+
+  it("preserves z_accrual_enabled:true when stashed in block.data (M6)", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("Z", 50, { kind: "Z", z_accrual_enabled: true }),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const z = ir.bonds.find((b) => b.name === "Z");
+    expect(z?.z_accrual_enabled).toBe(true);
+  });
+
+  // -------------------------------------------------------------------
+  // M7: full relation payload
+  // -------------------------------------------------------------------
+
+  it("preserves full relation payload including weights and leverage (M7)", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("IO", 0, {
+          kind: "IO",
+          relations: [
+            {
+              relation_type: "NOTIONAL_TRACKS",
+              targets: ["A"],
+              weights: [1.0],
+              leverage: 2.5,
+              cap: 12.0,
+              floor: 0.0,
+              description: "notional tracker",
+            },
+          ],
+        }),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const io = ir.bonds.find((b) => b.name === "IO");
+    const rel = io?.relations?.[0] as Record<string, unknown>;
+    expect(rel?.relation_type).toBe("NOTIONAL_TRACKS");
+    expect(rel?.weights).toEqual([1.0]);
+    expect(rel?.leverage).toBe(2.5);
+    expect(rel?.cap).toBe(12.0);
+    expect(rel?.description).toBe("notional tracker");
+  });
+
+  // -------------------------------------------------------------------
+  // M8: coupon_type from block.data
+  // -------------------------------------------------------------------
+
+  it("uses coupon_type from block.data to override visible BOND_TYPE field (M8)", () => {
+    // PO bonds have coupon_type=ZERO but BOND_TYPE dropdown may show FIXED.
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("PO", 0, { kind: "PO", coupon_type: "ZERO" }),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const po = ir.bonds.find((b) => b.name === "PO");
+    expect(po?.coupon_type).toBe("ZERO");
+  });
+
+  // -------------------------------------------------------------------
+  // M9: unknown source tokens pass through unchanged
+  // -------------------------------------------------------------------
+
+  it("passes through unknown source tokens instead of collapsing to CASH (M9)", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("RESERVE_ACCT", [bondTargetBlock("A", 100)]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const r = ir.waterfall_rules.find((r) => r.to_targets?.includes("A"));
+    expect(r?.from_sources).toContain("RESERVE_ACCT");
+  });
+
+  it("INT_COLLECTION maps to ACT_INT (not CASH)", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("INT_COLLECTION", [bondTargetBlock("A", 100)]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const r = ir.waterfall_rules.find((r) => r.to_targets?.includes("A"));
+    expect(r?.from_sources).toContain("ACT_INT");
+    expect(r?.from_sources).not.toContain("CASH");
+  });
+
+  // -------------------------------------------------------------------
+  // cap_mode round-trip
+  // -------------------------------------------------------------------
+
+  it("preserves cap_mode on rules from block.data", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("A", 100),
+      ], { rule_id: "cleanup_r", cap_mode: "NONE" }),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const r = ir.waterfall_rules.find((r) => r.rule_id === "cleanup_r");
+    expect(r?.cap_mode).toBe("NONE");
+  });
+});
