@@ -401,19 +401,22 @@ class TestSchemaValidation:
         assert isinstance(warnings, list)
 
     def test_duplicate_names_fails(self):
-        deal = DealDefinition(
-            deal_name="DupTest",
-            bonds=[
-                BondDef(name="A", coupon=5.0),
-                BondDef(name="A", coupon=6.0),
-            ],
-            waterfall_rules=[
-                RuleNode(rule_id="r1", rule_type=RuleType.PAY_INTEREST,
-                         order=0, from_sources=["CASH"], to_targets=["A"]),
-            ],
-        )
-        with pytest.raises(DealValidationError, match="Duplicate"):
-            validate_deal(deal)
+        # Duplicate detection now fires at DealDefinition construction time
+        # (Pydantic validator) rather than in validate_deal(), so the
+        # exception is raised during the model_validate/init call.
+        import pydantic
+        with pytest.raises(pydantic.ValidationError, match="duplicate bond names"):
+            DealDefinition(
+                deal_name="DupTest",
+                bonds=[
+                    BondDef(name="A", coupon=5.0),
+                    BondDef(name="A", coupon=6.0),
+                ],
+                waterfall_rules=[
+                    RuleNode(rule_id="r1", rule_type=RuleType.PAY_INTEREST,
+                             order=0, from_sources=["CASH"], to_targets=["A"]),
+                ],
+            )
 
     def test_invalid_reference_fails_at_construction(self):
         with pytest.raises(Exception):

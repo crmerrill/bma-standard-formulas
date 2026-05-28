@@ -608,3 +608,125 @@ def test_legacy_tranche_kind_map_is_public():
     from bma_standard_formulas.deals.schemas.migrations import LEGACY_TRANCHE_KIND_MAP
     assert isinstance(LEGACY_TRANCHE_KIND_MAP, dict)
     assert "SEQUENTIAL" in LEGACY_TRANCHE_KIND_MAP
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 SR1: INT_COLLECTION / PRIN_COLLECTION normalization
+# ---------------------------------------------------------------------------
+
+
+def test_int_collection_not_in_migration_to_protect_target_names():
+    """migrate_deal_payload must NOT rewrite INT_COLLECTION in to_targets
+    because it could be a legitimate bond/account name. INT_COLLECTION → ACT_INT
+    rewriting is handled ONLY by the API normalizer (restricted to from_sources)."""
+    payload = _minimal_deal(
+        bonds=[_bond("INT_COLLECTION")],  # a bond literally named INT_COLLECTION
+        waterfall_rules=[
+            _rule(rule_type="PAY_INTEREST", to_targets=["INT_COLLECTION"]),
+        ],
+    )
+    migrated = migrate_deal_payload(payload)
+    # to_targets must NOT be rewritten — it's a bond name, not a stream token.
+    assert migrated["waterfall_rules"][0]["to_targets"] == ["INT_COLLECTION"], (
+        "migrate_deal_payload must not rewrite bond/account names in to_targets"
+    )
+
+
+def test_api_normalizer_preserves_act_int_semantics():
+    """_normalize_legacy_studio_ir must map INT_COLLECTION → ACT_INT, not CASH."""
+    from bma_cfengine_app.api.routers.deals import _normalize_legacy_studio_ir
+    raw = {
+        "deal_name": "Test",
+        "waterfall_rules": [
+            {"rule_id": "r", "rule_type": "PAY_INTEREST",
+             "from_sources": ["INT_COLLECTION"], "to_targets": ["A"]},
+        ],
+    }
+    normalized = _normalize_legacy_studio_ir(raw)
+    assert normalized["waterfall_rules"][0]["from_sources"] == ["ACT_INT"], (
+        "INT_COLLECTION must map to ACT_INT, not CASH"
+    )
+
+
+def test_api_normalizer_preserves_act_prin_semantics():
+    """_normalize_legacy_studio_ir must map PRIN_COLLECTION → ACT_PRIN, not CASH."""
+    from bma_cfengine_app.api.routers.deals import _normalize_legacy_studio_ir
+    raw = {
+        "deal_name": "Test",
+        "waterfall_rules": [
+            {"rule_id": "r", "rule_type": "PAY_PRINCIPAL",
+             "from_sources": ["PRIN_COLLECTION"], "to_targets": ["A"]},
+        ],
+    }
+    normalized = _normalize_legacy_studio_ir(raw)
+    assert normalized["waterfall_rules"][0]["from_sources"] == ["ACT_PRIN"], (
+        "PRIN_COLLECTION must map to ACT_PRIN, not CASH"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 OA2: Reject raw JSON PAIRED collateral
+# ---------------------------------------------------------------------------
+
+
+def test_build_from_deal_native_rejects_paired_mode():
+    """deal_native source must reject collateral.mode='PAIRED' with clear error."""
+    from bma_cfengine_app.orchestrator.deals.collateral_bridge import build_from_deal_native
+    with pytest.raises(ValueError, match="PAIRED.*not accepted via HTTP"):
+        build_from_deal_native({
+            "run_input": {
+                "collateral": {"mode": "PAIRED", "portfolio": {}},
+                "original_collateral_balance": 0.0,
+                "loan_count": 1,
+            },
+        })
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 OA7: Uniqueness invariants
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_account_names_rejected():
+    from bma_standard_formulas.deals.schemas.ir import AccountDef, DealDefinition, RuleNode
+    import pydantic
+    with pytest.raises(pydantic.ValidationError, match="duplicate account names"):
+        DealDefinition(
+            deal_name="DupAccts",
+            bonds=[{"name": "R", "kind": "RESIDUAL", "is_bond": False, "is_pseudo": True}],
+            accounts=[
+                AccountDef(name="RSRV"),
+                AccountDef(name="RSRV"),
+            ],
+            waterfall_rules=[_rule()],
+        )
+
+
+def test_duplicate_fee_names_rejected():
+    from bma_standard_formulas.deals.schemas.ir import FeeDef, DealDefinition
+    import pydantic
+    with pytest.raises(pydantic.ValidationError, match="duplicate fee names"):
+        DealDefinition(
+            deal_name="DupFees",
+            bonds=[{"name": "R", "kind": "RESIDUAL", "is_bond": False, "is_pseudo": True}],
+            fees=[
+                FeeDef(name="SERVICER", basis_type="FIXED_DOLLAR", amount=100.0),
+                FeeDef(name="SERVICER", basis_type="FIXED_DOLLAR", amount=200.0),
+            ],
+            waterfall_rules=[_rule()],
+        )
+
+
+def test_duplicate_calculation_names_rejected():
+    from bma_standard_formulas.deals.schemas.ir import CalculationNode, DealDefinition
+    import pydantic
+    with pytest.raises(pydantic.ValidationError, match="duplicate calculation names"):
+        DealDefinition(
+            deal_name="DupCalcs",
+            bonds=[{"name": "R", "kind": "RESIDUAL", "is_bond": False, "is_pseudo": True}],
+            calculations=[
+                CalculationNode(name="cum_loss", expression="1.0"),
+                CalculationNode(name="cum_loss", expression="2.0"),
+            ],
+            waterfall_rules=[_rule()],
+        )

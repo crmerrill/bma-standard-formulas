@@ -207,12 +207,33 @@ def build_from_runsetup_ref(
     return deal_inputs
 
 
+def _reject_paired_in_json(payload: Any) -> None:
+    """Raise ValueError if a raw JSON payload specifies PAIRED collateral mode.
+
+    ``PortfolioCashflow`` is an in-process engine object and cannot be
+    deserialized from JSON. Callers that need PAIRED input must supply a
+    ``runsetup_ref`` source so the bridge reconstructs the portfolio from
+    persisted per-loan artifacts, not from a raw JSON body.
+    """
+    if not isinstance(payload, dict):
+        return
+    coll = payload.get("collateral") or {}
+    if isinstance(coll, dict) and coll.get("mode") == "PAIRED":
+        raise ValueError(
+            "collateral.mode='PAIRED' is not accepted via HTTP JSON. "
+            "PortfolioCashflow cannot be serialized or deserialized from JSON. "
+            "Use source_mode='runsetup_ref' to reference a server-side "
+            "PortfolioCashflow artifact instead."
+        )
+
+
 def build_from_deal_native(source_payload: dict[str, Any]) -> dict[str, DealRunInput]:
     """Build run input(s) from explicit deal-local collateral payloads."""
     if "scenario_inputs" in source_payload:
         scenario_inputs = source_payload["scenario_inputs"] or {}
         out: dict[str, DealRunInput] = {}
         for scenario_name, payload in scenario_inputs.items():
+            _reject_paired_in_json(payload)
             out[scenario_name] = DealRunInput.model_validate(payload)
         if out:
             return out
@@ -220,5 +241,6 @@ def build_from_deal_native(source_payload: dict[str, Any]) -> dict[str, DealRunI
     run_input = source_payload.get("run_input")
     if run_input is None:
         raise ValueError("deal_native source requires run_input or scenario_inputs")
+    _reject_paired_in_json(run_input)
     scenario_name = source_payload.get("scenario_name", "Base Case")
     return {scenario_name: DealRunInput.model_validate(run_input)}

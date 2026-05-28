@@ -159,8 +159,17 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
     def _migrate_token(tok: Any) -> Any:
         if not isinstance(tok, str):
             return tok
-        # Bare tokens
-        _bare = {"INT_CASH": "ACT_INT", "PRIN_CASH": "ACT_PRIN", "COLLATERAL": "CASH"}
+        # Bare tokens — internal IR renames only. INT_COLLECTION / PRIN_COLLECTION
+        # are UI source-dropdown labels that only appear in from_sources (never in
+        # to_targets, which always contain bond/account/fee/stream names). Rewriting
+        # them here would corrupt any bond or account legitimately named
+        # "INT_COLLECTION". The API normalizer's _LEGACY_RULE_SOURCE_MAP handles
+        # those labels correctly, restricted to from_sources.
+        _bare = {
+            "INT_CASH": "ACT_INT",
+            "PRIN_CASH": "ACT_PRIN",
+            "COLLATERAL": "CASH",
+        }
         if tok in _bare:
             return _bare[tok]
         # Group-prefixed tokens: GROUP_<id>_INT_CASH → GROUP_<id>_ACT_INT etc.

@@ -76,8 +76,12 @@ _LEGACY_TRIGGER_METRIC_MAP = {
 
 _LEGACY_RULE_SOURCE_MAP = {
     "COLLECTION": "CASH",
-    "PRIN_COLLECTION": "CASH",
-    "INT_COLLECTION": "CASH",
+    # Preserve split-stream semantics: INT_COLLECTION carries interest-only
+    # cash and must map to ACT_INT, not collapse to the combined CASH stream.
+    # Similarly PRIN_COLLECTION → ACT_PRIN. Collapsing to CASH loses the
+    # intent of rules that were authored against the split streams.
+    "PRIN_COLLECTION": "ACT_PRIN",
+    "INT_COLLECTION": "ACT_INT",
     "DISTRIBUTION": "CASH",
     "RESERVE": "CASH",
     "PREFUNDING": "CASH",
@@ -304,9 +308,26 @@ async def get_deal(deal_id: str, version: int | None = Query(None)):
     normalization_error: str | None = None
     migrated_ir: dict = raw_ir
 
+    schema_validation_error: str | None = None
     try:
         normalized_ir = _normalize_legacy_studio_ir(raw_ir)
         migrated_ir = migrate_deal_payload(normalized_ir)
+        # Attempt schema validation so the UI can surface structural errors early.
+        # Failures here do NOT block the GET — we return the normalized IR plus
+        # a `schema_validation_error` field so callers can decide whether to show
+        # a warning or require fixes before allowing a run.
+        try:
+            DealDefinition.model_validate(migrated_ir)
+        except Exception as ve:
+            import pydantic
+            if isinstance(ve, pydantic.ValidationError):
+                # Omit input data from error messages to keep responses compact.
+                schema_validation_error = "; ".join(
+                    e.get("msg", str(e))
+                    for e in ve.errors(include_input=False)
+                )
+            else:
+                schema_validation_error = str(ve)
     except ValueError as exc:
         # ValueError from migrate_deal_payload means an ambiguous field that
         # requires manual intervention (e.g. PAY_FROM_RESERVE).  Return the
@@ -320,13 +341,17 @@ async def get_deal(deal_id: str, version: int | None = Query(None)):
         normalization_error = f"Unexpected normalization error: {exc}"
         migrated_ir = raw_ir
 
-    return {
+    response = {
         **snapshot,
         "ir": migrated_ir,
         "ir_display_normalized": migrated_ir is not raw_ir,
         "ir_original_schema_version": original_schema_version,
-        **({"normalization_error": normalization_error} if normalization_error else {}),
     }
+    if normalization_error:
+        response["normalization_error"] = normalization_error
+    if schema_validation_error:
+        response["schema_validation_error"] = schema_validation_error
+    return response
 
 
 @router.post("/deals")

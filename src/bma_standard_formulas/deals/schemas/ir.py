@@ -406,12 +406,31 @@ class DealDefinition(BaseModel):
 
     @model_validator(mode="after")
     def _validate_references(self) -> "DealDefinition":
-        # Phase 9: trigger names must be unique (state machine keys by name).
-        trigger_name_list = [t.name for t in self.triggers]
-        if len(trigger_name_list) != len(set(trigger_name_list)):
-            dupes = [n for n in trigger_name_list if trigger_name_list.count(n) > 1]
+        # ── Uniqueness invariants (SR1-OA7) ─────────────────────────────────
+        # Duplicates silently shadow earlier definitions and are always bugs.
+        # Errors are collected into the shared `errors` list rather than raised
+        # immediately so all violations are reported in a single ValidationError.
+        uniqueness_errors: list[str] = []
+
+        def _check_unique(items: list, attr: str, label: str) -> None:
+            names = [getattr(i, attr) for i in items]
+            if len(names) != len(set(names)):
+                dupes = sorted({n for n in names if names.count(n) > 1})
+                uniqueness_errors.append(
+                    f"DealDefinition: duplicate {label}: {dupes}"
+                )
+
+        _check_unique(self.bonds, "name", "bond names")
+        _check_unique(self.accounts, "name", "account names")
+        _check_unique(self.fees, "name", "fee names")
+        _check_unique(self.triggers, "name", "trigger names")
+        _check_unique(self.calculations, "name", "calculation names")
+        _check_unique(self.collateral_groups, "group_id", "collateral group_ids")
+
+        if uniqueness_errors:
             raise ValueError(
-                f"DealDefinition: duplicate trigger names: {sorted(set(dupes))}"
+                "Deal IR validation failed with uniqueness errors:\n"
+                + "\n".join(f"- {e}" for e in uniqueness_errors)
             )
 
         bond_names = {b.name for b in self.bonds}
