@@ -302,3 +302,91 @@ class TestBMAScheduledToDataFrame:
         # Non-array (scalar / metadata) fields excluded
         assert "loan_id" not in df.columns
         assert "original_balance" not in df.columns
+
+
+# ---------------------------------------------------------------------------
+# 5. RG7: Divergent per-group assumptions test (Phase 0B acceptance)
+# ---------------------------------------------------------------------------
+
+
+class TestDivergentGroupAssumptions:
+    """RG7 acceptance test: when group 1 and group 2 have different per-group
+    SMM assumptions, the per-group artifacts reflect different cashflow
+    patterns and the aggregate is their sum.
+
+    This proves that the single-call engine path correctly applies per-group
+    curves (via group_overrides) rather than a single pooled assumption.
+    """
+
+    def test_divergent_smm_per_group_produces_different_cashflows(self, workspace):
+        """Group 1 = 0 SMM (no prepay), Group 2 = high SMM (fast prepay).
+        Per-group vol_prepay arrays must differ; aggregate must sum to their total.
+        """
+        from bma_cfengine_app.api.models import AssumptionSet, ConstantCurve
+
+        run_id = "test_divergent_smm"
+        run_store.save_manifest(run_id, {"status": "running"})
+
+        loans = [
+            _make_loan(1, "GROUP_1", balance=1_000_000),
+            _make_loan(2, "GROUP_2", balance=1_000_000),
+        ]
+        groups_by_id = {"GROUP_1": [loans[0]], "GROUP_2": [loans[1]]}
+        group_id_map = {1: "GROUP_1", 2: "GROUP_2"}
+        grouping = GroupingConfig(keys=["pool_id"])
+
+        # Group 1: no prepay; Group 2: high SMM (fast payoff).
+        assumptions = AssumptionsPayload(
+            portfolio_defaults=AssumptionSet(
+                smm=ConstantCurve(value=0.0),
+                mdr=ConstantCurve(value=0.0),
+                severity=ConstantCurve(value=0.0),
+            ),
+            group_overrides={
+                "GROUP_2": AssumptionSet(
+                    smm=ConstantCurve(value=0.10),  # 10% monthly prepay
+                    mdr=ConstantCurve(value=0.0),
+                    severity=ConstantCurve(value=0.0),
+                ),
+            },
+        )
+
+        _, _, group_artifacts = _execute_single_scenario(
+            run_id=run_id,
+            scenario_name="Divergent",
+            loans=loans,
+            groups_by_id=groups_by_id,
+            group_id_map=group_id_map,
+            assumptions=assumptions,
+            run_mode="actual",
+            rate_index=None,
+            grouping=grouping,
+        )
+
+        agg_df = run_store.load_artifact(run_id, "Divergent_portfolio_actual")
+        g1_df = run_store.load_artifact(run_id, group_artifacts["GROUP_1"])
+        g2_df = run_store.load_artifact(run_id, group_artifacts["GROUP_2"])
+
+        n = min(len(agg_df), len(g1_df), len(g2_df))
+
+        # GROUP_2 has high prepay; GROUP_1 has zero prepay.
+        # At period 1, GROUP_2 vol_prepay must be > GROUP_1 vol_prepay.
+        g1_vol_prepay = g1_df["vol_prepay"].to_numpy()[:n]
+        g2_vol_prepay = g2_df["vol_prepay"].to_numpy()[:n]
+        # With SMM=0.10, GROUP_2 should have substantial vol_prepay from period 1.
+        assert g2_vol_prepay.sum() > g1_vol_prepay.sum(), (
+            "GROUP_2 (high SMM) must have more prepayments than GROUP_1 (zero SMM)"
+        )
+        # In fact, GROUP_1 should have zero prepay throughout.
+        assert g1_vol_prepay.sum() == pytest.approx(0.0, abs=1.0), (
+            "GROUP_1 (SMM=0) should have no voluntary prepayments"
+        )
+
+        # Aggregate FLOW fields must equal sum of per-group fields.
+        for field in ("act_am", "vol_prepay", "act_int", "prin_loss"):
+            agg_arr = agg_df[field].to_numpy()[:n]
+            summed = g1_df[field].to_numpy()[:n] + g2_df[field].to_numpy()[:n]
+            np.testing.assert_allclose(
+                agg_arr, summed, rtol=1e-9, atol=1e-3,
+                err_msg=f"Aggregate {field!r} != sum of per-group {field!r}",
+            )

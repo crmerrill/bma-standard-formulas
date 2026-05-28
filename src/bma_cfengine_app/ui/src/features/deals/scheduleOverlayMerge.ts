@@ -120,8 +120,43 @@ function _inputsMatch(
 }
 
 /**
+ * Extract an initial ScheduleOverlay from a loaded IR by seeding any PAC/TAC bond
+ * that already has schedule_contract + schedule_derivation entries. This prevents
+ * schedules from being discarded when a deal with existing derivations is loaded
+ * into the editor before the user triggers a re-derive.
+ */
+export function extractScheduleOverlayFromIr(irJson: string): ScheduleOverlay {
+  const overlay: ScheduleOverlay = {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(irJson) as unknown;
+  } catch {
+    return overlay;
+  }
+  if (!parsed || typeof parsed !== "object") return overlay;
+  const bonds = (parsed as Record<string, unknown>).bonds;
+  if (!Array.isArray(bonds)) return overlay;
+  for (const b of bonds) {
+    if (!b || typeof b !== "object") continue;
+    const bond = b as Record<string, unknown>;
+    const kind = bond.kind;
+    if (kind !== "PAC" && kind !== "TAC") continue;
+    const name = String(bond.name ?? "");
+    if (!name) continue;
+    const contract = bond.schedule_contract;
+    if (!Array.isArray(contract) || contract.length === 0) continue;
+    overlay[name] = {
+      schedule_contract: contract as Array<Record<string, unknown>>,
+      schedule_derivation: (bond.schedule_derivation as Record<string, unknown>) ?? {},
+    };
+  }
+  return overlay;
+}
+
+/**
  * Whether merged IR has at least one PSA-mode PAC/TAC bond whose schedule_derivation
  * inputs no longer match pool + bond speeds / sizing (Phase 1i stale indicator).
+ * Also detects staleness when the support stack (SUPPORTED_BY relations) changes.
  */
 export function computePsaScheduleStale(
   irJson: string,
@@ -143,9 +178,11 @@ export function computePsaScheduleStale(
   for (const b of bonds) {
     if (!b || typeof b !== "object") continue;
     const bond = b as Record<string, unknown>;
-    if (bond.schedule_model_type !== "PSA") continue;
+    // Accept PAC/TAC bonds with any schedule model or with speed values set
+    // (schedule_model_type may be absent after round-trip).
     const kind = bond.kind;
     if (kind !== "PAC" && kind !== "TAC") continue;
+    if (bond.schedule_model_type && bond.schedule_model_type !== "PSA") continue;
 
     const deriv = bond.schedule_derivation as Record<string, unknown> | undefined;
     const storedInputs = deriv?.inputs as Record<string, unknown> | undefined;
@@ -160,6 +197,26 @@ export function computePsaScheduleStale(
       if (!exp) continue;
       if (!_inputsMatch(exp, storedInputs))
         return { stale: true, reason: "TAC PSA schedule does not match current pool or pricing speed." };
+    }
+
+    // Check support-stack fingerprint: if SUPPORTED_BY targets changed since
+    // the schedule was derived, the derivation result may be wrong.
+    const currentSupportNames = (
+      (bond.relations as Array<Record<string, unknown>> | undefined) ?? []
+    )
+      .filter((r) => r.relation_type === "SUPPORTED_BY")
+      .flatMap((r) => (Array.isArray(r.targets) ? r.targets.map(String) : []))
+      .sort()
+      .join(",");
+    const storedSupportNames = String(storedInputs?.support_names ?? "");
+    if (
+      storedInputs !== undefined
+      && currentSupportNames !== storedSupportNames
+    ) {
+      return {
+        stale: true,
+        reason: "Support tranche stack changed since last PSA schedule derivation.",
+      };
     }
   }
   return { stale: false, reason: "" };

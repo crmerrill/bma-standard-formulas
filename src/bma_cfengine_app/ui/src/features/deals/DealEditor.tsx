@@ -40,6 +40,7 @@ import type { CollateralRiskSettings } from "./shared/riskSettings";
 import { getDefaultCollateralRiskSettings, validateCollateralRiskSettings } from "./shared/riskSettings";
 import {
   computePsaScheduleStale,
+  extractScheduleOverlayFromIr,
   mergeScheduleOverlay,
   type ScheduleOverlay,
 } from "./scheduleOverlayMerge";
@@ -183,16 +184,32 @@ export default function DealEditor({
     [solverSpecDraft.scenarioSetText],
   );
   const hasPsaStructuringBonds = useMemo(() => {
+    // A PAC/TAC bond with schedule_model_type=PSA is the canonical case.
+    // Also accept PAC/TAC bonds where schedule_model_type is null/absent
+    // (irGenerator may omit it after round-trip) but the bond has a non-empty
+    // SUPPORTED_BY relation or speed values — these are structurally set up
+    // for PSA derivation even if the field was dropped.
     try {
       const ir = JSON.parse(irJson || "{}") as {
-        bonds?: Array<{ kind?: string; schedule_model_type?: string }>;
+        bonds?: Array<{
+          kind?: string;
+          schedule_model_type?: string | null;
+          schedule_speed_low?: number | null;
+          schedule_speed_high?: number | null;
+          relations?: Array<{ relation_type?: string }>;
+        }>;
       };
       return (
-        ir.bonds?.some(
-          (b) =>
-            (b.kind === "PAC" || b.kind === "TAC")
-            && b.schedule_model_type === "PSA",
-        ) ?? false
+        ir.bonds?.some((b) => {
+          if (b.kind !== "PAC" && b.kind !== "TAC") return false;
+          if (b.schedule_model_type === "PSA") return true;
+          // Treat as PSA-eligible when speed values are set (model may have been
+          // dropped from block data on round-trip but speeds survive).
+          if (typeof b.schedule_speed_low === "number" && b.schedule_speed_low > 0) return true;
+          // Or when support linkage exists (PSA derivation requires a support stack).
+          if (b.relations?.some((r) => r.relation_type === "SUPPORTED_BY")) return true;
+          return false;
+        }) ?? false
       );
     } catch {
       return false;
@@ -242,7 +259,7 @@ export default function DealEditor({
     psaAutoDeriveTimerRef.current = setTimeout(() => {
       psaAutoDeriveTimerRef.current = null;
       void runPsaScheduleDerivation({ silent: true });
-    }, 800);
+    }, 300);
     return () => {
       if (psaAutoDeriveTimerRef.current) clearTimeout(psaAutoDeriveTimerRef.current);
     };
@@ -478,7 +495,15 @@ export default function DealEditor({
       setSavedDealId(snapshot.deal_id);
       setActiveDealVersion(selectedStudioVersion ? Number(selectedStudioVersion) : null);
       setDealName(snapshot.deal_name || "Deal");
-      setIrJson(JSON.stringify(snapshot.ir ?? {}, null, 2));
+      const loadedIrJson = JSON.stringify(snapshot.ir ?? {}, null, 2);
+      setIrJson(loadedIrJson);
+      // Seed scheduleOverlay from any PAC/TAC bonds that already have
+      // schedule_contract entries in the saved IR so derived schedules are
+      // not discarded when reopening a deal.
+      const seedOverlay = extractScheduleOverlayFromIr(loadedIrJson);
+      if (Object.keys(seedOverlay).length > 0) {
+        setScheduleOverlay(seedOverlay);
+      }
       setErrors([]);
       const presets = (snapshot.ir?.solver_presets ?? {}) as Record<string, unknown>;
       setSolverSpecDraft((prev) => ({

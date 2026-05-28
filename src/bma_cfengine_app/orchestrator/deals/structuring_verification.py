@@ -103,6 +103,39 @@ def verify_structure(
                     f"{bond.name}: support tranche {support_name} cannot be Z behavior."
                 )
 
+    # Schema-only relation types: these are accepted by the IR schema and stored in
+    # the deal definition, but the runtime does NOT act on them — they are declarative
+    # annotations only. Emit an explicit WARNING for every such relation so that deal
+    # authors do not assume the relation changes cashflow behaviour.
+    _SCHEMA_ONLY_RELATION_TYPES = {
+        TrancheRelationType.COUPON_INVERSE_OF,
+        TrancheRelationType.COUPON_LEVERAGE_OF,
+        TrancheRelationType.MACR_EXCHANGE,
+    }
+    _SCHEMA_ONLY_DESCRIPTIONS = {
+        TrancheRelationType.COUPON_INVERSE_OF: (
+            "COUPON_INVERSE_OF is declarative only. The runtime does not compute "
+            "an inverse-floater coupon from this relation. Add explicit coupon rules "
+            "or a RateScheduleEntry schedule to model the inverse-floater cash flows."
+        ),
+        TrancheRelationType.COUPON_LEVERAGE_OF: (
+            "COUPON_LEVERAGE_OF is declarative only. The runtime does not apply "
+            "leverage to the reference bond's coupon. Add explicit coupon rules "
+            "or a RateScheduleEntry schedule to model the leveraged coupon."
+        ),
+        TrancheRelationType.MACR_EXCHANGE: (
+            "MACR_EXCHANGE is declarative only. The runtime does not process "
+            "MACR principal exchange mechanics. Model exchange behaviour explicitly "
+            "in the waterfall if required."
+        ),
+    }
+    for bond in deal.bonds:
+        for relation in getattr(bond, "relations", []) or []:
+            if getattr(relation, "relation_type", None) in _SCHEMA_ONLY_RELATION_TYPES:
+                rel_type = relation.relation_type
+                desc = _SCHEMA_ONLY_DESCRIPTIONS.get(rel_type, f"{rel_type.value} is declarative only.")
+                warnings.append(f"{bond.name}: {desc}")
+
     if scenario_context and scenario_context.get("mode") == "solve" and behavior_bonds:
         suggestions.append(
             "For solve runs, include PAC/TAC schedule deviation and support-burn constraints in the objective stack."

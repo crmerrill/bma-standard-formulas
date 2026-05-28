@@ -2429,6 +2429,27 @@ Used by triggers (and in proposed `ComputedAmountNode`) to compute
 per-period scalars. Supports a safe subset of Python: arithmetic,
 min/max/abs, references to bond/account/pool state.
 
+**Per-loan visibility (Phase 1d decision, May 2026):**
+PAIRED collateral inputs expose per-loan cashflows through the `loans`
+expression accessor. The original plan listed `LOAN_CONCENTRATION_TOP_N`,
+`LOAN_CURRENT_LTV_PCT`, and `LOAN_COUNT_BY_PREDICATE` as dedicated
+`TriggerMetricType` enum values.  After review, these were **not
+implemented as enum values**; the decision was to ship expression-based
+per-loan access only.  The rationale:
+
+- The `loans` accessor in `CalculationNode` expressions already covers
+  all three use cases:
+  - Concentration: `sum(sorted([l.perf_bal[i] for l in loans])[-3:]) / collateral_total_bal`
+  - LTV: `len([l for l in loans if l.ltv > 0.80]) / max(len(loans), 1)`
+  - Count by predicate: `len([l for l in loans if l.group_id == "GROUP_1"])`
+- Dedicated enum values would duplicate this without adding expressiveness.
+- `TriggerMetricType.CUSTOM` with a `calculation_ref` pointing to a
+  `CalculationNode` is the correct pattern for any loan-level metric.
+
+If a widely-used loan-level metric emerges in production, a dedicated
+`TriggerMetricType` entry can be added then.  Until that time,
+`LOAN_*` trigger metrics are intentionally out of scope.
+
 ### `CollateralGroupDef` — multi-pool deals
 
 ```python
