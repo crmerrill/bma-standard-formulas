@@ -108,16 +108,16 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
     migrated["schema_version"] = SCHEMA_VERSION
 
     # ── SR7: Migrate deal_knobs.discount_factor → discount_factor_pct ────────
-    # The discount option was originally stored in deal_knobs as an escape hatch;
-    # it is now a first-class typed field. Migrate old payloads transparently.
-    if "discount_factor_pct" not in migrated or migrated.get("discount_factor_pct") is None:
-        knobs = migrated.get("deal_knobs")
-        if isinstance(knobs, dict) and isinstance(knobs.get("discount_factor"), (int, float)):
-            migrated["discount_factor_pct"] = float(knobs["discount_factor"])
-            # Remove from deal_knobs to avoid duplicate processing.
-            knobs_copy = dict(knobs)
-            knobs_copy.pop("discount_factor")
-            migrated["deal_knobs"] = knobs_copy
+    # Remove the legacy knob unconditionally; typed field is canonical.
+    # If both exist, typed field wins. If only legacy exists, copy and clamp.
+    knobs = migrated.get("deal_knobs")
+    if isinstance(knobs, dict) and "discount_factor" in knobs:
+        legacy_val = knobs.pop("discount_factor")
+        migrated["deal_knobs"] = knobs
+        if "discount_factor_pct" not in migrated or migrated.get("discount_factor_pct") is None:
+            if isinstance(legacy_val, (int, float)):
+                # Clamp to schema range [0, 100] to match typed field validation.
+                migrated["discount_factor_pct"] = max(0.0, min(100.0, float(legacy_val)))
 
     # ── Account hard-cut fields ──────────────────────────────────────────────
     for acct in migrated.get("accounts", []) or []:

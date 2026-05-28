@@ -2384,25 +2384,33 @@ def run_deal(
         principal_avail[i] = actual.act_prin[i]
         loss_avail[i] = actual.prin_loss[i]
 
+        # Per-group cash arrays seeded first so the discount option below can
+        # reclassify the freshly-seeded group streams (not stale zero values).
+        for gid, g_actual in ctx.actual_by_group.items():
+            if i < len(g_actual.act_cash):
+                ctx.cash_avail_by_group[gid][i] = g_actual.act_cash[i]
+                ctx.interest_avail_by_group[gid][i] = g_actual.act_int[i]
+                ctx.principal_avail_by_group[gid][i] = g_actual.act_prin[i]
+                ctx.loss_avail_by_group[gid][i] = g_actual.prin_loss[i]
+
         # Phase 7 / SR7: Discount Option — pre-waterfall reclassification of a
         # fraction of principal collections as finance charges (interest).
-        # Reads from the typed `discount_factor_pct` field first (promoted in SR7);
-        # falls back to deal_knobs["discount_factor"] for backward compatibility.
-        # The combined CASH stream is unchanged; only the split streams shift.
-        # Applied to both aggregate and per-group streams so group-scoped rules
-        # see the reclassification consistently.
+        # discount_factor_pct is the canonical typed field (SR7). It always wins,
+        # including when explicitly 0.0. Only falls back to deal_knobs["discount_factor"]
+        # when the typed field is absent (pre-SR7 payloads).
+        # Applied AFTER per-group seeding so group reclassification is correct.
+        # The combined CASH stream is unchanged; only ACT_INT/ACT_PRIN streams shift.
         _typed_df = getattr(deal, "discount_factor_pct", None)
-        if _typed_df is not None and float(_typed_df) > 0.0:
-            discount_factor_pct = float(_typed_df)
+        if _typed_df is not None:
+            discount_factor_pct = max(0.0, min(100.0, float(_typed_df)))
         else:
             _raw_df = deal.deal_knobs.get("discount_factor")
-            discount_factor_pct = float(_raw_df) if isinstance(_raw_df, (int, float)) and _raw_df is not None else 0.0
-        discount_factor_pct = max(0.0, min(100.0, discount_factor_pct))
+            _raw_val = float(_raw_df) if isinstance(_raw_df, (int, float)) and _raw_df is not None else 0.0
+            discount_factor_pct = max(0.0, min(100.0, _raw_val))
         if discount_factor_pct > 0.0:
             discount_amt = float(principal_avail[i]) * discount_factor_pct / 100.0
             principal_avail[i] = max(0.0, float(principal_avail[i]) - discount_amt)
             interest_avail[i] = float(interest_avail[i]) + discount_amt
-            # Apply discount to per-group streams for grouped deals.
             for gid in ctx.actual_by_group:
                 gp_arr = ctx.principal_avail_by_group.get(gid)
                 gi_arr = ctx.interest_avail_by_group.get(gid)
@@ -2410,15 +2418,6 @@ def run_deal(
                     g_disc = float(gp_arr[i]) * discount_factor_pct / 100.0
                     gp_arr[i] = max(0.0, float(gp_arr[i]) - g_disc)
                     gi_arr[i] = float(gi_arr[i]) + g_disc
-        # Per-group cash arrays mirror the same period-fill pattern so
-        # rules that route via ``GROUP_<id>_*`` source tokens see the
-        # right group's cashflow stream and never cross-feed each other.
-        for gid, g_actual in ctx.actual_by_group.items():
-            if i < len(g_actual.act_cash):
-                ctx.cash_avail_by_group[gid][i] = g_actual.act_cash[i]
-                ctx.interest_avail_by_group[gid][i] = g_actual.act_int[i]
-                ctx.principal_avail_by_group[gid][i] = g_actual.act_prin[i]
-                ctx.loss_avail_by_group[gid][i] = g_actual.prin_loss[i]
 
         # Z-bond accrual pre-waterfall step: capitalize unpaid coupon into Z balance
         # and pay an equal amount as principal to the support tranche stack. This

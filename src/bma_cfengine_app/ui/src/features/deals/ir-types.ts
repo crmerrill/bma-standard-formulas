@@ -130,6 +130,8 @@ export interface CollateralGroupDefIR {
 export interface DealDefinitionIR {
   schema_version: string;
   deal_name: string;
+  /** Phase 7 / SR7: Credit-card Discount Option (0–100 percent; 0 = inactive) */
+  discount_factor_pct?: number;
   /** Phase 8 */
   series_id?: string | null;
   bonds: BondDefIR[];
