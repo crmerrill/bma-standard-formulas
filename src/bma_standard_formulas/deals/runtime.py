@@ -418,17 +418,20 @@ def _allocate_bond_workspace(
         xs_spread=np.zeros(cf_len),
         xs_spread_cpn=np.zeros(cf_len),
         tracks_bonds={"balance": list(track_targets)} if track_targets else None,
+        # NLA tracking is opt-in: only bonds with an explicit nla_starting_balance
+        # participate. Defaulting to initial_balance for all bonds caused unintended
+        # bonds to appear as NLA/subordination contributors.
         nla_balance=(
             np.full(
                 cf_len,
-                float(
-                    getattr(bond_def, "nla_starting_balance", None)
-                    if getattr(bond_def, "nla_starting_balance", None) is not None
-                    else initial_balance
-                ),
+                float(getattr(bond_def, "nla_starting_balance", None)),
                 dtype=float,
             )
-            if (bond_def.is_bond and not bond_def.is_pseudo)
+            if (
+                bond_def.is_bond
+                and not bond_def.is_pseudo
+                and getattr(bond_def, "nla_starting_balance", None) is not None
+            )
             else None
         ),
         seniority=getattr(bond_def, "seniority", None),
@@ -1566,6 +1569,10 @@ def _build_expr_context(
                 continue
             if other.seniority is None or other.seniority <= ws.seniority:
                 continue
+            # Scope to same group in grouped deals — cross-group support is not
+            # modelled without explicit cross-group collateral declarations.
+            if ws.group_id is not None and other.group_id != ws.group_id:
+                continue
             if other.nla_balance is not None:
                 available += float(other.nla_balance[i])
             else:
@@ -2652,6 +2659,15 @@ def run_deal(
                             if reimbursable > 0.0:
                                 for src in sources:
                                     src[i] -= reimbursable
+                                # If the source is an account, record the withdrawal
+                                # in the account's withdrawal ledger so DealAccountRow
+                                # outputs reconcile. The balance was already debited
+                                # above via `src[i] -= reimbursable` (sources includes
+                                # acct.balance for account sources).
+                                for src_key in rule.source_keys:
+                                    acct_src = accounts.get(src_key)
+                                    if acct_src is not None:
+                                        acct_src.withdrawal[i] += reimbursable
                                 tgt.nla_balance[i] = min(nla_cap, float(tgt.nla_balance[i]) + reimbursable)
                                 pmt = reimbursable
 
@@ -2733,6 +2749,7 @@ def run_deal(
                     writedown=float(ws.writedown[p]),
                     end_balance=float(ws.balance[p]),
                     cashflow_total=float(ws.cashflow[p]),
+                    nla_balance=float(ws.nla_balance[p]) if ws.nla_balance is not None else None,
                     coupon_rate=float(ws.coupons[p]),
                 )
             )

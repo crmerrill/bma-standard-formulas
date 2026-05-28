@@ -29,6 +29,10 @@ class BondCashflowRow(BaseModel):
     end_balance: Dollars = 0.0
     cashflow_total: Dollars = 0.0
 
+    # Phase 6: Nominal Liquidation Amount (NLA) for credit-card master trust bonds.
+    # None for bonds that don't participate in NLA tracking (nla_starting_balance not set).
+    nla_balance: Optional[Dollars] = None
+
     coupon_rate: Rate = 0.0
     factor: float = 0.0
     wal_running_years: float = 0.0

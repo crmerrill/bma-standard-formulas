@@ -96,13 +96,17 @@ def test_nla_depletes_when_p_to_i_coverage_draws_from_subordinate():
     assert b_p1.end_balance == pytest.approx(50.0, abs=0.01), "B balance unchanged in period 1"
 
     # Period 2: prior shortfall = 1.0 (A coupon 12%/12 on 100 = 1.0).
-    # B funds it; B.balance → 49.0; B.nla_balance → 49.0.
+    # B's balance is debited 1.0 and B's NLA balance is also debited 1.0.
     b_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "B" and r.period == 2)
     assert b_p2.end_balance == pytest.approx(49.0, abs=0.01), "B balance debited 1.0 per period"
+    assert b_p2.nla_balance == pytest.approx(49.0, abs=0.01), (
+        "B NLA balance must also be 49.0 after first P-to-I payment"
+    )
 
-    # By period 4, B has lost 2.0 in NLA (periods 2 and 3).
+    # By period 4, B has been debited 3 times (periods 2, 3, 4).
     b_p4 = next(r for r in result.bond_cashflows if r.tranche_id == "B" and r.period == 4)
-    assert b_p4.end_balance == pytest.approx(47.0, abs=0.01), "B balance should be 47.0 at period 4"
+    assert b_p4.end_balance == pytest.approx(47.0, abs=0.01), "B balance 47.0 at period 4"
+    assert b_p4.nla_balance == pytest.approx(47.0, abs=0.01), "B NLA 47.0 at period 4"
 
 
 # ---------------------------------------------------------------------------
@@ -137,20 +141,29 @@ def test_reimburse_nla_credits_nla_balance_from_cash():
     run_input = _zero_collateral(n=8)
     result = run_deal(deal, run_input)
 
-    # Period 2: A shortfall from period 1 = 1.0. B is debited 1.0 → NLA = 49.
-    # Reimburse fires: SPREAD_ACCT has 5.0, NLA deficit = 1.0 → reimburse 1.0.
-    # After: B NLA = 50 (restored), SPREAD_ACCT = 4.0.
-    b_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "B" and r.period == 2)
-    # B's economic balance decreases (paid interest for A), but NLA is restored by reimburse.
-    assert b_p2.end_balance == pytest.approx(49.0, abs=0.01), "B balance must reflect P-to-I debit"
+    # Timeline:
+    #  Period 1: A shortfall accrues 1.0 (no source). B unchanged.
+    #  Period 2: P-to-I pays 1.0 from B. B.balance=49; B.nla=49.
+    #            Reimburse: deficit=1.0, spread=5.0 → reimburse 1.0. B.nla=50. Spread=4.0.
+    #  Period 3: same pattern. B.balance=48; B.nla→49→50. Spread=3.0.
+    #  ...
+    #  Period 6: 5th reimbursement. B.balance=44; B.nla→49→50. Spread=0.0.
+    #  Period 7: P-to-I pays 1.0. B.balance=43; B.nla=49. Spread exhausted, no reimburse.
 
-    # SPREAD_ACCT should decrease by 1.0 (reimbursed 1.0 to B NLA) — verify via interest paid
-    # Since SPREAD_ACCT is an account, check that period 3 reimburse has less to draw from.
-    # By period 6 (5 reimbursements of 1.0 each), SPREAD_ACCT is exhausted.
+    b_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "B" and r.period == 2)
+    assert b_p2.end_balance == pytest.approx(49.0, abs=0.01), "B balance 49 after P-to-I"
+    # NLA is restored by reimburse in the same period.
+    assert b_p2.nla_balance == pytest.approx(50.0, abs=0.01), (
+        "B NLA must be restored to 50.0 after reimburse fires in period 2"
+    )
+
+    # Period 7: P-to-I still fires (A shortfall). B.balance = 50 - 5 debits = 44.
+    # (Periods 2-6: 5 debits × 1.0 = 5.0 total from B balance).
+    # Spread exhausted after period 6; no reimbursement in period 7.
     b_p7 = next(r for r in result.bond_cashflows if r.tranche_id == "B" and r.period == 7)
-    # After period 6 exhausts spread (5 x 1.0), period 7 gets no reimbursement.
-    assert b_p7.end_balance <= 46.0, (
-        f"B balance {b_p7.end_balance:.1f} should reflect depleted spread after period 6"
+    assert b_p7.end_balance == pytest.approx(44.0, abs=0.01), "B balance 44 at period 7"
+    assert b_p7.nla_balance == pytest.approx(49.0, abs=0.01), (
+        "B NLA 49 at period 7 (spread exhausted after period 6, no reimburse)"
     )
 
 
@@ -174,11 +187,12 @@ def test_reimburse_nla_cannot_exceed_starting_balance():
     )
     run_input = _constant_collateral(balance=0.0, monthly_interest=0.0, monthly_principal=0.0, n=5)
     result = run_deal(deal, run_input)
-    # Period 1: B NLA starts at 50 (period 0); no depletion has occurred;
-    # reimburse deficit = 0 → no cash drawn, NLA stays at 50.
+    # Period 1: B NLA starts at 50.0 (nla_balance[0]); no depletion has occurred;
+    # reimburse deficit = 0 → no cash drawn; NLA stays at 50, spread stays at 100.
     b_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "B" and r.period == 1)
-    assert b_p1.end_balance == pytest.approx(50.0, abs=0.01), (
-        "B balance must remain 50.0 (no depletion + reimburse caps at starting)"
+    assert b_p1.end_balance == pytest.approx(50.0, abs=0.01), "B balance must remain 50.0"
+    assert b_p1.nla_balance == pytest.approx(50.0, abs=0.01), (
+        "B NLA must remain at starting value when no depletion has occurred"
     )
 
 
@@ -261,20 +275,25 @@ def test_full_cc_cycle_p_to_i_cap_reimbursement():
     result = run_deal(deal, run_input)
 
     # Period 2 mechanics:
-    #   - A has accumulated 1.0 prior-period shortfall from period 1 (no FCC arrived at p1)
-    #   - FCC in period 2 = 0.5 → pays 0.5 via fcc_int rule toward that shortfall
-    #   - Remaining shortfall = 0.5 → P-to-I covers it from B (headroom 10.5 >> 0.5)
-    #   - Total interest paid = 1.0
+    #   - Accumulated shortfall entering period 2 = 1.0 (period 1: 0 FCC, 0 P-to-I)
+    #   - FCC = 0.5 → fcc_int pays 0.5 toward shortfall
+    #   - Remaining shortfall = 0.5 → P-to-I from B (headroom = B_nla - A_required = 50 - 39.5 = 10.5 >> 0.5)
+    #   - Total interest paid in period 2 = 1.0
     a_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 2)
     assert a_p2.interest_paid == pytest.approx(1.0, abs=0.01), (
-        f"Period 2: FCC (0.5) + P-to-I (0.5) should together pay 1.0 of accumulated shortfall"
+        f"Period 2: FCC (0.5) + P-to-I (0.5) must pay 1.0 total — got {a_p2.interest_paid:.4f}"
     )
 
-    # B NLA depletes slightly each period; spread reimburses 0.5 each period.
-    # After several periods, spread of 20.0 cushions B NLA.
-    # Just verify the deal runs without error through 11 periods.
+    # Period 2: B balance debited 0.5 (P-to-I); SPREAD_ACCT reimburses 0.5 → B NLA restored.
+    b_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "B" and r.period == 2)
+    assert b_p2.end_balance == pytest.approx(49.5, abs=0.01), (
+        f"B balance should be 49.5 after P-to-I debit — got {b_p2.end_balance:.4f}"
+    )
+    # B NLA restored by REIMBURSE_NLA (spread reimburses 0.5 deficit).
+    assert b_p2.nla_balance == pytest.approx(50.0, abs=0.01), (
+        f"B NLA must be restored to 50.0 after reimburse — got {b_p2.nla_balance}"
+    )
+
+    # All 11 active periods produce rows.
     a_rows = [r for r in result.bond_cashflows if r.tranche_id == "A" and r.period > 0]
     assert len(a_rows) == 11, "A must have cashflow rows for all 11 active periods"
-    # Total interest paid to A across all periods must be > 0.
-    total_a_interest = sum(r.interest_paid for r in a_rows)
-    assert total_a_interest > 0.0, "A must receive some interest across the deal"
