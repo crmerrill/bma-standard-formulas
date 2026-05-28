@@ -385,12 +385,25 @@ def _execute_single_scenario(
     # flush() clears _pending; after that actual_constituents() returns [].
     # The artifact is written atomically (temp file + rename) so a partial
     # failure never leaves a corrupt file.
+    # SR8/OA4: Track whether the paired artifact was written successfully so
+    # build_from_runsetup_ref can surface per_loan_visibility metadata.
+    paired_artifact_written = False
+    paired_artifact_error: str | None = None
     try:
         actuals = portfolio.actual_constituents()
         if actuals:
             _write_paired_artifact(run_id, f"{prefix}_portfolio_paired", actuals)
-    except Exception:
-        pass  # Non-fatal: aggregate artifact is the fallback
+            paired_artifact_written = True
+        else:
+            paired_artifact_error = "No per-loan constituents available (portfolio may have been flushed)"
+    except Exception as exc:
+        paired_artifact_error = f"{type(exc).__name__}: {exc}"
+        import logging
+        logging.getLogger(__name__).warning(
+            "Run %s scenario %r: failed to write paired artifact — per-loan visibility "
+            "will be unavailable. Fallback to aggregate-only path. Error: %s",
+            run_id, scenario_name, paired_artifact_error,
+        )
 
     # Flush now: populates _committed aggregate + per-group caches, releases
     # per-loan memory. Must happen after constituent extraction above.
@@ -457,6 +470,18 @@ def _execute_single_scenario(
                         pass
             except Exception:
                 pass
+
+    # OA4: Persist per_loan_visibility in the scenario-level manifest so
+    # build_from_runsetup_ref can surface it without re-reading the artifact.
+    # This avoids the [per_loan_visibility=false] warning path silently failing.
+    per_loan_vis_meta = {
+        "per_loan_visibility": paired_artifact_written,
+    }
+    if paired_artifact_error:
+        per_loan_vis_meta["per_loan_visibility_error"] = paired_artifact_error
+    run_store.save_manifest(run_id, {
+        f"scenario__{_safe_artifact_name(scenario_name)}__per_loan_visibility": per_loan_vis_meta,
+    })
 
     return sections, group_names, group_artifact_map
 

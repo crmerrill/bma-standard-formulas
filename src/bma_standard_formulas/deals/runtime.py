@@ -644,12 +644,25 @@ def _scope_sources_to_group(keys: tuple[str, ...], group_id: str | None) -> tupl
     """Rewrite bare cashflow tokens in a rule's source/target list to be
     scoped to the rule's collateral group.
 
-    When a rule declares ``group_id="GROUP_1"``, the runtime treats its
-    bare ``CASH`` / ``ACT_INT`` / ``ACT_PRIN`` /
-    ``LOSS`` tokens as shorthand for ``GROUP_GROUP_1_CASH`` etc. This
-    keeps deal definitions readable: instead of typing the prefixed
-    form everywhere, the IR author tags the rule once with its group
-    and the bare tokens follow.
+    **OA5 — Group source-token policy (documented decision, May 2026):**
+
+    Canonical group tokens are ``GROUP_<id>_CASH``, ``GROUP_<id>_ACT_INT``,
+    ``GROUP_<id>_ACT_PRIN``, and ``GROUP_<id>_LOSS``. These can be written
+    explicitly in any rule's ``from_sources`` or ``to_targets`` regardless
+    of whether the rule carries a ``group_id``.
+
+    As an authoring shorthand, a rule tagged with ``group_id="GROUP_1"``
+    may use bare tokens (``CASH``, ``ACT_INT``, ``ACT_PRIN``, ``LOSS``);
+    this function expands them to the prefixed canonical form at compile
+    time. The shorthand is intentional — it keeps deal IR readable (one
+    ``group_id`` tag per rule block instead of prefixes on every source).
+
+    Consequences:
+    - A rule with ``group_id`` MUST NOT mix bare tokens and explicitly
+      prefixed tokens for DIFFERENT groups in the same ``from_sources``
+      list. Mixing is undefined behaviour.
+    - A rule without ``group_id`` (single-pool deals or cross-group rules)
+      uses bare tokens verbatim; no prefixing occurs.
 
     No-op when ``group_id`` is None or the key is already prefixed.
     """
