@@ -388,11 +388,25 @@ def _allocate_bond_workspace(
             # in deal_knobs (e.g. deal_knobs["SOFR_rate"] = 5.25), fall back to
             # deal_knobs["index_rate"], then default to 0.0.
             index_name = getattr(bond_def, "index_name", None) or ""
-            _index_rate_from_knobs = (
-                float(deal_knobs.get(f"{index_name}_rate", deal_knobs.get("index_rate", 0.0)) or 0.0)
-                if deal_knobs and coupon_type_val in ("FLOATING", "INVERSE_FLOATING")
-                else 0.0
-            )
+            if coupon_type_val in ("FLOATING", "INVERSE_FLOATING") and deal_knobs is not None:
+                _named_key = f"{index_name}_rate" if index_name else None
+                if _named_key and _named_key in deal_knobs:
+                    _index_rate_from_knobs = float(deal_knobs[_named_key] or 0.0)
+                elif "index_rate" in deal_knobs:
+                    _index_rate_from_knobs = float(deal_knobs["index_rate"] or 0.0)
+                else:
+                    # No index rate configured — warn explicitly; 0.0 is not economically correct.
+                    import warnings as _w
+                    _w.warn(
+                        f"Bond {bond_def.name!r} has coupon_type={coupon_type_val!r} but no index "
+                        f"rate is configured in deal_knobs. Set deal_knobs['{index_name}_rate'] or "
+                        f"deal_knobs['index_rate']. Defaulting to 0.0 (may understate coupon).",
+                        UserWarning,
+                        stacklevel=4,
+                    )
+                    _index_rate_from_knobs = 0.0
+            else:
+                _index_rate_from_knobs = 0.0
 
             for i in range(cf_len):
                 margin_i = float(_resolve_rate_or_schedule(bond_def.margin, period=i) or 0.0)
@@ -404,10 +418,12 @@ def _allocate_bond_workspace(
                 elif coupon_type_val == "FLOATING":
                     base_rate = _index_rate_from_knobs + margin_i
                 elif coupon_type_val == "INVERSE_FLOATING":
-                    # Standard inverse floater: coupon = cap - index_rate + margin
-                    strike = float(cap_i or 0.0)
-                    base_rate = max(0.0, strike - _index_rate_from_knobs + margin_i)
-                    cap_i = None  # cap already consumed in the formula
+                    # Standard inverse floater: coupon = max(0, strike - mult×index + margin).
+                    # `coupon` field is the fixed strike rate; `cap` remains the secondary ceiling.
+                    # `inverse_multiplier` defaults to 1.0 for vanilla single-leverage structures.
+                    strike = float(_resolve_rate_or_schedule(bond_def.coupon, period=i) or 0.0)
+                    multiplier = float(getattr(bond_def, "inverse_multiplier", None) or 1.0)
+                    base_rate = max(0.0, strike - multiplier * _index_rate_from_knobs + margin_i)
                 else:
                     base_rate = 0.0
 

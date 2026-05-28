@@ -231,6 +231,11 @@ def _tracked_targets(bond_def: BondDef) -> list[str]:
 
 
 def _rate_value_at_period(value: Any, *, period: int) -> float:
+    """Resolve a RateOrSchedule value at a given period (0-indexed).
+
+    Shared helper used by carry tie-out and solver templates. The runtime uses
+    the functionally equivalent _resolve_rate_or_schedule; keep both in sync.
+    """
     if value is None:
         return 0.0
     if isinstance(value, (int, float)):
@@ -262,6 +267,60 @@ def _rate_value_at_period(value: Any, *, period: int) -> float:
     return 0.0
 
 
+def _resolve_bond_coupon_at_period(
+    bond_def: Any,
+    *,
+    period: int,
+    deal_knobs: dict | None = None,
+) -> float:
+    """Resolve the effective coupon rate for a bond at a specific period.
+
+    Handles all CouponType values (FIXED, FLOATING, INVERSE_FLOATING, ZERO)
+    using the same semantics as the runtime's _allocate_bond_workspace.
+    Used by carry tie-out and solver templates so floating/inverse bonds are
+    not incorrectly treated as zero-coupon.
+
+    For FLOATING/INVERSE_FLOATING, the index rate is resolved from deal_knobs.
+    When deal_knobs is absent, defaults to 0.0 (may understate real coupon).
+    """
+    coupon_type_val = getattr(getattr(bond_def, "coupon_type", None), "value", "FIXED")
+    if coupon_type_val == "ZERO":
+        return 0.0
+
+    margin = _rate_value_at_period(getattr(bond_def, "margin", None), period=period)
+    cap_raw = getattr(bond_def, "cap", None)
+    floor_raw = getattr(bond_def, "floor", None)
+    cap_val: float | None = _rate_value_at_period(cap_raw, period=period) if cap_raw is not None else None
+    floor_val: float | None = _rate_value_at_period(floor_raw, period=period) if floor_raw is not None else None
+
+    index_rate = 0.0
+    if coupon_type_val in ("FLOATING", "INVERSE_FLOATING") and deal_knobs:
+        index_name = getattr(bond_def, "index_name", None) or ""
+        named_key = f"{index_name}_rate" if index_name else None
+        if named_key and named_key in deal_knobs:
+            index_rate = float(deal_knobs[named_key] or 0.0)
+        elif "index_rate" in deal_knobs:
+            index_rate = float(deal_knobs["index_rate"] or 0.0)
+
+    if coupon_type_val == "FIXED":
+        base = _rate_value_at_period(getattr(bond_def, "coupon", None), period=period)
+    elif coupon_type_val == "FLOATING":
+        base = index_rate + margin
+    elif coupon_type_val == "INVERSE_FLOATING":
+        strike = _rate_value_at_period(getattr(bond_def, "coupon", None), period=period)
+        multiplier = float(getattr(bond_def, "inverse_multiplier", None) or 1.0)
+        base = max(0.0, strike - multiplier * index_rate + margin)
+        cap_val = None  # cap already consumed in inverse floater formula
+    else:
+        base = 0.0
+
+    if cap_val is not None:
+        base = min(base, cap_val)
+    if floor_val is not None:
+        base = max(base, floor_val)
+    return max(0.0, base)
+
+
 def _is_residual_bond(bond_def: BondDef) -> bool:
     return (
         bond_def.kind is not None
@@ -286,6 +345,7 @@ def _solve_tranche_ytm(
     bond_def: BondDef,
     rows: list[BondCashflowRow],
     bond_cashflows: list[BondCashflowRow],
+    deal_knobs: dict | None = None,
 ) -> tuple[float, float]:
     """Return ``(ytm_cbe_pct, modified_duration_years)`` for a single tranche
     under par pricing.
@@ -301,7 +361,9 @@ def _solve_tranche_ytm(
         underlying_names = _tracked_targets(bond_def)
         # IO cashflows = sum of underlyings (typically one).
         cf = np.zeros(0)
-        coupon_pct = _rate_value_at_period(bond_def.coupon, period=1)
+        coupon_pct = _resolve_bond_coupon_at_period(
+            bond_def, period=1, deal_knobs=deal_knobs
+        )
         for u_name in underlying_names:
             uflow = _io_total_cashflows(bond_cashflows, u_name, coupon_pct)
             if len(uflow) > len(cf):
@@ -560,7 +622,7 @@ def compute_carry_tieout(
                 except ValueError:
                     residual_dur = 0.0
             continue
-        ytm, dur = _solve_tranche_ytm(bond_def, rows, scenario.bond_cashflows)
+        ytm, dur = _solve_tranche_ytm(bond_def, rows, scenario.bond_cashflows, deal_knobs=deal.deal_knobs)
         wal = _wal_years(rows)
         if _is_io_bond(bond_def):
             io_tranche_ids.add(bond_def.name)
@@ -577,7 +639,9 @@ def compute_carry_tieout(
                 scenario_name=scenario.scenario_name,
                 tranche_id=bond_def.name,
                 notional=float(bond_def.notional or 0.0),
-                coupon_pct=_rate_value_at_period(bond_def.coupon, period=1),
+                coupon_pct=_resolve_bond_coupon_at_period(
+                    bond_def, period=1, deal_knobs=deal.deal_knobs,
+                ),
                 ytm_cbe_pct=ytm,
                 modified_duration_years=dur,
                 wal_years=wal,

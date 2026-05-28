@@ -182,13 +182,17 @@ def test_cap_as_rate_schedule():
 
 
 def test_inverse_floater_coupon_formula():
-    """Inverse floater: coupon = cap - index_rate + margin (floors at 0)."""
-    # cap=12%, SOFR=5.0%, margin=0.5% → coupon = 12 - 5.0 + 0.5 = 7.5%
+    """Inverse floater: coupon = max(0, strike - index_rate + margin).
+    `coupon` field = fixed strike rate; `cap` = secondary ceiling (not the strike).
+    strike=12%, SOFR=5.0%, margin=0.5% → coupon = 12 - 5.0 + 0.5 = 7.5%
+    """
     deal = _simple_deal(
         bonds=[BondDef(name="INV", kind=TrancheKind.CASH_PAY,
                        coupon_type=CouponType.INVERSE_FLOATING,
                        index_name="SOFR", notional=100.0,
-                       cap=12.0, margin=0.50, coupon=None)],
+                       coupon=12.0,  # strike rate
+                       margin=0.50,
+                       cap=None)],  # no secondary cap
         deal_knobs={"SOFR_rate": 5.0},
     )
     result = run_deal(deal, _flat_collateral(100.0))
@@ -196,15 +200,50 @@ def test_inverse_floater_coupon_formula():
     assert _row(result, "INV", 1).interest_paid == pytest.approx(expected_monthly, abs=0.01)
 
 
-def test_inverse_floater_floors_at_zero():
-    """Inverse floater must not go negative when index > cap + margin."""
-    # cap=5%, SOFR=10% → 5 - 10 + 0 = -5% → floored at 0
+def test_inverse_floater_secondary_cap_applied():
+    """Inverse floater with a secondary cap: formula result capped by bond_def.cap."""
+    # strike=12%, SOFR=0.5%, margin=0.5% → formula = 12.0%; cap=8.0% → capped at 8%
     deal = _simple_deal(
         bonds=[BondDef(name="INV", kind=TrancheKind.CASH_PAY,
                        coupon_type=CouponType.INVERSE_FLOATING,
                        index_name="SOFR", notional=100.0,
-                       cap=5.0, margin=0.0, coupon=None)],
+                       coupon=12.0,  # strike
+                       margin=0.50,
+                       cap=8.0)],   # secondary ceiling
+        deal_knobs={"SOFR_rate": 0.5},
+    )
+    # Formula: 12 - 0.5 + 0.5 = 12.0%, capped at 8%
+    result = run_deal(deal, _flat_collateral(100.0))
+    expected_monthly = 100.0 * 8.0 / 1200.0
+    assert _row(result, "INV", 1).interest_paid == pytest.approx(expected_monthly, abs=0.01)
+
+
+def test_inverse_floater_floors_at_zero():
+    """Inverse floater must not go negative when index > strike + margin."""
+    # strike=5%, SOFR=10% → 5 - 10 + 0 = -5% → floored at 0
+    deal = _simple_deal(
+        bonds=[BondDef(name="INV", kind=TrancheKind.CASH_PAY,
+                       coupon_type=CouponType.INVERSE_FLOATING,
+                       index_name="SOFR", notional=100.0,
+                       coupon=5.0,  # strike
+                       margin=0.0)],
         deal_knobs={"SOFR_rate": 10.0},
     )
     result = run_deal(deal, _flat_collateral(100.0))
     assert _row(result, "INV", 1).interest_paid == pytest.approx(0.0, abs=TOL)
+
+
+def test_inverse_floater_with_multiplier():
+    """Inverse floater with inverse_multiplier=2: coupon = max(0, strike - 2×index + margin)."""
+    # strike=20%, SOFR=5.0%, multiplier=2, margin=0% → coupon = 20 - 2×5 + 0 = 10%
+    deal = _simple_deal(
+        bonds=[BondDef(name="INV2X", kind=TrancheKind.CASH_PAY,
+                       coupon_type=CouponType.INVERSE_FLOATING,
+                       index_name="SOFR", notional=100.0,
+                       coupon=20.0, margin=0.0,
+                       inverse_multiplier=2.0)],
+        deal_knobs={"SOFR_rate": 5.0},
+    )
+    result = run_deal(deal, _flat_collateral(100.0))
+    expected_monthly = 100.0 * 10.0 / 1200.0
+    assert _row(result, "INV2X", 1).interest_paid == pytest.approx(expected_monthly, abs=0.01)
