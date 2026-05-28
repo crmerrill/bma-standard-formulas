@@ -24,7 +24,7 @@ from bma_standard_formulas.formulas.cashflows import (
     BMAScheduledCashflow,
 )
 
-from .schemas.common import MinimumBasis, RuleType, TriggerState, TrancheRelationType
+from .schemas.common import DealStateType, MinimumBasis, RuleType, TriggerState, TrancheRelationType
 from .schemas.input import (
     CollateralCashflows,
     DealRunInput,
@@ -161,6 +161,10 @@ class ExecutionContext:
     scheduled: BMAScheduledCashflow | None = None                      # whole-pool scheduled (PAIRED only; None for LDCMA)
     trigger_states: dict[str, bool] = field(default_factory=dict)
     calculation_values: dict[str, float] = field(default_factory=dict)
+    # Phase 9: current deal state (REVOLVING / ACCUMULATION / AMORTIZATION /
+    # EARLY_AMORTIZATION). Starts at deal.initial_deal_state; transitions to
+    # EARLY_AMORTIZATION when deal.deal_state_trigger fires.
+    deal_state: str = DealStateType.REVOLVING.value
     virtual_sources: dict[str, np.ndarray] = field(default_factory=dict)
     cash_avail: np.ndarray | None = None
     # Independent pool-interest and pool-principal streams, populated each
@@ -1305,6 +1309,11 @@ def _safe_eval_expr(expr: str, values: dict[str, Any]) -> float:
                 return v
             if isinstance(v, (int, float)):
                 return float(v)
+            if isinstance(v, str):
+                # String constants are allowed for condition_expr comparisons like
+                # `deal_state == "EARLY_AMORTIZATION"`. Return the string directly;
+                # the Compare handler converts the result to 0.0/1.0.
+                return v
             raise ValueError(f"Unsupported constant: {v!r}")
         if isinstance(node, ast.Name):
             # Identifier lookup: scope (local, e.g. comprehension target)
@@ -1463,6 +1472,7 @@ def _build_expr_context(
     orig_collat_bal: float,
     constituents: list[BMAActualCashflow] | None = None,
     constituents_by_group: dict[str, list[BMAActualCashflow]] | None = None,
+    deal_state: str = "REVOLVING",
 ) -> dict[str, Any]:
     """Build the per-period expression context dict.
 
@@ -1613,6 +1623,8 @@ def _build_expr_context(
     for trig_name, active in trigger_states.items():
         if trig_name.isidentifier():
             ctx[f"{trig_name}_active"] = 1.0 if active else 0.0
+    # Phase 9: deal_state string for condition_expr / max_amount_expr gating.
+    ctx["deal_state"] = deal_state
     for calc_name, value in calculation_values.items():
         if calc_name.isidentifier():
             ctx[calc_name] = float(value)
@@ -2033,6 +2045,30 @@ def _apply_z_accrual(ctx: ExecutionContext, period: int) -> None:
             ws.z_released = True
 
 
+def _rolling_avg_metric(
+    trigger_rows: list,
+    trigger_name: str,
+    current_period: int,
+    window: int,
+) -> float | None:
+    """Compute the rolling average of a trigger's metric over the last `window` periods.
+
+    Scans `trigger_rows` for prior periods of the same trigger and averages the
+    `metric_value` over up to `window` periods (including the current period's
+    base metric if provided separately). Returns None when there are fewer than
+    `window` historical rows to average.
+    """
+    rows = [
+        r.metric_value
+        for r in trigger_rows
+        if r.trigger_id == trigger_name and r.period < current_period
+    ]
+    rows = rows[-(window - 1):]  # keep only the last (window-1) prior periods
+    if not rows:
+        return None
+    return float(np.mean(rows))
+
+
 def _evaluate_triggers(
     deal: DealDefinition,
     ctx: ExecutionContext,
@@ -2041,14 +2077,41 @@ def _evaluate_triggers(
     cum_loss_cache: np.ndarray | None = None,
 ) -> dict[str, bool]:
     for trigger in deal.triggers:
-        metric = 0.0
+        # Compute base metric for this period.
+        base_metric = 0.0
         if trigger.calculation_ref:
-            metric = float(ctx.calculation_values.get(trigger.calculation_ref, 0.0))
+            # Check CalculationNode results first; fall back to deal_knobs for
+            # simple numeric knob-driven metrics (e.g. excess_spread_pct).
+            if trigger.calculation_ref in ctx.calculation_values:
+                base_metric = float(ctx.calculation_values[trigger.calculation_ref])
+            else:
+                knob_val = deal.deal_knobs.get(trigger.calculation_ref)
+                if isinstance(knob_val, (int, float)):
+                    base_metric = float(knob_val)
         elif trigger.metric_type.value == "CUMULATIVE_LOSS":
             if cum_loss_cache is not None:
-                metric = cum_loss_cache[i] / orig_collat_bal if orig_collat_bal > 0 else 0.0
+                base_metric = cum_loss_cache[i] / orig_collat_bal if orig_collat_bal > 0 else 0.0
             else:
-                metric = float(np.sum(ctx.actual.prin_loss[: i + 1])) / orig_collat_bal if orig_collat_bal > 0 else 0.0
+                base_metric = float(np.sum(ctx.actual.prin_loss[: i + 1])) / orig_collat_bal if orig_collat_bal > 0 else 0.0
+
+        # Phase 9: rolling-window average metric types.
+        elif trigger.metric_type.value in {
+            "EXCESS_SPREAD_3MO_AVG", "PORTFOLIO_YIELD_3MO_AVG", "BASE_RATE_3MO_AVG"
+        }:
+            # For rolling-window metrics, the base_metric is computed from
+            # deal_knobs or expression context. Defaults to 0.0 if not set.
+            ref = trigger.calculation_ref or trigger.metric_type.value.lower()
+            base_metric = float(ctx.calculation_values.get(ref, 0.0))
+
+        # Phase 9: apply window averaging if window_periods is set.
+        window = getattr(trigger, "window_periods", None)
+        if window and window > 1:
+            avg = _rolling_avg_metric(ctx.trigger_rows, trigger.name, i, window)
+            # If fewer prior periods exist than the window, report base metric without
+            # the rolling flag (trigger cannot fire until window is complete).
+            metric = avg if avg is not None else base_metric
+        else:
+            metric = base_metric
 
         threshold = trigger.threshold_value or 0.0
         if trigger.threshold_schedule and i < len(trigger.threshold_schedule):
@@ -2179,12 +2242,17 @@ def run_deal(
         interest_avail_by_group[gid] = np.zeros(cf_len)
         principal_avail_by_group[gid] = np.zeros(cf_len)
         loss_avail_by_group[gid] = np.zeros(cf_len)
+    _initial_state = getattr(deal, "initial_deal_state", None)
+    _initial_state_str = (
+        _initial_state.value if hasattr(_initial_state, "value") else str(_initial_state)
+    ) if _initial_state is not None else DealStateType.REVOLVING.value
     ctx = ExecutionContext(
         scenario_name=scenario_name,
         actual=actual,
         scheduled=scheduled,
         bonds=bonds,
         accounts=accounts,
+        deal_state=_initial_state_str,
         fee_defs_by_name=fee_defs_by_name,
         compiled_rules=compiled,
         cash_avail=cash_avail,
@@ -2298,12 +2366,23 @@ def run_deal(
             ctx.cash_avail,
             i,
             orig_collat_bal,
-        constituents=ctx.constituents,
-        constituents_by_group=ctx.constituents_by_group,
-    )
+            constituents=ctx.constituents,
+            constituents_by_group=ctx.constituents_by_group,
+            deal_state=ctx.deal_state,
+        )
         ctx.calculation_values = _evaluate_calculations(deal, expr_ctx)
         if deal.triggers:
             _evaluate_triggers(deal, ctx, i, orig_collat_bal, cum_loss_cache)
+
+        # Phase 9: update deal state machine.
+        # When a deal_state_trigger fires, transition to EARLY_AMORTIZATION.
+        # The state is "sticky" — once in EARLY_AMORTIZATION it stays there.
+        _deal_state_trigger = getattr(deal, "deal_state_trigger", None)
+        if _deal_state_trigger and ctx.deal_state != DealStateType.EARLY_AMORTIZATION.value:
+            if ctx.trigger_states.get(_deal_state_trigger):
+                ctx.deal_state = DealStateType.EARLY_AMORTIZATION.value
+        # deal_state is passed as a parameter to _build_expr_context below.
+
         _update_virtual_sources(deal, ctx, run_input, i, orig_collat_bal)
         expr_ctx = _build_expr_context(
             deal,
@@ -2318,9 +2397,10 @@ def run_deal(
             ctx.cash_avail,
             i,
             orig_collat_bal,
-        constituents=ctx.constituents,
-        constituents_by_group=ctx.constituents_by_group,
-    )
+            constituents=ctx.constituents,
+            constituents_by_group=ctx.constituents_by_group,
+            deal_state=ctx.deal_state,
+        )
         allow_negative_cash_math = bool(deal.deal_knobs.get("allow_negative_cashflow_math", False))
         # Reset per-period cash snapshots so each rule sees the cash state as
         # of its own start, anchored to a deterministic point in the waterfall.
@@ -2361,9 +2441,10 @@ def run_deal(
                 ctx.cash_avail,
                 i,
                 orig_collat_bal,
-        constituents=ctx.constituents,
-        constituents_by_group=ctx.constituents_by_group,
-    )
+                constituents=ctx.constituents,
+                constituents_by_group=ctx.constituents_by_group,
+                deal_state=ctx.deal_state,
+            )
             for snap_rule_id, snap_value in ctx.rule_cash_snapshots.items():
                 # Snapshot identifiers are namespaced: bare rule_id → CASH,
                 # `__prin__:<rule_id>` → ACT_PRIN, `__int__:<rule_id>` → ACT_INT.

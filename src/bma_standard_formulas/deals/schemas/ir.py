@@ -12,6 +12,7 @@ from .common import (
     CoverageMode,
     CouponType,
     DayCount,
+    DealStateType,
     Dollars,
     FeeBasisType,
     FeeFrequency,
@@ -285,6 +286,12 @@ class TriggerNode(BaseModel):
     # Cure logic
     cure_periods: int | None = None
 
+    # Phase 9: rolling-window average for CC master trust triggers.
+    # When set, the trigger metric is averaged over the last window_periods
+    # periods before comparing to the threshold.  Standard for excess-spread,
+    # portfolio-yield, and base-rate triggers (typically window_periods=3).
+    window_periods: int | None = Field(default=None, ge=1)
+
 
 # ---------------------------------------------------------------------------
 # Waterfall rule (single payment instruction in priority of payments)
@@ -363,6 +370,13 @@ class DealDefinition(BaseModel):
     # Single-series CC deals receive their PRE-ALLOCATED share of master trust
     # cash flows as collateral input; no collateral_groups are needed for this.
     series_id: str | None = Field(default=None, min_length=1)
+
+    # Phase 9: deal-state machine for CC master trust revolving / amortization.
+    # When set, names a TriggerNode whose FAIL state transitions the deal to
+    # EARLY_AMORTIZATION. The runtime exposes `deal_state` in the expression
+    # context; rules gate on it via condition_expr.
+    deal_state_trigger: str | None = None
+    initial_deal_state: DealStateType = DealStateType.REVOLVING
 
     bonds: list[BondDef] = Field(min_length=1)
     accounts: list[AccountDef] = Field(default_factory=list)
@@ -552,8 +566,18 @@ class DealDefinition(BaseModel):
                     f"{rule.condition_trigger!r} not found in triggers"
                 )
 
+        if self.deal_state_trigger and self.deal_state_trigger not in trigger_names:
+            errors.append(
+                f"deal_state_trigger {self.deal_state_trigger!r} not found in triggers"
+            )
+
+        # deal_knobs numeric values are also valid calculation_ref targets for triggers.
+        deal_knob_numeric_keys = {
+            k for k, v in self.deal_knobs.items()
+            if isinstance(v, (int, float))
+        }
         for trigger in self.triggers:
-            if trigger.calculation_ref and trigger.calculation_ref not in calc_names:
+            if trigger.calculation_ref and trigger.calculation_ref not in calc_names and trigger.calculation_ref not in deal_knob_numeric_keys:
                 errors.append(
                     f"Trigger {trigger.name!r}: calculation_ref "
                     f"{trigger.calculation_ref!r} not found in calculations"

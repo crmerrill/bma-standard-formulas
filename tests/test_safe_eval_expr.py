@@ -366,9 +366,21 @@ class TestSandboxGuards:
         with pytest.raises(ValueError, match="Unsupported expression node"):
             _safe_eval_expr("lambda x: x + 1", {})
 
-    def test_string_constant_rejected(self):
-        # The original sandbox rejected string constants; preserved.
-        with pytest.raises(ValueError, match="Unsupported constant"):
+    def test_string_constant_allowed_in_comparison(self):
+        # Phase 9: string constants are now allowed so condition_expr can compare
+        # deal_state strings (e.g. deal_state == "EARLY_AMORTIZATION").
+        # A bare string literal as the outermost expression is rejected at the
+        # numeric coercion step (not at the constant step).
+        ctx = {"deal_state": "EARLY_AMORTIZATION"}
+        result = _safe_eval_expr('deal_state == "EARLY_AMORTIZATION"', ctx)
+        assert result == pytest.approx(1.0)
+        result_no = _safe_eval_expr('deal_state == "REVOLVING"', ctx)
+        assert result_no == pytest.approx(0.0)
+
+    def test_bare_string_expression_still_rejected(self):
+        # A bare string literal as the outermost expression produces a string
+        # value which cannot be coerced to float; the coercion step rejects it.
+        with pytest.raises(ValueError, match="Expression result must be numeric"):
             _safe_eval_expr("'hello'", {})
 
 

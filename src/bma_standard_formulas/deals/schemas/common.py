@@ -226,6 +226,35 @@ class TriggerMetricType(str, Enum):
     OC_TEST = "OC_TEST"
     IC_TEST = "IC_TEST"
     CUSTOM = "CUSTOM"
+    # Phase 9: rolling-window averages for CC master trust pay-out triggers.
+    # Metric is computed as the average of the underlying metric over the
+    # last `window_periods` periods (set on TriggerNode). Three-month rolling
+    # averages are standard for excess-spread, portfolio-yield, and pay-rate
+    # triggers in CC master trust prospectuses.
+    EXCESS_SPREAD_3MO_AVG = "EXCESS_SPREAD_3MO_AVG"
+    PORTFOLIO_YIELD_3MO_AVG = "PORTFOLIO_YIELD_3MO_AVG"
+    BASE_RATE_3MO_AVG = "BASE_RATE_3MO_AVG"
+
+
+class DealStateType(str, Enum):
+    """Phase 9: deal-level state machine for credit-card revolving / amortization modes.
+
+    The runtime computes the current deal state each period based on the
+    `deal_state_trigger` field on `DealDefinition`. The state is exposed in
+    the expression context as `deal_state` (string) and can gate rules via
+    `condition_expr`.
+
+    REVOLVING:          Default. Principal returned to seller / reinvested.
+    ACCUMULATION:       PFA/IFA accumulation period. Principal deposited to
+                        funding accounts; bonds not yet paid principal.
+    AMORTIZATION:       Scheduled amortization. Principal paid to bonds.
+    EARLY_AMORTIZATION: Pay-out / early amortization event. Principal paid
+                        to bonds in priority order immediately.
+    """
+    REVOLVING = "REVOLVING"
+    ACCUMULATION = "ACCUMULATION"
+    AMORTIZATION = "AMORTIZATION"
+    EARLY_AMORTIZATION = "EARLY_AMORTIZATION"
 
 
 class TriggerState(str, Enum):
