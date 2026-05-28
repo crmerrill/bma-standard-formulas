@@ -65,7 +65,8 @@ def _split_stream_collateral(
 
 def test_discount_option_reclassifies_principal_as_interest():
     """With discount_factor=20%, 20% of ACT_PRIN each period becomes ACT_INT.
-    A bond drawing from ACT_INT receives more; one drawing from ACT_PRIN receives less.
+    A bond drawing from ACT_INT receives more; B drawing from ACT_PRIN receives less.
+    Uses only split-stream sources (no CASH) to avoid double-counting.
     """
     deal = DealDefinition(
         deal_name="DiscountOptionTest",
@@ -78,12 +79,13 @@ def test_discount_option_reclassifies_principal_as_interest():
         ],
         waterfall_rules=[
             # A draws from finance charges (ACT_INT); B draws from principal (ACT_PRIN).
+            # Residual draws from ACT_INT remainder to avoid CASH double-counting.
             RuleNode(rule_id="int_a", rule_type=RuleType.PAY_INTEREST, order=0,
                      from_sources=["ACT_INT"], to_targets=["A"]),
             RuleNode(rule_id="prin_b", rule_type=RuleType.PAY_PRINCIPAL, order=1,
                      from_sources=["ACT_PRIN"], to_targets=["B"]),
             RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=2,
-                     from_sources=["CASH"], to_targets=["R"]),
+                     from_sources=["ACT_INT"], to_targets=["R"]),
         ],
     )
     # Pool: 10 interest/period, 20 principal/period.
@@ -102,7 +104,7 @@ def test_discount_option_reclassifies_principal_as_interest():
     assert a_p1.interest_paid == pytest.approx(0.5, abs=0.01), (
         "A interest must be fully paid from discounted ACT_INT stream"
     )
-    # B draws principal from ACT_PRIN = 16 (not the full 20).
+    # B draws principal from ACT_PRIN = 16 (not the full 20 — discount reclassified 4).
     assert b_p1.total_principal == pytest.approx(16.0, abs=0.01), (
         f"B principal must be 16 (= 20 - discount 4), got {b_p1.total_principal:.2f}"
     )
@@ -253,3 +255,96 @@ def test_minimum_schedule_breach_when_balance_below_target():
     pfa_p1 = next(r for r in result.deal_accounts if r.account_id == "PFA" and r.period == 1)
     assert pfa_p1.end_balance == pytest.approx(5.0, abs=0.01)
     assert pfa_p1.breach_flag, "breach_flag must be set when balance (5) < schedule minimum (100)"
+
+
+def test_minimum_schedule_is_sticky_between_entries():
+    """minimum_schedule must apply the highest entry with period <= current.
+    Between entries, the previous target remains as the floor (sticky semantics).
+    """
+    deal = DealDefinition(
+        deal_name="StickySchedule",
+        bonds=[
+            BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+        ],
+        accounts=[
+            AccountDef(
+                name="PFA",
+                starting_amount=0.0,
+                minimum_schedule=[
+                    AccountMinimumScheduleEntry(period=1, minimum_balance=10.0),
+                    AccountMinimumScheduleEntry(period=4, minimum_balance=40.0),
+                ],
+            ),
+        ],
+        waterfall_rules=[
+            RuleNode(rule_id="fund_pfa", rule_type=RuleType.PAY_TO_ACCOUNT, order=0,
+                     from_sources=["CASH"], to_targets=["PFA"], max_amount_fixed=20.0),
+            RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=1,
+                     from_sources=["CASH"], to_targets=["R"]),
+        ],
+    )
+    run_input = _split_stream_collateral(balance=100.0, monthly_interest=0.0,
+                                          monthly_principal=20.0, n=7)
+    result = run_deal(deal, run_input)
+
+    pfa = {r.period: r for r in result.deal_accounts if r.account_id == "PFA"}
+    # Period 2 (between entries 1 and 4): sticky — entry period=1 applies → min=10.
+    # Balance = 40 (deposited 20 in p1 and p2), so no breach.
+    assert pfa[2].required_minimum == pytest.approx(10.0, abs=0.01), (
+        "Period 2: sticky minimum from period-1 entry must remain 10.0"
+    )
+    # Period 5 (after entry 4): sticky — entry period=4 applies → min=40.
+    assert pfa[5].required_minimum == pytest.approx(40.0, abs=0.01), (
+        "Period 5: sticky minimum from period-4 entry must be 40.0"
+    )
+
+
+def test_account_breach_state_available_in_expression_context():
+    """Account breach state (balance < required_minimum) must be visible
+    in the expression context as {name}_breach and {name}_required_minimum."""
+    deal = DealDefinition(
+        deal_name="BreachExpr",
+        bonds=[
+            BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+        ],
+        accounts=[
+            AccountDef(name="RSRV", starting_amount=0.0,
+                       minimum_schedule=[AccountMinimumScheduleEntry(period=1, minimum_balance=50.0)]),
+        ],
+        calculations=[
+            # Compute breach as a calculation node to prove it's in the context.
+        ],
+        waterfall_rules=[
+            # Deposit only 5 into RSRV (below 50 minimum) — will breach.
+            RuleNode(rule_id="fund_rsrv", rule_type=RuleType.PAY_TO_ACCOUNT, order=0,
+                     from_sources=["CASH"], to_targets=["RSRV"], max_amount_fixed=5.0),
+            # Conditional distribution: only pay residual if RSRV is not breaching.
+            # Uses the {name}_breach expression context variable.
+            RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=1,
+                     from_sources=["CASH"], to_targets=["R"],
+                     condition_expr="RSRV_breach == 0"),
+        ],
+    )
+    run_input = _split_stream_collateral(balance=50.0, monthly_interest=0.0,
+                                          monthly_principal=10.0, n=5)
+    result = run_deal(deal, run_input)
+    rsrv = {r.period: r for r in result.deal_accounts if r.account_id == "RSRV"}
+    # Period 1: RSRV = 5.0 < minimum 50.0 → breach_flag must be set.
+    assert rsrv[1].breach_flag, "RSRV must be in breach at period 1 (5 < 50)"
+    # Period 1: residual rule is blocked (RSRV_breach != 0).
+    r_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "R" and r.period == 1)
+    assert r_p1.interest_paid == pytest.approx(0.0, abs=0.01), (
+        "Residual must be blocked when RSRV is breaching (RSRV_breach == 1)"
+    )
+
+
+def test_minimum_schedule_duplicate_periods_rejected():
+    """Duplicate periods in minimum_schedule must raise a ValidationError."""
+    with pytest.raises(Exception, match="duplicate periods"):
+        AccountDef(
+            name="PFA",
+            minimum_schedule=[
+                AccountMinimumScheduleEntry(period=1, minimum_balance=10.0),
+                AccountMinimumScheduleEntry(period=1, minimum_balance=20.0),
+            ],
+        )

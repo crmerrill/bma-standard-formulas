@@ -585,6 +585,9 @@ def _refresh_note_balance_minimums(
             acc_ws.required_minimum[period] = max(floor_d, note_balance_t * pct / 100.0)
 
     # Phase 7: apply minimum_schedule overrides (PFA/IFA accumulation periods).
+    # Schedule is sticky: the effective minimum for period N is the minimum_balance
+    # of the highest entry whose period <= N. This ensures the account stays at
+    # the target even between explicitly listed periods (accumulation doesn't drop).
     for acc_def in deal.accounts:
         sched = getattr(acc_def, "minimum_schedule", None)
         if not sched:
@@ -592,12 +595,16 @@ def _refresh_note_balance_minimums(
         ws = accounts.get(acc_def.name)
         if ws is None:
             continue
+        # Find the effective target: the minimum_balance for the highest period <= current.
+        effective_min: float | None = None
         for entry in sched:
             ep = getattr(entry, "period", None)
             emb = getattr(entry, "minimum_balance", None)
-            if ep is not None and emb is not None and int(ep) == period:
-                ws.required_minimum[period] = max(float(ws.required_minimum[period]), float(emb))
-                break
+            if ep is not None and emb is not None and int(ep) <= period:
+                if effective_min is None or float(emb) > effective_min:
+                    effective_min = float(emb)
+        if effective_min is not None:
+            ws.required_minimum[period] = max(float(ws.required_minimum[period]), effective_min)
 
 
 # Dispatch tags
@@ -1601,6 +1608,8 @@ def _build_expr_context(
             ctx[f"{name}_balance"] = float(ws.balance[i])
             ctx[f"{name}_deposit"] = float(ws.deposit[i])
             ctx[f"{name}_withdrawal"] = float(ws.withdrawal[i])
+            ctx[f"{name}_required_minimum"] = float(ws.required_minimum[i])
+            ctx[f"{name}_breach"] = 1.0 if float(ws.balance[i]) < float(ws.required_minimum[i]) else 0.0
     for trig_name, active in trigger_states.items():
         if trig_name.isidentifier():
             ctx[f"{trig_name}_active"] = 1.0 if active else 0.0
@@ -2243,13 +2252,23 @@ def run_deal(
         # fraction of principal collections as finance charges (interest).
         # deal_knobs.discount_factor (0-100, percent) controls the fraction.
         # The combined CASH stream is unchanged; only the split streams shift.
-        # This models issuers (Chase, Capital One, Citi) who reclassify a
-        # yield-supplement portion of principal as finance-charge income.
-        discount_factor_pct = float(deal.deal_knobs.get("discount_factor") or 0.0)
+        # Applied to both aggregate and per-group streams so group-scoped rules
+        # see the reclassification consistently.
+        _raw_df = deal.deal_knobs.get("discount_factor")
+        discount_factor_pct = float(_raw_df) if isinstance(_raw_df, (int, float)) and _raw_df is not None else 0.0
+        discount_factor_pct = max(0.0, min(100.0, discount_factor_pct))
         if discount_factor_pct > 0.0:
             discount_amt = float(principal_avail[i]) * discount_factor_pct / 100.0
             principal_avail[i] = max(0.0, float(principal_avail[i]) - discount_amt)
             interest_avail[i] = float(interest_avail[i]) + discount_amt
+            # Apply discount to per-group streams for grouped deals.
+            for gid in ctx.actual_by_group:
+                gp_arr = ctx.principal_avail_by_group.get(gid)
+                gi_arr = ctx.interest_avail_by_group.get(gid)
+                if gp_arr is not None and gi_arr is not None:
+                    g_disc = float(gp_arr[i]) * discount_factor_pct / 100.0
+                    gp_arr[i] = max(0.0, float(gp_arr[i]) - g_disc)
+                    gi_arr[i] = float(gi_arr[i]) + g_disc
         # Per-group cash arrays mirror the same period-fill pattern so
         # rules that route via ``GROUP_<id>_*`` source tokens see the
         # right group's cashflow stream and never cross-feed each other.

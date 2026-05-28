@@ -216,8 +216,21 @@ class AccountDef(BaseModel):
     minimum_basis: MinimumBasis = MinimumBasis.FIXED_DOLLAR
     # Phase 7: Funding-account accumulation period schedule.
     # Per-period minimum balance targets for PFA/IFA accounts.
-    # When set, overrides minimum_amount for the specified periods.
+    # Sticky: the effective target for period N is the highest entry with period <= N.
     minimum_schedule: list[AccountMinimumScheduleEntry] | None = None
+
+    @model_validator(mode="after")
+    def _validate_minimum_schedule(self) -> "AccountDef":
+        if self.minimum_schedule is None:
+            return self
+        periods = [e.period for e in self.minimum_schedule]
+        if len(periods) != len(set(periods)):
+            duplicates = [p for p in periods if periods.count(p) > 1]
+            raise ValueError(
+                f"AccountDef {self.name!r}: minimum_schedule has duplicate periods: "
+                f"{sorted(set(duplicates))}"
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------
