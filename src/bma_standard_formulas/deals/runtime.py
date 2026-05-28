@@ -353,6 +353,7 @@ def _allocate_bond_workspace(
     bond_def: Any,
     cf_len: int,
     collateral_balance_0: float,
+    deal_knobs: dict | None = None,
 ) -> BondWorkspace:
     # Authoritative sizing is dollar face. Percent-of-collateral is derived UX context.
     if bond_def.notional is not None and bond_def.notional > 0:
@@ -376,12 +377,47 @@ def _allocate_bond_workspace(
             # LDCMA initializes residual pseudo bond with collateral start balance.
             balance[0] = collateral_balance_0
 
+    # Phase 5: resolve opt_coupons for all coupon types with RateOrSchedule support.
     opt_coupons = np.zeros(cf_len)
     if bond_def.is_bond and not bond_def.is_pseudo:
-        if bond_def.coupon_type.value == "FIXED":
+        coupon_type_val = bond_def.coupon_type.value
+        if coupon_type_val == "ZERO":
+            pass  # opt_coupons stays 0 throughout
+        elif coupon_type_val in ("FIXED", "FLOATING", "INVERSE_FLOATING"):
+            # Resolve index rate for floating bonds: first look for a named index
+            # in deal_knobs (e.g. deal_knobs["SOFR_rate"] = 5.25), fall back to
+            # deal_knobs["index_rate"], then default to 0.0.
+            index_name = getattr(bond_def, "index_name", None) or ""
+            _index_rate_from_knobs = (
+                float(deal_knobs.get(f"{index_name}_rate", deal_knobs.get("index_rate", 0.0)) or 0.0)
+                if deal_knobs and coupon_type_val in ("FLOATING", "INVERSE_FLOATING")
+                else 0.0
+            )
+
             for i in range(cf_len):
-                resolved_coupon = _resolve_rate_or_schedule(bond_def.coupon, period=i)
-                opt_coupons[i] = float(resolved_coupon or 0.0)
+                margin_i = float(_resolve_rate_or_schedule(bond_def.margin, period=i) or 0.0)
+                cap_i = _resolve_rate_or_schedule(bond_def.cap, period=i)
+                floor_i = _resolve_rate_or_schedule(bond_def.floor, period=i)
+
+                if coupon_type_val == "FIXED":
+                    base_rate = float(_resolve_rate_or_schedule(bond_def.coupon, period=i) or 0.0)
+                elif coupon_type_val == "FLOATING":
+                    base_rate = _index_rate_from_knobs + margin_i
+                elif coupon_type_val == "INVERSE_FLOATING":
+                    # Standard inverse floater: coupon = cap - index_rate + margin
+                    strike = float(cap_i or 0.0)
+                    base_rate = max(0.0, strike - _index_rate_from_knobs + margin_i)
+                    cap_i = None  # cap already consumed in the formula
+                else:
+                    base_rate = 0.0
+
+                # Apply cap and floor to the resolved base rate.
+                if cap_i is not None:
+                    base_rate = min(base_rate, float(cap_i))
+                if floor_i is not None:
+                    base_rate = max(base_rate, float(floor_i))
+
+                opt_coupons[i] = max(0.0, base_rate)
 
     kind = getattr(getattr(bond_def, "kind", None), "value", "CASH_PAY")
     schedule_cap = _build_schedule_cap(bond_def, cf_len) if kind in ("PAC", "TAC") else None
@@ -2184,8 +2220,10 @@ def run_deal(
     orig_override = deal.deal_knobs.get("orig_collat_bal_override")
     orig_collat_bal = float(orig_override) if isinstance(orig_override, (int, float)) else float(run_input.original_collateral_balance or collat_bal_0)
 
+    _deal_knobs = deal.deal_knobs or {}
     bonds: dict[str, BondWorkspace] = {
-        bond_def.name: _allocate_bond_workspace(bond_def, cf_len, collat_bal_0) for bond_def in deal.bonds
+        bond_def.name: _allocate_bond_workspace(bond_def, cf_len, collat_bal_0, deal_knobs=_deal_knobs)
+        for bond_def in deal.bonds
     }
     if "R" not in bonds:
         bonds["R"] = BondWorkspace(
