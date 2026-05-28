@@ -2639,10 +2639,10 @@ def run_deal(
                     elif rule.tag == _OP_REIMBURSE_NLA:
                         # Debit sources and credit the target bond's NLA balance.
                         # NLA reimbursement does NOT change the economic bond balance;
-                        # it only rebuilds the NLA tracker up to the starting balance
-                        # (nla_balance may never exceed nla_starting_balance).
+                        # it only rebuilds the NLA tracker up to the starting value
+                        # (nla_balance[0] = nla_starting_balance set at allocation time).
                         if tgt.nla_balance is not None:
-                            nla_cap = float(getattr(bond_def if (bond_def := deal.bonds_by_name.get(tgt_name)) else tgt, "nla_starting_balance", None) or tgt.nla_balance[0])
+                            nla_cap = float(tgt.nla_balance[0])  # period-0 = starting balance
                             nla_deficit = max(0.0, nla_cap - float(tgt.nla_balance[i]))
                             reimbursable = nla_deficit
                             if target_max_amt is not None:

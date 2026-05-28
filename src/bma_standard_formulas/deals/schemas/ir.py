@@ -479,6 +479,13 @@ class DealDefinition(BaseModel):
                         f"Rule {rule.rule_id!r}: to_target {tgt!r} not found "
                         f"in bonds/accounts/fees/split_streams"
                     )
+            if rule.rule_type == RuleType.REIMBURSE_NLA:
+                for tgt in rule.to_targets:
+                    if tgt not in bond_names:
+                        errors.append(
+                            f"Rule {rule.rule_id!r}: REIMBURSE_NLA targets must be bond "
+                            f"names (got {tgt!r})"
+                        )
             if rule.rule_type == RuleType.SPLIT_CASH:
                 if rule.target_weights is None:
                     errors.append(
