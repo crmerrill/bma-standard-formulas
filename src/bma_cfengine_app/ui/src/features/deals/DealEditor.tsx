@@ -497,13 +497,12 @@ export default function DealEditor({
       setDealName(snapshot.deal_name || "Deal");
       const loadedIrJson = JSON.stringify(snapshot.ir ?? {}, null, 2);
       setIrJson(loadedIrJson);
-      // Seed scheduleOverlay from any PAC/TAC bonds that already have
-      // schedule_contract entries in the saved IR so derived schedules are
-      // not discarded when reopening a deal.
+      // Always reset overlay when loading a deal so a prior deal's derived
+      // schedules don't bleed into this one. Then seed from any PSA-derived
+      // schedule_contract entries that were already saved (only those with a
+      // valid schedule_derivation, not authored custom-vector schedules).
       const seedOverlay = extractScheduleOverlayFromIr(loadedIrJson);
-      if (Object.keys(seedOverlay).length > 0) {
-        setScheduleOverlay(seedOverlay);
-      }
+      setScheduleOverlay(Object.keys(seedOverlay).length > 0 ? seedOverlay : null);
       setErrors([]);
       const presets = (snapshot.ir?.solver_presets ?? {}) as Record<string, unknown>;
       setSolverSpecDraft((prev) => ({
@@ -1148,7 +1147,15 @@ export default function DealEditor({
       if (draft.studioTab) setStudioTab(draft.studioTab);
       if (draft.dealName) setDealName(draft.dealName);
       if (draft.savedDealId) setSavedDealId(draft.savedDealId);
-      if (typeof draft.irJson === "string") setIrJson(draft.irJson);
+      if (typeof draft.irJson === "string") {
+        setIrJson(draft.irJson);
+        // Hydrate schedule overlay from restored IR so PSA-derived schedules
+        // are not lost when the tab is refreshed or the session is restored.
+        const seedOverlay = extractScheduleOverlayFromIr(draft.irJson);
+        if (Object.keys(seedOverlay).length > 0) {
+          setScheduleOverlay(seedOverlay);
+        }
+      }
       if (draft.solverSpecDraft) {
         setSolverSpecDraft((prev) => ({ ...prev, ...draft.solverSpecDraft }));
       }
@@ -1229,6 +1236,7 @@ export default function DealEditor({
     setSelectedStudioVersion("");
     setSolverSpecDraft(getDefaultSolverSpecDraft());
     setAdvancedJson(getDefaultAdvancedJsonState());
+    setScheduleOverlay(null);
     setTelemetryState(getDefaultTelemetryState());
     setSensitivitySweepConfig(getDefaultSensitivitySweepConfig());
     onCollateralRiskSettingsChange(getDefaultCollateralRiskSettings());

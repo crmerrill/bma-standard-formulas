@@ -114,27 +114,46 @@ def verify_structure(
     }
     _SCHEMA_ONLY_DESCRIPTIONS = {
         TrancheRelationType.COUPON_INVERSE_OF: (
-            "COUPON_INVERSE_OF is declarative only. The runtime does not compute "
-            "an inverse-floater coupon from this relation. Add explicit coupon rules "
-            "or a RateScheduleEntry schedule to model the inverse-floater cash flows."
+            "COUPON_INVERSE_OF is declarative only and does not affect cashflows. "
+            "To model an inverse-floater coupon, set BondDef.coupon to a "
+            "list[RateScheduleEntry] or compute it from a CalculationNode expression "
+            "and reference the result via deal_knobs."
         ),
         TrancheRelationType.COUPON_LEVERAGE_OF: (
-            "COUPON_LEVERAGE_OF is declarative only. The runtime does not apply "
-            "leverage to the reference bond's coupon. Add explicit coupon rules "
-            "or a RateScheduleEntry schedule to model the leveraged coupon."
+            "COUPON_LEVERAGE_OF is declarative only and does not affect cashflows. "
+            "To model a leveraged coupon, set BondDef.coupon to the computed "
+            "leveraged rate as a float or list[RateScheduleEntry]. "
+            "Alternatively, use a CalculationNode expression in deal_knobs."
         ),
         TrancheRelationType.MACR_EXCHANGE: (
-            "MACR_EXCHANGE is declarative only. The runtime does not process "
-            "MACR principal exchange mechanics. Model exchange behaviour explicitly "
-            "in the waterfall if required."
+            "MACR_EXCHANGE is declarative only and does not affect cashflows. "
+            "MACR exchange mechanics must be modelled explicitly in the waterfall "
+            "using PAY_PRINCIPAL or SPLIT_CASH rules if required."
         ),
     }
+    # Emit one warning per (bond, relation_type) pair, including the targets, to
+    # avoid duplicate messages when a bond has multiple relations of the same type.
+    _seen_schema_only: set[tuple[str, str]] = set()
     for bond in deal.bonds:
+        targets_by_type: dict[str, list[str]] = {}
         for relation in getattr(bond, "relations", []) or []:
-            if getattr(relation, "relation_type", None) in _SCHEMA_ONLY_RELATION_TYPES:
-                rel_type = relation.relation_type
-                desc = _SCHEMA_ONLY_DESCRIPTIONS.get(rel_type, f"{rel_type.value} is declarative only.")
-                warnings.append(f"{bond.name}: {desc}")
+            rel_type = getattr(relation, "relation_type", None)
+            if rel_type not in _SCHEMA_ONLY_RELATION_TYPES:
+                continue
+            targets_by_type.setdefault(rel_type.value, []).extend(
+                getattr(relation, "targets", []) or []
+            )
+        for rel_type_str, tgts in targets_by_type.items():
+            key = (bond.name, rel_type_str)
+            if key in _seen_schema_only:
+                continue
+            _seen_schema_only.add(key)
+            rel_type_enum = next(
+                r for r in _SCHEMA_ONLY_RELATION_TYPES if r.value == rel_type_str
+            )
+            desc = _SCHEMA_ONLY_DESCRIPTIONS.get(rel_type_enum, f"{rel_type_str} is declarative only.")
+            target_note = f" Targets: {', '.join(tgts)}." if tgts else ""
+            warnings.append(f"{bond.name}: {desc}{target_note}")
 
     if scenario_context and scenario_context.get("mode") == "solve" and behavior_bonds:
         suggestions.append(

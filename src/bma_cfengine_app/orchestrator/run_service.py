@@ -70,19 +70,24 @@ def _run_portfolio(
     sev_lag: int, months_liq: int,
     rate_index: Any, run_mode: str,
 ) -> PortfolioCashflow:
+    # NOTE: flush=False so _pending is retained for constituent extraction
+    # (_write_paired_artifact). The caller is responsible for calling
+    # portfolio.flush() after extracting constituents so per-loan memory is
+    # released and per-group caches are populated (required by
+    # aggregate_actual_by_group and aggregate_scheduled_by_group).
     if run_mode == "scheduled":
-        return run_scheduled_portfolio(loans, rate_index=rate_index, flush=True)
+        return run_scheduled_portfolio(loans, rate_index=rate_index, flush=False)
     elif run_mode == "paired":
         return run_paired_portfolio(
             loans, smm, mdr, severity,
             rate_index=rate_index,
-            severity_lag=sev_lag, months_to_liquidation=months_liq, flush=True,
+            severity_lag=sev_lag, months_to_liquidation=months_liq, flush=False,
         )
     else:
         return run_actual_portfolio(
             loans, smm, mdr, severity,
             rate_index=rate_index,
-            severity_lag=sev_lag, months_to_liquidation=months_liq, flush=True,
+            severity_lag=sev_lag, months_to_liquidation=months_liq, flush=False,
         )
 
 
@@ -269,23 +274,42 @@ def _write_paired_artifact(run_id: str, artifact_name: str, constituents: list[A
 
     seen_ids: set[str] = set()
     out_dir = _rs._outputs_dir(run_id)
-    path = out_dir / f"{artifact_name}.parquet"
-    mode = "write"
-    for cf in constituents:
-        cf_id = getattr(cf, "cf_id", "")
-        if not cf_id or cf_id in seen_ids:
-            cf = dataclasses.replace(cf, cf_id=str(uuid4()))
-        seen_ids.add(cf.cf_id)
-        write_cashflow(cf, path=path, mode=mode)
-        mode = "append"
+    final_path = out_dir / f"{artifact_name}.parquet"
+    # Write to a temporary file first; rename atomically on success so a
+    # failed write never leaves a corrupt artifact visible to the bridge.
+    tmp_path = out_dir / f"{artifact_name}.__tmp__.parquet"
+    try:
+        mode = "write"
+        for cf in constituents:
+            cf_id = getattr(cf, "cf_id", "")
+            if not cf_id or cf_id in seen_ids:
+                cf = dataclasses.replace(cf, cf_id=str(uuid4()))
+            seen_ids.add(cf.cf_id)
+            # Ensure group_id is stored as a string so that orchestrator
+            # group ids like "GROUP_1" survive the cashflow_persistence
+            # round-trip without being coerced to int.
+            gid = getattr(cf, "group_id", None)
+            if gid is not None and not isinstance(gid, str):
+                cf = dataclasses.replace(cf, group_id=str(gid))
+            write_cashflow(cf, path=tmp_path, mode=mode)
+            mode = "append"
+        tmp_path.replace(final_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _read_paired_artifact(run_id: str, artifact_name: str) -> list[Any]:
     """Load per-loan BMAActualCashflow constituents from a paired Parquet artifact.
 
-    Returns an empty list when the artifact does not exist or fails to load.
+    Returns an empty list when the artifact does not exist or is corrupt.
+    Emits a UserWarning on load failure so operators can identify runs that
+    need regeneration — a corrupt artifact must never silently produce a
+    deal run with 0 per-loan constituents.
+
     (RG2: replaces the lossy DataFrame path in build_from_runsetup_ref.)
     """
+    import warnings
     from bma_standard_formulas.engine.cashflow_persistence import read_actual
     from ..storage import run_store as _rs
 
@@ -298,7 +322,13 @@ def _read_paired_artifact(run_id: str, artifact_name: str) -> list[Any]:
         if not isinstance(result, list):
             result = [result]
         return result
-    except Exception:
+    except Exception as exc:
+        warnings.warn(
+            f"Run {run_id!r}: failed to load paired artifact {artifact_name!r}: {exc}. "
+            f"Falling back to aggregate LDCMA path. Re-run the portfolio to regenerate.",
+            UserWarning,
+            stacklevel=2,
+        )
         return []
 
 
@@ -348,23 +378,29 @@ def _execute_single_scenario(
     _save_assumption_curves(run_id, prefix, smm, mdr, severity, loans, group_id_map)
 
     # ─── Single engine invocation across all loans ────────────────────────
+    # NOTE: _run_portfolio no longer flushes so _pending is available here.
     portfolio = _run_portfolio(loans, smm, mdr, severity, sev_lag, months_liq, rate_index, run_mode)
 
-    # Whole-portfolio (aggregate) artifact — unchanged from pre-refactor
-    actual_df = _dedup_cols(portfolio.to_dataframe())
-    run_store.save_artifact(run_id, f"{prefix}_portfolio_actual", actual_df)
-    run_store.save_artifact_csv(run_id, f"{prefix}_portfolio_actual", actual_df)
-
-    # Per-loan PAIRED artifact (RG2): persist true per-loan BMAActualCashflow
-    # constituents via cashflow_persistence (lossless Parquet; no DataFrame
-    # conversion). Stored as {prefix}_portfolio_paired — preferred by the bridge
-    # over the aggregate LDCMA path; aggregate kept as fallback.
+    # Per-loan PAIRED artifact (RG2): extract constituents BEFORE flush.
+    # flush() clears _pending; after that actual_constituents() returns [].
+    # The artifact is written atomically (temp file + rename) so a partial
+    # failure never leaves a corrupt file.
     try:
         actuals = portfolio.actual_constituents()
         if actuals:
             _write_paired_artifact(run_id, f"{prefix}_portfolio_paired", actuals)
     except Exception:
         pass  # Non-fatal: aggregate artifact is the fallback
+
+    # Flush now: populates _committed aggregate + per-group caches, releases
+    # per-loan memory. Must happen after constituent extraction above.
+    portfolio.flush()
+
+    # Whole-portfolio (aggregate) artifact — unchanged from pre-refactor
+    actual_df = _dedup_cols(portfolio.to_dataframe())
+    run_store.save_artifact(run_id, f"{prefix}_portfolio_actual", actual_df)
+    run_store.save_artifact_csv(run_id, f"{prefix}_portfolio_actual", actual_df)
+
 
     if run_mode in ("paired", "scheduled"):
         try:
@@ -574,6 +610,9 @@ def execute_run(
             "group_names": all_group_names,
             "group_artifacts": all_group_artifacts,
             "scenario_names": scenario_names,
+            # Persisted so build_from_runsetup_ref can set DealRunInput.original_collateral_balance
+            # correctly on the PAIRED path without defaulting to 0.0.
+            "original_collateral_balance": float(total_bal),
             "scenarios": scenarios_manifest,
             "elapsed_seconds": elapsed_sec,
             "summary": summary.model_dump(),

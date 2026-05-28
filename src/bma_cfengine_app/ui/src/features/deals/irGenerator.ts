@@ -296,9 +296,21 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
         zAccrualEnabled: zAccrualEnabledFromData,
       });
     } else if (t.type === "residual_target") {
+      // Read kind from block.data (irToBlocklyState stashes {kind:"RESIDUAL"})
+      // so the residual bond survives round-trip as RESIDUAL, not CASH_PAY.
+      let residualKind: string = "RESIDUAL";
+      if (typeof t.data === "string" && t.data.trim()) {
+        try {
+          const rparsed = JSON.parse(t.data) as Record<string, unknown>;
+          if (typeof rparsed.kind === "string" && rparsed.kind) {
+            residualKind = rparsed.kind;
+          }
+        } catch { /* ignore */ }
+      }
       targets.push({
         name: t.getFieldValue("NAME") || "R",
         isBond: false,
+        kind: residualKind as TargetInfo["kind"],
       });
     } else if (t.type === "account_target") {
       const mode = t.getFieldValue("INITIAL_MODE") || "PCT_STACK";
@@ -803,6 +815,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
   const bonds: BondDefIR[] = [];
   for (const [name, info] of ctx.bonds) {
     const resolvedKind = info.kind || (info.payMode === "PIK" ? "Z" : "CASH_PAY");
+    const isResidualLike = !info.isBond || resolvedKind === "RESIDUAL" || resolvedKind === "PSEUDO";
     bonds.push({
       name,
       kind: resolvedKind,
@@ -810,8 +823,8 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       coupon: info.coupon || 0,
       notional_pct_of_collateral: Number(info.sizePctPool || 0),
       notional: info.faceAmt || 0,
-      is_bond: true,
-      is_pseudo: info.faceAmt === 0,
+      is_bond: !isResidualLike,
+      is_pseudo: isResidualLike,
       coupon_type: info.bondType || "FIXED",
       index_name: info.bondType === "FLOATING" ? (info.indexName ?? null) : null,
       margin: info.bondType === "FLOATING" ? Number(info.margin || 0) : null,

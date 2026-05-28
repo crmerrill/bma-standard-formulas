@@ -173,7 +173,11 @@ def _decode_meta(raw: dict[str, str], cls: type) -> dict[str, object]:
             return v
 
         # For Union types with multiple concrete arms (e.g. int | str),
-        # try each arm in order and accept the first that succeeds.
+        # try each arm in order — BUT prefer str over int when str is an arm
+        # and the value is not purely numeric.  This preserves orchestrator
+        # group_ids like "GROUP_1" that would otherwise silently decode as
+        # an int (int("GROUP_1") raises ValueError → str fallback is fine)
+        # while pure-numeric strings like "42" still decode as int first.
         if union_arms:
             for arm in union_arms:
                 try:

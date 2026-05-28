@@ -2435,20 +2435,45 @@ expression accessor. The original plan listed `LOAN_CONCENTRATION_TOP_N`,
 `LOAN_CURRENT_LTV_PCT`, and `LOAN_COUNT_BY_PREDICATE` as dedicated
 `TriggerMetricType` enum values.  After review, these were **not
 implemented as enum values**; the decision was to ship expression-based
-per-loan access only.  The rationale:
+per-loan access only.
 
-- The `loans` accessor in `CalculationNode` expressions already covers
-  all three use cases:
-  - Concentration: `sum(sorted([l.perf_bal[i] for l in loans])[-3:]) / collateral_total_bal`
-  - LTV: `len([l for l in loans if l.ltv > 0.80]) / max(len(loans), 1)`
-  - Count by predicate: `len([l for l in loans if l.group_id == "GROUP_1"])`
-- Dedicated enum values would duplicate this without adding expressiveness.
-- `TriggerMetricType.CUSTOM` with a `calculation_ref` pointing to a
-  `CalculationNode` is the correct pattern for any loan-level metric.
+**Actual `_safe_eval_expr` expression support for per-loan metrics:**
 
-If a widely-used loan-level metric emerges in production, a dedicated
-`TriggerMetricType` entry can be added then.  Until that time,
-`LOAN_*` trigger metrics are intentionally out of scope.
+The sandbox supports: arithmetic, comparisons, boolean ops (`and`/`or`/`not`),
+conditional expressions (`x if cond else y`), single-level list comprehensions,
+and the built-in functions `len`, `sum`, `any`, `all`.
+
+`LoanProxy` exposes whitelisted array attributes on each loan: `perf_bal`,
+`act_am`, `vol_prepay`, `act_int`, `prin_loss`, `prin_recov`, `mdr`, `smm`,
+`fcl`, `new_def`, `gross_rate`, `net_rate`, `age`, and `group_id`.
+
+**Supported per-loan expressions** (example patterns that work today):
+
+```python
+# Count loans with non-zero current balance
+"len([l for l in loans if l.perf_bal[i] > 0])"
+
+# Total prepay from a named group (using loan.group_id string comparison)
+"sum(l.vol_prepay[i] for l in loans if l.group_id == 'GROUP_1')"
+
+# Concentration: balance of the single largest loan as % of pool
+"max((l.perf_bal[i] for l in loans), default=0.0) / max(collateral_total_bal, 1.0)"
+```
+
+**Not supported** (sandbox restrictions):
+- `sorted()` — not in the built-ins whitelist
+- List slicing (`loans[-3:]`)
+- Attribute access beyond the whitelisted LoanProxy fields (e.g. `l.ltv`, `l.dscr`)
+- String methods on LoanProxy attributes
+
+Concentration, LTV, and predicate-count metrics require the caller to
+stay within these constraints, or to precompute the metric as a pool-level
+CalculationNode that references `loans` in a legal expression.
+
+`TriggerMetricType.CUSTOM` with a `calculation_ref` is the correct
+pattern for any loan-level metric.  If a widely-used metric emerges
+in production that cannot be expressed within the sandbox, a dedicated
+`TriggerMetricType` enum value can be added then.
 
 ### `CollateralGroupDef` — multi-pool deals
 

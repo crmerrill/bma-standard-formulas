@@ -113,8 +113,17 @@ def _flat_collateral(balance: float, monthly_principal: float, annual_coupon: fl
 
 
 def test_supported_by_relation_enforces_pac_schedule_cap():
-    """PAC SUPPORTED_BY support: schedule cap limits principal payment; excess flows to support."""
-    from bma_standard_formulas.deals.schemas.common import CapMode
+    """SUPPORTED_BY is used at runtime to derive the schedule_cap array on the PAC.
+
+    Without the SUPPORTED_BY relation the validator rejects the deal, so this test
+    verifies both the validation contract (SUPPORTED_BY required for PAC) and the
+    runtime effect (schedule cap applied at exactly the declared contract amount).
+
+    Mutation-sensitive assertion: the contract is set to 5.0/period while the pool
+    delivers 15.0/period — PAC must receive exactly 5.0 (not 6, not 15) because
+    the schedule cap is derived from the schedule_contract list, which the runtime
+    populates from the bond's `SUPPORTED_BY` linkage metadata.
+    """
     deal = DealDefinition(
         deal_name="SupportedByTest",
         bonds=[
@@ -144,20 +153,52 @@ def test_supported_by_relation_enforces_pac_schedule_cap():
                      from_sources=["CASH"], to_targets=["R"]),
         ],
     )
-    # Pool delivers 15/month principal — more than PAC schedule of 5/month.
     run_input = _flat_collateral(balance=200.0, monthly_principal=15.0, annual_coupon=6.0)
     result = run_deal(deal, run_input)
-    # Period 1: PAC must be capped at schedule (5.0); excess goes to support.
     pac_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "PAC" and r.period == 1)
     s_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "S" and r.period == 1)
+
+    # EXACT assertion: PAC must receive exactly schedule=5.0, not more.
     assert pac_p1.total_principal == pytest.approx(5.0, abs=0.01), (
-        f"PAC period-1 principal {pac_p1.total_principal:.3f} should be capped at schedule=5.0"
+        f"PAC period-1 principal {pac_p1.total_principal:.3f} != schedule cap 5.0"
     )
-    assert s_p1.total_principal > 0.0, "Support must receive excess principal beyond PAC schedule"
+    # Support receives remaining CASH after PAC interest + PAC principal.
+    # Pool CASH = 15 (principal) + 1 (interest) = 16; PAC interest ≈ 0.25; PAC principal = 5.
+    # Remaining ≈ 10.75 — more than the pool-only principal excess (10).
+    assert s_p1.total_principal > 5.0, (
+        f"Support period-1 principal {s_p1.total_principal:.3f} must exceed 5 (PAC cap). "
+        "If support gets 0 or ≤ 5, the excess routing is broken."
+    )
+    # Strict upper bound: support cannot exceed total pool cash for the period.
+    assert s_p1.total_principal < 16.0, (
+        "Support cannot receive more than total pool cash"
+    )
+
+    # Mutation sensitivity: verify the validator rejects a PAC without SUPPORTED_BY.
+    import pydantic
+    with pytest.raises(pydantic.ValidationError, match="support tranche"):
+        DealDefinition(
+            deal_name="NoPACSupport",
+            bonds=[
+                BondDef(name="PAC_bad", kind=TrancheKind.PAC, coupon=5.0, notional=60.0,
+                        schedule_contract=[{"period": 1, "target_principal": 5.0}],
+                        relations=[]),  # No SUPPORTED_BY
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(rule_id="r", rule_type=RuleType.PAY_RESIDUAL, order=0,
+                         from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )
 
 
 def test_accretes_to_relation_routes_z_accrual_to_support():
-    """Z ACCRETES_TO support: accrued Z coupon is paid as support principal."""
+    """ACCRETES_TO: Z accrual must be paid as principal to the named support bond.
+
+    The test is isolation-sensitive: we use a zero-cash pool (no collateral
+    principal flow) so the ONLY way A can receive principal in period 1 is via
+    Z accrual. If the ACCRETES_TO relation is not wired, A.total_principal == 0.
+    """
     deal = DealDefinition(
         deal_name="AccresToTest",
         bonds=[
@@ -177,38 +218,45 @@ def test_accretes_to_relation_routes_z_accrual_to_support():
             BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
         ],
         waterfall_rules=[
+            # Only ACT_INT from pool → interest to A (no principal rule for A).
+            # A's principal can ONLY come from Z accrual in the pre-waterfall step.
             RuleNode(rule_id="int_a", rule_type=RuleType.PAY_INTEREST, order=0,
                      from_sources=["ACT_INT"], to_targets=["A"]),
-            RuleNode(rule_id="prin_a", rule_type=RuleType.PAY_PRINCIPAL, order=1,
-                     from_sources=["CASH"], to_targets=["A"]),
-            RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=2,
+            RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=1,
                      from_sources=["CASH"], to_targets=["R"]),
         ],
     )
-    run_input = _flat_collateral(balance=200.0, monthly_principal=15.0, annual_coupon=8.0)
+    # Zero-cash pool: only interest is delivered, no collateral principal.
+    run_input = _flat_collateral(balance=200.0, monthly_principal=0.0, annual_coupon=8.0)
     result = run_deal(deal, run_input)
 
-    z_monthly_coupon = 50.0 * 6.0 / 1200.0  # 0.25
+    z_monthly_coupon = 50.0 * 6.0 / 1200.0  # exactly 0.25/period
     a_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 1)
     z_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "Z" and r.period == 1)
 
-    # Z should not receive cash interest while accruing.
-    assert z_p1.interest_paid == pytest.approx(0.0, abs=1e-6), (
-        "Z bond must not receive cash interest while accruing"
+    # Z must not receive cash interest while accruing.
+    assert z_p1.interest_paid == pytest.approx(0.0, abs=1e-6), "Z must not cash-pay interest"
+    # Z balance grows by exact accrual amount.
+    assert z_p1.end_balance == pytest.approx(50.0 + z_monthly_coupon, abs=1e-4), (
+        f"Z balance {z_p1.end_balance:.6f} != expected {50.0 + z_monthly_coupon:.6f}"
     )
-    # Z balance should grow by accrual amount.
-    assert z_p1.end_balance >= 50.0 + z_monthly_coupon - 1e-4, (
-        "Z balance must grow by accrual each period"
-    )
-    # Support A should receive Z accrual as principal.
-    assert a_p1.total_principal > 0.0, (
-        "Support A must receive Z accrual as principal payment"
+    # A receives principal equal to Z accrual (the ONLY source of A principal here).
+    assert a_p1.total_principal == pytest.approx(z_monthly_coupon, abs=1e-4), (
+        f"A principal {a_p1.total_principal:.6f} != Z accrual {z_monthly_coupon:.6f}; "
+        "ACCRETES_TO wiring may be broken"
     )
 
 
 def test_notional_tracks_relation_is_reflected_in_carry_tieout():
-    """IO NOTIONAL_TRACKS: carry tie-out recognises IO/notional-tracking bond."""
-    from bma_standard_formulas.deals.carry_tieout import compute_carry_tieout
+    """NOTIONAL_TRACKS: IO bond's carry tie-out row is identified as an IO class
+    (not cash-paying) and its coupon rate is read from BondDef, not from principal
+    cashflows (which are zero for an IO).
+
+    The runtime tracks IO balance by mirroring the underlying bond's balance via
+    the `tracks_bonds` mechanism wired from `NOTIONAL_TRACKS`. We verify this
+    routes the carry tie-out to the correct IO classification path.
+    """
+    from bma_standard_formulas.deals.carry_tieout import compute_carry_tieout, _is_io_bond
     deal = DealDefinition(
         deal_name="NotionalTracksTest",
         bonds=[
@@ -241,10 +289,23 @@ def test_notional_tracks_relation_is_reflected_in_carry_tieout():
     )
     run_input = _flat_collateral(balance=100.0, monthly_principal=8.0, annual_coupon=6.0)
     result = run_deal(deal, run_input)
-    # Carry tie-out should not crash on IO bond with NOTIONAL_TRACKS.
+
+    # Verify the NOTIONAL_TRACKS relation makes _is_io_bond() recognise the IO class.
+    io_bond_def = next(b for b in deal.bonds if b.name == "IO")
+    assert _is_io_bond(io_bond_def), (
+        "IO bond with NOTIONAL_TRACKS relation must be identified as IO by carry tie-out"
+    )
+
+    # Carry tie-out must include the IO in tieout.tranches.
     tieout = compute_carry_tieout(deal, run_input, result)
     io_row = next((r for r in tieout.tranches if r.tranche_id == "IO"), None)
     assert io_row is not None, "IO bond must appear in carry tie-out"
+
+    # IO coupon_pct should reflect the stated 5.0% rate, not a YTM computed
+    # from principal cashflows (which are zero).
+    assert io_row.coupon_pct == pytest.approx(5.0, abs=0.01), (
+        f"IO coupon_pct {io_row.coupon_pct} should be 5.0% from BondDef.coupon"
+    )
 
 
 def test_schema_only_relation_types_produce_verification_warnings():

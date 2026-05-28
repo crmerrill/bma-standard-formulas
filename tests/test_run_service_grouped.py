@@ -377,9 +377,15 @@ class TestDivergentGroupAssumptions:
         assert g2_vol_prepay.sum() > g1_vol_prepay.sum(), (
             "GROUP_2 (high SMM) must have more prepayments than GROUP_1 (zero SMM)"
         )
-        # In fact, GROUP_1 should have zero prepay throughout.
-        assert g1_vol_prepay.sum() == pytest.approx(0.0, abs=1.0), (
-            "GROUP_1 (SMM=0) should have no voluntary prepayments"
+        # GROUP_1 SMM=0: no voluntary prepayments at all.
+        np.testing.assert_allclose(
+            g1_vol_prepay, 0.0, atol=1e-4,
+            err_msg="GROUP_1 (SMM=0) should have zero voluntary prepayments",
+        )
+        # GROUP_2 SMM=0.10: period-1 prepay should be ~10% of initial balance (1M).
+        assert g2_vol_prepay[1] > 50_000.0, (
+            f"GROUP_2 period-1 vol_prepay {g2_vol_prepay[1]:.0f} too small for SMM=0.10; "
+            "check that group_overrides is being applied"
         )
 
         # Aggregate FLOW fields must equal sum of per-group fields.
@@ -390,3 +396,79 @@ class TestDivergentGroupAssumptions:
                 agg_arr, summed, rtol=1e-9, atol=1e-3,
                 err_msg=f"Aggregate {field!r} != sum of per-group {field!r}",
             )
+
+
+class TestPairedArtifactWrittenByExecuteSingleScenario:
+    """RG2-B1 acceptance: _execute_single_scenario must write the portfolio_paired
+    artifact with true per-loan constituents accessible after the run.
+
+    This tests the production code path, not the _write_paired_artifact helper
+    directly, to prove the flush-order fix is wired correctly.
+    """
+
+    def test_paired_artifact_written_and_has_correct_loan_count(self, workspace):
+        from bma_cfengine_app.orchestrator.run_service import _read_paired_artifact
+
+        run_id = "test_paired_written"
+        run_store.save_manifest(run_id, {"status": "running"})
+
+        loans = [
+            _make_loan(1, "GROUP_1", balance=500_000),
+            _make_loan(2, "GROUP_1", balance=300_000),
+            _make_loan(3, "GROUP_2", balance=200_000),
+        ]
+        groups_by_id = {"GROUP_1": loans[:2], "GROUP_2": loans[2:]}
+        group_id_map = {1: "GROUP_1", 2: "GROUP_1", 3: "GROUP_2"}
+        grouping = GroupingConfig(keys=["pool_id"])
+
+        _execute_single_scenario(
+            run_id=run_id,
+            scenario_name="Base Case",
+            loans=loans,
+            groups_by_id=groups_by_id,
+            group_id_map=group_id_map,
+            assumptions=_baseline_assumptions(),
+            run_mode="actual",
+            rate_index=None,
+            grouping=grouping,
+        )
+
+        constituents = _read_paired_artifact(run_id, "Base_Case_portfolio_paired")
+        assert len(constituents) == 3, (
+            f"Expected 3 per-loan constituents, got {len(constituents)}. "
+            f"Check that _execute_single_scenario extracts before flush."
+        )
+        loan_ids = {int(c.loan_id) for c in constituents}
+        assert loan_ids == {1, 2, 3}
+
+    def test_paired_artifact_has_correct_group_ids(self, workspace):
+        from bma_cfengine_app.orchestrator.run_service import _read_paired_artifact
+
+        run_id = "test_paired_groups"
+        run_store.save_manifest(run_id, {"status": "running"})
+
+        loans = [
+            _make_loan(10, "GROUP_1", balance=1_000_000),
+            _make_loan(20, "GROUP_2", balance=500_000),
+        ]
+        groups_by_id = {"GROUP_1": [loans[0]], "GROUP_2": [loans[1]]}
+        group_id_map = {10: "GROUP_1", 20: "GROUP_2"}
+        grouping = GroupingConfig(keys=["pool_id"])
+
+        _execute_single_scenario(
+            run_id=run_id,
+            scenario_name="Base Case",
+            loans=loans,
+            groups_by_id=groups_by_id,
+            group_id_map=group_id_map,
+            assumptions=_baseline_assumptions(),
+            run_mode="actual",
+            rate_index=None,
+            grouping=grouping,
+        )
+
+        constituents = _read_paired_artifact(run_id, "Base_Case_portfolio_paired")
+        assert len(constituents) == 2
+        by_group = {str(c.group_id): c for c in constituents}
+        assert "GROUP_1" in by_group, f"group_ids: {[str(c.group_id) for c in constituents]}"
+        assert "GROUP_2" in by_group

@@ -145,9 +145,19 @@ export function extractScheduleOverlayFromIr(irJson: string): ScheduleOverlay {
     if (!name) continue;
     const contract = bond.schedule_contract;
     if (!Array.isArray(contract) || contract.length === 0) continue;
+    // Only seed from machine-derived PSA schedules: those have a non-empty
+    // schedule_derivation with an `inputs` block (written by build_psa_schedule_overlay).
+    // Authored schedules (CUSTOM_VECTOR, CPR, user-edited) must not be frozen
+    // into the overlay as they may be intentionally different from PSA derivation.
+    const derivation = bond.schedule_derivation as Record<string, unknown> | undefined;
+    const hasPsaDerivation =
+      derivation &&
+      typeof derivation === "object" &&
+      derivation.inputs !== undefined;
+    if (!hasPsaDerivation) continue;
     overlay[name] = {
       schedule_contract: contract as Array<Record<string, unknown>>,
-      schedule_derivation: (bond.schedule_derivation as Record<string, unknown>) ?? {},
+      schedule_derivation: derivation as Record<string, unknown>,
     };
   }
   return overlay;

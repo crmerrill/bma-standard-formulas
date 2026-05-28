@@ -55,8 +55,26 @@ def build_psa_schedule_overlay(
     horizon = int(pool.horizon_months)
 
     for bond in deal.bonds:
-        if bond.schedule_model_type != PrepayModelType.PSA:
+        # Accept bonds where schedule_model_type is explicitly PSA, OR where it is
+        # absent/None and PSA speed inputs are present. This matches the frontend
+        # hasPsaStructuringBonds check which also accepts the null-model case when
+        # speed values are set (irGenerator may omit schedule_model_type after round-trip).
+        # Explicitly skip CPR, ABS, CUSTOM_VECTOR — those have their own derivation paths.
+        if bond.schedule_model_type not in (PrepayModelType.PSA, None):
             continue
+        if bond.schedule_model_type is None:
+            # Only infer PSA eligibility when explicit speed inputs are present.
+            has_pac_speeds = (
+                bond.kind == TrancheKind.PAC
+                and bond.schedule_speed_low is not None
+                and bond.schedule_speed_high is not None
+            )
+            has_tac_speed = (
+                bond.kind == TrancheKind.TAC
+                and bond.schedule_speed_low is not None
+            )
+            if not (has_pac_speeds or has_tac_speed):
+                continue
         face = _original_face_usd(bond, bal)
         if face <= 0:
             continue
@@ -77,6 +95,14 @@ def build_psa_schedule_overlay(
             psa_lo = float(min(lo, hi))
             psa_hi = float(max(lo, hi))
             sched = derive_pac_schedule(bal, wac, term, psa_lo, psa_hi, face, horizon)
+            # Persist support tranche names so the frontend stale-detection
+            # check can compare against the current SUPPORTED_BY relation set.
+            support_names = ",".join(sorted(
+                str(t) for rel in (bond.relations or [])
+                if getattr(rel, "relation_type", None) is not None
+                and rel.relation_type.value == "SUPPORTED_BY"
+                for t in (getattr(rel, "targets", None) or [])
+            ))
             inputs: dict[str, Any] = {
                 "bond": bond.name,
                 "pool_balance": bal,
@@ -86,6 +112,7 @@ def build_psa_schedule_overlay(
                 "psa_low": psa_lo,
                 "psa_high": psa_hi,
                 "tranche_face": face,
+                "support_names": support_names,
             }
             prov = build_schedule_provenance(
                 method="PSA_RANGE",
@@ -109,6 +136,12 @@ def build_psa_schedule_overlay(
             if tgt is None:
                 continue
             sched = derive_tac_schedule(bal, wac, term, float(tgt), face, horizon)
+            tac_support_names = ",".join(sorted(
+                str(t) for rel in (bond.relations or [])
+                if getattr(rel, "relation_type", None) is not None
+                and rel.relation_type.value == "SUPPORTED_BY"
+                for t in (getattr(rel, "targets", None) or [])
+            ))
             inputs = {
                 "bond": bond.name,
                 "pool_balance": bal,
@@ -117,6 +150,7 @@ def build_psa_schedule_overlay(
                 "horizon_months": horizon,
                 "psa_target": float(tgt),
                 "tranche_face": face,
+                "support_names": tac_support_names,
             }
             prov = build_schedule_provenance(
                 method="PSA_TARGET",
