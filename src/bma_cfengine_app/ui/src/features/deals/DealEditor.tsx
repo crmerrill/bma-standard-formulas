@@ -40,8 +40,11 @@ import type { CollateralRiskSettings } from "./shared/riskSettings";
 import { getDefaultCollateralRiskSettings, validateCollateralRiskSettings } from "./shared/riskSettings";
 import {
   computePsaScheduleStale,
+  extractOpaqueIrFields,
   extractScheduleOverlayFromIr,
+  mergeOpaqueIrFields,
   mergeScheduleOverlay,
+  type OpaqueIrFields,
   type ScheduleOverlay,
 } from "./scheduleOverlayMerge";
 
@@ -160,6 +163,9 @@ export default function DealEditor({
   const [scheduleOverlay, setScheduleOverlay] = useState<ScheduleOverlay | null>(null);
   const scheduleOverlayRef = useRef<ScheduleOverlay | null>(null);
   scheduleOverlayRef.current = scheduleOverlay;
+  /** OA1: opaque IR fields (Phase 6/7/8/9 additions, calculations, deal_knobs)
+   *  that Blockly cannot generate — preserved from last saved/loaded snapshot. */
+  const opaqueIrFieldsRef = useRef<OpaqueIrFields | null>(null);
   const [poolDerivationCtx, setPoolDerivationCtx] = useState<api.DerivePsaSchedulesPoolBody | null>(null);
   const [scheduleDeriveBusy, setScheduleDeriveBusy] = useState(false);
 
@@ -395,6 +401,13 @@ export default function DealEditor({
     try {
       let ir: Record<string, unknown> = generateDealIR(ws) as unknown as Record<string, unknown>;
       ir = mergeScheduleOverlay(ir, scheduleOverlayRef.current) as Record<string, unknown>;
+      // OA1: Merge back opaque IR fields (Phase 6/7/8/9 additions, calculations,
+      // deal_knobs) that Blockly cannot generate. This preserves NLA fields,
+      // minimum_schedule, rolling-trigger config, deal_state_trigger, etc.
+      // across Blockly edits without requiring the user to re-enter them.
+      if (opaqueIrFieldsRef.current) {
+        ir = mergeOpaqueIrFields(ir, opaqueIrFieldsRef.current) as Record<string, unknown>;
+      }
       setIrJson(JSON.stringify(ir, null, 2));
       setErrors([]);
       if (ir?.deal_name && typeof ir.deal_name === "string") {
@@ -503,6 +516,8 @@ export default function DealEditor({
       // valid schedule_derivation, not authored custom-vector schedules).
       const seedOverlay = extractScheduleOverlayFromIr(loadedIrJson);
       setScheduleOverlay(Object.keys(seedOverlay).length > 0 ? seedOverlay : null);
+      // OA1: Extract opaque IR fields so they survive Blockly edits.
+      opaqueIrFieldsRef.current = extractOpaqueIrFields(loadedIrJson);
       setErrors([]);
       const presets = (snapshot.ir?.solver_presets ?? {}) as Record<string, unknown>;
       setSolverSpecDraft((prev) => ({
@@ -1155,6 +1170,8 @@ export default function DealEditor({
         if (Object.keys(seedOverlay).length > 0) {
           setScheduleOverlay(seedOverlay);
         }
+        // OA1: Also restore opaque IR fields from the session draft.
+        opaqueIrFieldsRef.current = extractOpaqueIrFields(draft.irJson);
       }
       if (draft.solverSpecDraft) {
         setSolverSpecDraft((prev) => ({ ...prev, ...draft.solverSpecDraft }));
@@ -1237,6 +1254,7 @@ export default function DealEditor({
     setSolverSpecDraft(getDefaultSolverSpecDraft());
     setAdvancedJson(getDefaultAdvancedJsonState());
     setScheduleOverlay(null);
+    opaqueIrFieldsRef.current = null;
     setTelemetryState(getDefaultTelemetryState());
     setSensitivitySweepConfig(getDefaultSensitivitySweepConfig());
     onCollateralRiskSettingsChange(getDefaultCollateralRiskSettings());

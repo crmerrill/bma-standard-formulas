@@ -136,7 +136,10 @@ const RESIDUAL_TRANCHE_KINDS = new Set([
   "PSEUDO",
 ]);
 
-const ZERO_RATE_KINDS = new Set(["PSEUDO"]);
+// Bonds that carry 0% stated coupon and are excluded from carry sum.
+// PO bonds have a zero coupon (they receive principal strip only).
+// IO bonds have face 0 and are priced as an interest strip — handled separately.
+const ZERO_RATE_KINDS = new Set(["PSEUDO", "PO"]);
 
 export function computeStaticCarryTieOut(
   inputs: CarryTieOutInputs,

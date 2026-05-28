@@ -19,6 +19,9 @@ import { computeStaticCarryTieOut } from "./shared/carryTieOut";
 interface BondProps {
   name: string;
   bondType: string;
+  /** TrancheKind read from block.data (PAC/TAC/Z/IO/PO/RESIDUAL/PSEUDO/CASH_PAY).
+   *  Used for carry tie-out classification; falls back to "CASH_PAY" when absent. */
+  trancheKind: string;
   payMode: "CASH_PAY" | "PIK";
   sizeDollars: number;
   sizePctPool: number;
@@ -143,9 +146,19 @@ function scanWorkspace(workspace: any): {
     if (block.type === "bond_target") {
       const name = block.getFieldValue("NAME") || "?";
       if (!bondMap.has(name)) {
+        // Read TrancheKind from block.data (stashed by irToBlocklyState._bondDataPayload)
+        // so carry tie-out classification uses the actual IR kind, not the coupon type.
+        let trancheKind = "CASH_PAY";
+        try {
+          if (typeof block.data === "string" && block.data.trim()) {
+            const bd = JSON.parse(block.data) as Record<string, unknown>;
+            if (typeof bd.kind === "string" && bd.kind) trancheKind = bd.kind;
+          }
+        } catch { /* ignore malformed data */ }
         bondMap.set(name, {
           name,
           bondType: block.getFieldValue("BOND_TYPE") || "FIXED",
+          trancheKind,
           payMode: (block.getFieldValue("PAY_MODE") || "CASH_PAY") as "CASH_PAY" | "PIK",
           sizeDollars: Number(block.getFieldValue("FACE_AMT") || 0),
           sizePctPool: Number(block.getFieldValue("SIZE_PCT_POOL") || 0),
@@ -719,7 +732,10 @@ export default function PropertyPanel({
         name: b.name,
         notional: Math.max(b.sizeDollars, 0),
         coupon_pct: b.coupon,
-        kind: b.bondType,
+        // trancheKind (PAC/TAC/Z/IO/PO/RESIDUAL/PSEUDO/CASH_PAY) is the correct
+        // field for carry tie-out classification. bondType is the coupon type
+        // (FIXED/FLOATING/ZERO) which does not identify residual/pseudo bonds.
+        kind: b.trancheKind,
         pay_mode: b.payMode,
       })),
     });

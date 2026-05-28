@@ -60,6 +60,10 @@ interface IRBond {
   is_pseudo?: boolean;
   group_id?: string | null;
   schedule_contract?: Array<{ period: number; target_principal?: number; target_balance?: number }>;
+  /** Machine-generated derivation provenance (PSA/CPR schedule inputs + method). */
+  schedule_derivation?: Record<string, unknown> | null;
+  /** Tolerance band in bps for PAC/TAC schedule enforcement. */
+  schedule_tolerance_bps?: number | null;
   relations?: Array<{
     relation_type: string;
     targets: string[];
@@ -607,6 +611,14 @@ function _bondDataPayload(bond: IRBond): Record<string, unknown> {
   if (bond.coupon_type) data.coupon_type = bond.coupon_type;
   if (bond.schedule_contract && bond.schedule_contract.length > 0) {
     data.schedule_contract = bond.schedule_contract;
+  }
+  // Stash machine-generated schedule provenance so it survives load/edit/save.
+  if (bond.schedule_derivation != null) {
+    data.schedule_derivation = bond.schedule_derivation;
+  }
+  // Stash user/machine tolerance so it is not reset to the default 25 bps on save.
+  if (typeof bond.schedule_tolerance_bps === "number") {
+    data.schedule_tolerance_bps = bond.schedule_tolerance_bps;
   }
   if (bond.relations && bond.relations.length > 0) data.relations = bond.relations;
   // Stash z_accrual_enabled as an explicit boolean (including false) so the

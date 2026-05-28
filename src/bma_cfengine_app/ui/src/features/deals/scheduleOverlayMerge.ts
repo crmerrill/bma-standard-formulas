@@ -119,6 +119,218 @@ function _inputsMatch(
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// OA1: Opaque IR field passthrough
+// ---------------------------------------------------------------------------
+//
+// Fields that the Blockly workspace cannot generate (Phase 6/7/8/9 additions,
+// CalculationNode arrays, deal_knobs, etc.) must be preserved when the user
+// saves a deal after making Blockly edits. This utility extracts them from the
+// current saved IR and merges them back into a freshly generated IR.
+//
+// "Opaque" means: not produced by generateDealIR, not in any Blockly field or
+// block.data, and not already handled by the schedule overlay merge path.
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-bond opaque fields that Blockly cannot generate.
+ * Matched by bond name when merging back into generated IR.
+ */
+const OPAQUE_BOND_FIELDS = [
+  "nla_starting_balance",
+  "required_subordination_pct",
+  "seniority",
+] as const;
+
+/**
+ * Per-account opaque fields (Phase 7 minimum_schedule, etc.).
+ */
+const OPAQUE_ACCOUNT_FIELDS = [
+  "minimum_schedule",
+] as const;
+
+/**
+ * Per-trigger opaque fields (Phase 9 window_periods, comparison).
+ */
+const OPAQUE_TRIGGER_FIELDS = [
+  "window_periods",
+  "comparison",
+] as const;
+
+/**
+ * Top-level DealDefinition opaque fields.
+ */
+const OPAQUE_TOP_LEVEL_FIELDS = [
+  "calculations",
+  "deal_state_trigger",
+  "initial_deal_state",
+  "series_id",
+  "deal_knobs",
+] as const;
+
+export interface OpaqueIrFields {
+  topLevel: Record<string, unknown>;
+  /** keyed by bond name */
+  bondFields: Record<string, Record<string, unknown>>;
+  /** keyed by account name */
+  accountFields: Record<string, Record<string, unknown>>;
+  /** keyed by trigger name */
+  triggerFields: Record<string, Record<string, unknown>>;
+}
+
+/**
+ * Extract opaque IR fields from a saved IR JSON so they can be preserved
+ * when the Blockly workspace regenerates the IR.
+ */
+export function extractOpaqueIrFields(irJson: string): OpaqueIrFields {
+  const result: OpaqueIrFields = {
+    topLevel: {},
+    bondFields: {},
+    accountFields: {},
+    triggerFields: {},
+  };
+  let ir: unknown;
+  try { ir = JSON.parse(irJson); } catch { return result; }
+  if (!ir || typeof ir !== "object") return result;
+  const root = ir as Record<string, unknown>;
+
+  // Top-level opaque fields
+  for (const key of OPAQUE_TOP_LEVEL_FIELDS) {
+    if (root[key] !== undefined && root[key] !== null) {
+      result.topLevel[key] = root[key];
+    }
+  }
+
+  // Per-bond opaque fields
+  const bonds = root.bonds;
+  if (Array.isArray(bonds)) {
+    for (const b of bonds) {
+      if (!b || typeof b !== "object") continue;
+      const bond = b as Record<string, unknown>;
+      const name = String(bond.name ?? "");
+      if (!name) continue;
+      const extracted: Record<string, unknown> = {};
+      for (const key of OPAQUE_BOND_FIELDS) {
+        if (bond[key] !== undefined && bond[key] !== null) {
+          extracted[key] = bond[key];
+        }
+      }
+      if (Object.keys(extracted).length > 0) result.bondFields[name] = extracted;
+    }
+  }
+
+  // Per-account opaque fields
+  const accounts = root.accounts;
+  if (Array.isArray(accounts)) {
+    for (const a of accounts) {
+      if (!a || typeof a !== "object") continue;
+      const acct = a as Record<string, unknown>;
+      const name = String(acct.name ?? "");
+      if (!name) continue;
+      const extracted: Record<string, unknown> = {};
+      for (const key of OPAQUE_ACCOUNT_FIELDS) {
+        if (acct[key] !== undefined && acct[key] !== null) {
+          extracted[key] = acct[key];
+        }
+      }
+      if (Object.keys(extracted).length > 0) result.accountFields[name] = extracted;
+    }
+  }
+
+  // Per-trigger opaque fields
+  const triggers = root.triggers;
+  if (Array.isArray(triggers)) {
+    for (const t of triggers) {
+      if (!t || typeof t !== "object") continue;
+      const trig = t as Record<string, unknown>;
+      const name = String(trig.name ?? "");
+      if (!name) continue;
+      const extracted: Record<string, unknown> = {};
+      for (const key of OPAQUE_TRIGGER_FIELDS) {
+        if (trig[key] !== undefined && trig[key] !== null) {
+          extracted[key] = trig[key];
+        }
+      }
+      if (Object.keys(extracted).length > 0) result.triggerFields[name] = extracted;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Merge opaque IR fields back into a freshly generated IR.
+ * Generated IR fields are NOT overwritten — opaque fields only fill in gaps.
+ */
+export function mergeOpaqueIrFields(ir: unknown, opaque: OpaqueIrFields): unknown {
+  if (!ir || typeof ir !== "object") return ir;
+  const root = { ...(ir as Record<string, unknown>) };
+
+  // Merge top-level fields (do not overwrite what generateDealIR produces)
+  for (const [key, value] of Object.entries(opaque.topLevel)) {
+    // deal_knobs: deep-merge so Blockly-generated entries win over saved ones.
+    if (key === "deal_knobs") {
+      const existing = typeof root[key] === "object" && root[key] !== null
+        ? (root[key] as Record<string, unknown>)
+        : {};
+      root[key] = { ...(value as Record<string, unknown>), ...existing };
+    } else if (root[key] === undefined || root[key] === null || root[key] === "") {
+      root[key] = value;
+    }
+  }
+
+  // Merge per-bond opaque fields
+  if (Array.isArray(root.bonds)) {
+    root.bonds = root.bonds.map((b) => {
+      if (!b || typeof b !== "object") return b;
+      const bond = b as Record<string, unknown>;
+      const name = String(bond.name ?? "");
+      const extras = opaque.bondFields[name];
+      if (!extras) return bond;
+      // Only inject fields missing from the generated bond
+      const patch: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(extras)) {
+        if (bond[k] === undefined || bond[k] === null) patch[k] = v;
+      }
+      return Object.keys(patch).length > 0 ? { ...bond, ...patch } : bond;
+    });
+  }
+
+  // Merge per-account opaque fields
+  if (Array.isArray(root.accounts)) {
+    root.accounts = root.accounts.map((a) => {
+      if (!a || typeof a !== "object") return a;
+      const acct = a as Record<string, unknown>;
+      const name = String(acct.name ?? "");
+      const extras = opaque.accountFields[name];
+      if (!extras) return acct;
+      const patch: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(extras)) {
+        if (acct[k] === undefined || acct[k] === null) patch[k] = v;
+      }
+      return Object.keys(patch).length > 0 ? { ...acct, ...patch } : acct;
+    });
+  }
+
+  // Merge per-trigger opaque fields
+  if (Array.isArray(root.triggers)) {
+    root.triggers = root.triggers.map((t) => {
+      if (!t || typeof t !== "object") return t;
+      const trig = t as Record<string, unknown>;
+      const name = String(trig.name ?? "");
+      const extras = opaque.triggerFields[name];
+      if (!extras) return trig;
+      const patch: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(extras)) {
+        if (trig[k] === undefined || trig[k] === null) patch[k] = v;
+      }
+      return Object.keys(patch).length > 0 ? { ...trig, ...patch } : trig;
+    });
+  }
+
+  return root;
+}
+
 /**
  * Extract an initial ScheduleOverlay from a loaded IR by seeding any PAC/TAC bond
  * that already has schedule_contract + schedule_derivation entries. This prevents

@@ -3,90 +3,38 @@
  *
  * Scans all top-level waterfall blocks on the workspace (no Deal root needed).
  * Extracts bond/account definitions from target pieces inside pay rules.
+ *
+ * RG10: IR types are imported from the shared ir-types.ts module.
  */
 
-interface BondDefIR {
-  name: string;
-  kind: "CASH_PAY" | "PAC" | "TAC" | "IO" | "PO" | "Z" | "RESIDUAL" | "PSEUDO";
-  group_id?: string | null;
-  coupon: number;
-  notional_pct_of_collateral: number;
-  notional: number;
-  is_bond: boolean;
-  is_pseudo: boolean;
-  coupon_type: string;
-  index_name: string | null;
-  margin: number | null;
-  pay_mode: "CASH_PAY" | "PIK";
-  schedule_model_type: "PSA" | "CPR" | "ABS" | "CUSTOM_VECTOR" | null;
-  schedule_priority_tier: number | null;
-  schedule_depends_on: string | null;
-  schedule_speed_low: number | null;
-  schedule_speed_high: number | null;
-  schedule_custom_vector: string | null;
-  schedule_contract: Array<{ period: number; target_principal: number }>;
-  schedule_tolerance_bps: number | null;
-  relations: Array<{ relation_type: string; targets: string[] }>;
-  z_accrual_enabled: boolean;
-  z_release_trigger: string | null;
-}
+// Import shared IR types for local use within this file.
+import type {
+  BondDefIR,
+  AccountDefIR,
+  FeeDefIR,
+  TriggerNodeIR,
+  RuleNodeIR,
+  CollateralGroupDefIR,
+  DealDefinitionIR,
+  TrancheKind,
+  TrancheRelation,
+} from "./ir-types";
 
-interface AccountDefIR {
-  name: string;
-  account_category: string;
-  starting_amount: number;
-  starting_pct: number | null;
-  starting_basis: string;
-}
+// Re-export shared types so callers that import from irGenerator still work.
+export type {
+  BondDefIR,
+  AccountDefIR,
+  FeeDefIR,
+  TriggerNodeIR,
+  RuleNodeIR,
+  CollateralGroupDefIR,
+  DealDefinitionIR,
+  TrancheKind,
+  TrancheRelation,
+} from "./ir-types";
 
-interface FeeDefIR {
-  name: string;
-  basis_type: string;
-  amount: number;
-  /** Percent rate when basis_type is COLLATERAL_BALANCE; otherwise null */
-  rate: number | null;
-  frequency: string;
-}
-
-interface TriggerNodeIR {
-  name: string;
-  metric_type: string;
-  threshold_value: number;
-}
-
-interface RuleNodeIR {
-  rule_id: string;
-  rule_type: string;
-  order: number;
-  from_sources: string[];
-  to_targets: string[];
-  payment_style: string;
-  max_amount_fixed: number | null;
-  condition_trigger: string | null;
-  condition_invert: boolean;
-  group_id?: string | null;
-  cap_mode?: string | null;
-  coverage_mode?: string | null;
-  target_weights?: number[] | null;
-}
-
-export interface CollateralGroupDefIR {
-  group_id: string;
-  label: string;
-  description: string;
-}
-
-export interface DealDefinitionIR {
-  schema_version: string;
-  deal_name: string;
-  bonds: BondDefIR[];
-  accounts: AccountDefIR[];
-  fees: FeeDefIR[];
-  triggers: TriggerNodeIR[];
-  waterfall_rules: RuleNodeIR[];
-  collateral_groups: CollateralGroupDefIR[];
-  deal_knobs: Record<string, number>;
-}
+// CollateralGroupDefIR and DealDefinitionIR are defined in ir-types.ts and
+// re-exported above. No local duplicate needed.
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -192,6 +140,8 @@ interface TargetInfo {
   scheduleCustomVector?: string | null;
   scheduleContract?: Array<{ period: number; target_principal: number }>;
   scheduleToleranceBps?: number | null;
+  /** Machine-generated schedule derivation provenance (preserved from block.data). */
+  scheduleDerivation?: Record<string, unknown> | null;
   supportTranches?: string[];
   relations?: Array<{ relation_type: string; targets: string[] }>;
   zReleaseTrigger?: string | null;
@@ -215,6 +165,8 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
       let relationData: Array<{ relation_type: string; targets: string[] }> = [];
       let scheduleContractFromData: Array<{ period: number; target_principal: number }> = [];
       let zAccrualEnabledFromData: boolean | undefined;
+      let scheduleDerivationFromData: Record<string, unknown> | null | undefined;
+      let scheduleToleranceBpsFromData: number | null | undefined;
       if (typeof t.data === "string" && t.data.trim()) {
         try {
           const parsed = JSON.parse(t.data) as Record<string, unknown>;
@@ -266,6 +218,13 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
           if (typeof parsed.z_accrual_enabled === "boolean") {
             zAccrualEnabledFromData = parsed.z_accrual_enabled;
           }
+          // Restore schedule derivation provenance and tolerance from block.data.
+          if (parsed.schedule_derivation != null && typeof parsed.schedule_derivation === "object") {
+            scheduleDerivationFromData = parsed.schedule_derivation as Record<string, unknown>;
+          }
+          if (typeof parsed.schedule_tolerance_bps === "number") {
+            scheduleToleranceBpsFromData = parsed.schedule_tolerance_bps;
+          }
         } catch {
           // Ignore malformed block.data; fall back to visible fields.
         }
@@ -289,7 +248,8 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
         kind: kindFromData as TargetInfo["kind"],
         groupId: groupIdFromData,
         scheduleContract: scheduleContractFromData.length > 0 ? scheduleContractFromData : [],
-        scheduleToleranceBps: null,
+        scheduleToleranceBps: scheduleToleranceBpsFromData,
+        scheduleDerivation: scheduleDerivationFromData,
         supportTranches: [],
         relations: relationData,
         zReleaseTrigger: null,
@@ -328,6 +288,21 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
     }
   }
   return targets;
+}
+
+/**
+ * Map a raw account name/type token to a canonical AccountCategory enum value.
+ * OA3: The Blockly ACCOUNT_TYPE field is an account NAME, not an enum value —
+ * common names are mapped to valid categories so generated IR passes validation.
+ */
+function _canonicalAccountCategory(raw: string): string {
+  const u = raw.toUpperCase();
+  if (u === "RESERVE" || u.includes("RESERVE")) return "RESERVE";
+  if (u === "PREFUNDING" || u === "PFA" || u === "IFA" || u.includes("PREFUND") || u.includes("FUNDING")) return "PREFUNDING";
+  if (u === "REVOLVING" || u.includes("REVOLV")) return "REVOLVING";
+  if (u === "PAYMENT" || u.includes("PAYMENT")) return "PAYMENT";
+  if (u === "SPREAD_ACCOUNT" || u.includes("SPREAD")) return "SPREAD_ACCOUNT";
+  return "RESERVE"; // sensible default for unrecognized names
 }
 
 /** Parse the rule-level block.data payload stashed by irToBlocklyState. */
@@ -474,6 +449,10 @@ function registerTargets(targets: TargetInfo[], ctx: Ctx): void {
           existing.zAccrualEnabled !== undefined ? existing.zAccrualEnabled
           : t.zAccrualEnabled !== undefined ? t.zAccrualEnabled
           : undefined,
+        // Preserve schedule provenance from whichever encounter has it.
+        scheduleDerivation:
+          existing.scheduleDerivation != null ? existing.scheduleDerivation
+          : t.scheduleDerivation,
       });
     } else if (t.accountType) {
       if (!ctx.accounts.has(t.name)) ctx.accounts.set(t.name, t);
@@ -838,8 +817,10 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       schedule_contract: info.scheduleContract || [],
       schedule_tolerance_bps:
         resolvedKind === "PAC" || resolvedKind === "TAC"
+          // Prefer the value from block.data; fall back to 25 bps default.
           ? (info.scheduleToleranceBps ?? 25)
           : null,
+      schedule_derivation: info.scheduleDerivation ?? null,
       relations: (() => {
         if (info.relations && info.relations.length > 0) return info.relations;
         if (resolvedKind === "PAC" || resolvedKind === "TAC") {
@@ -873,9 +854,14 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
     const mode = info.initialMode || "PCT_STACK";
     const amt = info.initialAmt ?? 0;
     const isDollar = mode === "FIXED_DOLLAR";
+    // OA3: Map account name/type to a canonical AccountCategory enum value so
+    // the generated IR passes schema validation. The Blockly ACCOUNT_TYPE field
+    // is an account name (e.g. "SPREAD_ACCT", "PFA"), not an enum value.
+    const rawAccountType = info.accountType || name;
+    const account_category = _canonicalAccountCategory(rawAccountType);
     accounts.push({
       name,
-      account_category: info.accountType || name,
+      account_category,
       starting_amount: isDollar ? amt : 0,
       starting_pct: isDollar ? null : amt,
       starting_basis: isDollar ? "FIXED_DOLLAR" : "NOTE_BALANCE",

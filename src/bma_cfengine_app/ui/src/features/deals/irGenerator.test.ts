@@ -359,3 +359,88 @@ describe("generateDealIR block.data round-trip", () => {
     expect(r?.cap_mode).toBe("NONE");
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// SR2: PropertyPanel carry tie-out uses TrancheKind (not coupon type)
+// SR3: schedule_derivation and schedule_tolerance_bps round-trip via block.data
+// ---------------------------------------------------------------------------
+
+describe("SR2 + SR3 block.data round-trip", () => {
+  it("SR2: trancheKind=RESIDUAL read from block.data flows to kind field in IR", () => {
+    // Residual target has {kind:"RESIDUAL"} in block.data (set by irToBlocklyState)
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("A", 100),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const r = ir.bonds.find((b) => b.name === "R" || b.kind === "RESIDUAL");
+    expect(r?.kind).toBe("RESIDUAL");
+    // RESIDUAL bonds must have is_pseudo=true so carry tie-out skips them
+    expect(r?.is_pseudo).toBe(true);
+  });
+
+  it("SR3: schedule_derivation round-trips from block.data", () => {
+    const derivation = { method: "PSA_RANGE", inputs: { psa_low: 100, psa_high: 250, support_names: "S" } };
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("PAC_A", 100, {
+          kind: "PAC",
+          schedule_contract: [{ period: 1, target_principal: 10 }],
+          schedule_derivation: derivation,
+        }),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const pac = ir.bonds.find((b) => b.name === "PAC_A");
+    expect(pac?.schedule_derivation).toEqual(derivation);
+  });
+
+  it("SR3: schedule_tolerance_bps round-trips from block.data", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("PAC_A", 100, {
+          kind: "PAC",
+          schedule_contract: [{ period: 1, target_principal: 5 }],
+          schedule_tolerance_bps: 50,
+        }),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const pac = ir.bonds.find((b) => b.name === "PAC_A");
+    expect(pac?.schedule_tolerance_bps).toBe(50);
+  });
+
+  it("SR3: schedule_derivation=null when not in block.data", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [bondTargetBlock("A", 100)]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const a = ir.bonds.find((b) => b.name === "A");
+    expect(a?.schedule_derivation).toBeNull();
+  });
+
+  it("SR3: schedule_tolerance_bps defaults to 25 for PAC kind without block.data override", () => {
+    // A PAC bond with kind=PAC in block.data but no schedule_tolerance_bps
+    // should use the default 25 bps from generateDealIR.
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("PAC_A", 100, {
+          kind: "PAC",
+          schedule_contract: [{ period: 1, target_principal: 5 }],
+          // No schedule_tolerance_bps in block.data
+        }),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const pac = ir.bonds.find((b) => b.name === "PAC_A");
+    // Default tolerance is 25 bps when not in block.data
+    expect(pac?.schedule_tolerance_bps).toBe(25);
+  });
+});
