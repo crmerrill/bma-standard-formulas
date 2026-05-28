@@ -556,9 +556,12 @@ def _refresh_note_balance_minimums(
     bonds: dict[str, BondWorkspace],
     period: int,
 ) -> None:
-    """Update `required_minimum[period]` for accounts with
-    `minimum_basis = NOTE_BALANCE` based on the current outstanding note
-    balance (sum of `is_bond=True, is_pseudo=False` bond balances).
+    """Update `required_minimum[period]` for accounts each period.
+
+    Handles two cases:
+    1. `minimum_basis = NOTE_BALANCE`: floor = pct × outstanding note balance.
+    2. `minimum_schedule` set: override required_minimum from the per-period
+       schedule for the current period (Phase 7 — PFA/IFA accumulation).
 
     Called once per period after bond balances for the period have been
     populated but before any waterfall rule executes, so the floor reflects
@@ -568,19 +571,33 @@ def _refresh_note_balance_minimums(
         acc for acc in deal.accounts
         if getattr(acc, "minimum_basis", None) == MinimumBasis.NOTE_BALANCE
     ]
-    if not note_basis_accounts:
-        return
-    note_balance_t = sum(
-        float(ws.balance[period]) for ws in bonds.values()
-        if ws.is_bond and not ws.is_pseudo
-    )
-    for acc_def in note_basis_accounts:
+    if note_basis_accounts:
+        note_balance_t = sum(
+            float(ws.balance[period]) for ws in bonds.values()
+            if ws.is_bond and not ws.is_pseudo
+        )
+        for acc_def in note_basis_accounts:
+            acc_ws = accounts.get(acc_def.name)
+            if acc_ws is None:
+                continue
+            pct = float(acc_def.minimum_pct or 0.0)
+            floor_d = float(acc_def.minimum_amount or 0.0)
+            acc_ws.required_minimum[period] = max(floor_d, note_balance_t * pct / 100.0)
+
+    # Phase 7: apply minimum_schedule overrides (PFA/IFA accumulation periods).
+    for acc_def in deal.accounts:
+        sched = getattr(acc_def, "minimum_schedule", None)
+        if not sched:
+            continue
         ws = accounts.get(acc_def.name)
         if ws is None:
             continue
-        pct = float(acc_def.minimum_pct or 0.0)
-        floor_d = float(acc_def.minimum_amount or 0.0)
-        ws.required_minimum[period] = max(floor_d, note_balance_t * pct / 100.0)
+        for entry in sched:
+            ep = getattr(entry, "period", None)
+            emb = getattr(entry, "minimum_balance", None)
+            if ep is not None and emb is not None and int(ep) == period:
+                ws.required_minimum[period] = max(float(ws.required_minimum[period]), float(emb))
+                break
 
 
 # Dispatch tags
@@ -2221,6 +2238,18 @@ def run_deal(
         interest_avail[i] = actual.act_int[i]
         principal_avail[i] = actual.act_prin[i]
         loss_avail[i] = actual.prin_loss[i]
+
+        # Phase 7: Discount Option — pre-waterfall reclassification of a
+        # fraction of principal collections as finance charges (interest).
+        # deal_knobs.discount_factor (0-100, percent) controls the fraction.
+        # The combined CASH stream is unchanged; only the split streams shift.
+        # This models issuers (Chase, Capital One, Citi) who reclassify a
+        # yield-supplement portion of principal as finance-charge income.
+        discount_factor_pct = float(deal.deal_knobs.get("discount_factor") or 0.0)
+        if discount_factor_pct > 0.0:
+            discount_amt = float(principal_avail[i]) * discount_factor_pct / 100.0
+            principal_avail[i] = max(0.0, float(principal_avail[i]) - discount_amt)
+            interest_avail[i] = float(interest_avail[i]) + discount_amt
         # Per-group cash arrays mirror the same period-fill pattern so
         # rules that route via ``GROUP_<id>_*`` source tokens see the
         # right group's cashflow stream and never cross-feed each other.

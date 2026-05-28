@@ -182,6 +182,17 @@ class BondDef(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class AccountMinimumScheduleEntry(BaseModel):
+    """Per-period minimum balance target for a funding account (Phase 7).
+
+    Used to model PFA/IFA accumulation schedules in credit-card master trusts:
+    one entry per period specifying the required account balance floor.
+    Periods not listed fall back to the scalar `required_minimum` field.
+    """
+    period: int = Field(ge=0)
+    minimum_balance: float = Field(ge=0.0)
+
+
 class AccountDef(BaseModel):
     """Reserve, prefunding, revolving, or payment account."""
 
@@ -203,6 +214,10 @@ class AccountDef(BaseModel):
     minimum_amount: Dollars = 0.0
     minimum_pct: float | None = None
     minimum_basis: MinimumBasis = MinimumBasis.FIXED_DOLLAR
+    # Phase 7: Funding-account accumulation period schedule.
+    # Per-period minimum balance targets for PFA/IFA accounts.
+    # When set, overrides minimum_amount for the specified periods.
+    minimum_schedule: list[AccountMinimumScheduleEntry] | None = None
 
 
 # ---------------------------------------------------------------------------
