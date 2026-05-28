@@ -228,7 +228,7 @@ def test_full_cc_cycle_p_to_i_cap_reimbursement():
     """End-to-end credit-card style test:
     1. Finance charge collections (FCC) fund senior A interest.
     2. If FCC insufficient, P-to-I reallocation from B funds shortfall.
-    3. P-to-I is capped by (B_available_subordination - A_required_subordination).
+    3. P-to-I is capped by (A_available_subordination - A_required_subordination).
     4. Excess spread reimburses B NLA each period.
     """
     # Configuration:

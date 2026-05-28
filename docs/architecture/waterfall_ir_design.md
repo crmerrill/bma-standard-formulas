@@ -1955,15 +1955,66 @@ Suggested phase additions (defer until after Phase 5):
   amortization deal state (gaps 7, 8)
 
 Current implementation status (May 2026):
-- Phase 6 is **in progress** with a first runtime slice now landed:
-  - `BondDef.nla_starting_balance` and `BondDef.required_subordination_pct`
-  - Runtime-tracked per-bond `*_nla_balance` expression variables
-  - Runtime-computed `*_required_subordination` and
-    `*_available_subordination` expression variables
-  - NLA depletion on principal/writedown and on
-    `PAY_INTEREST + coverage_mode=INTEREST_SHORTFALL` (P-to-I path)
-- Remaining Phase 6 work: explicit reimbursement mechanics and richer CC
-  fixture coverage.
+
+**Phases 6 and 7 are complete** (gaps 1, 2, 3, 5, 6 resolved):
+- NLA per-bond tracking (`nla_starting_balance`, `nla_balance` output)
+- Required/available subordination expression variables
+- P-to-I reallocation via `PAY_INTEREST + coverage_mode=INTEREST_SHORTFALL`
+- `REIMBURSE_NLA` rule type for excess-spread NLA restoration
+- Discount Option via `deal_knobs.discount_factor`
+- Funding account accumulation via `AccountDef.minimum_schedule`
+
+**Phase 8 — Single-series master trust model (gap 4 partial)**
+
+A single series of a credit card master trust can be fully modelled today
+using a single `DealDefinition`.  The key architectural insight is:
+
+*The trust orchestrator (external to the IR) computes each series'
+allocated share of Finance Charge Collections and Principal Collections
+based on the series' Invested Amount (NLA) as a fraction of the total
+trust balance. The `DealDefinition` then runs the series-level
+Priority of Payments waterfall on that pre-allocated cash.*
+
+This means:
+- The collateral input to `run_deal` represents the **series' allocated
+  share** of pool cashflows, not the full trust pool.
+- All Phase 6-7 mechanics (NLA, P-to-I, discount option, PFA) operate
+  correctly at the series level.
+- `DealDefinition.series_id` is a metadata field labeling which series
+  this deal represents, for future use by the inter-deal orchestrator.
+
+**What remains deferred** (true Phase 8 / major effort):
+
+Cross-series sharing requires a **trust-level orchestrator** that does NOT
+yet exist. The full mechanics are:
+
+1. **Pro-rata FCC allocation**: Each period, the trust computes total FCC
+   and allocates `series_NLA / total_trust_NLA × total_FCC` to each series.
+2. **Shared Excess Finance Charges**: If Series A's FCC allocation exceeds
+   its Series Investor Yield + losses, the excess is available to other
+   series with shortfalls before returning to the seller. This requires
+   iterating across all series — impossible within a single `DealDefinition`.
+3. **Shared Excess Principal**: Same for principal collections during rapid
+   amortization events.
+4. **Trust-level triggers**: Excess spread, portfolio yield, and base-rate
+   triggers are computed across ALL series simultaneously, not per-series.
+
+**Architecture for the deferred inter-deal layer:**
+
+```
+TrustOrchestrator (future):
+  1. Run trust-level cashflow projections (all receivables, full pool)
+  2. For each period:
+     a. Compute total FCC, total principal, total losses
+     b. For each series: allocate FCC = fcc × (series_NLA / total_NLA)
+     c. Apply Shared Excess FCC / Principal reallocation across series
+     d. Call run_deal(series_def, allocated_collateral) for each series
+  3. Aggregate outputs and compute cross-series metrics
+```
+
+Each `DealDefinition` (series) is already a complete model of the series-
+level waterfall. The missing piece is the orchestrator that produces the
+`allocated_collateral` input to each series' `run_deal` call.
 
 These replace the "credit card master trusts" entry under "Asset
 classes still to cover" at the top of this doc.
