@@ -165,7 +165,7 @@ class TestExecuteSingleScenarioGrouped:
         # actual loan.group_id has already been set above.
         grouping = GroupingConfig(keys=["pool_id"])
 
-        sections, group_names, group_artifacts = _execute_single_scenario(
+        sections, group_names, group_artifacts, _plv = _execute_single_scenario(
             run_id=run_id,
             scenario_name="Base Case",
             loans=loans,
@@ -207,7 +207,7 @@ class TestExecuteSingleScenarioGrouped:
 
         grouping = GroupingConfig(keys=["pool_id"])
 
-        _, group_names, group_artifacts = _execute_single_scenario(
+        _, group_names, group_artifacts, _plv = _execute_single_scenario(
             run_id=run_id,
             scenario_name="Base Case",
             loans=loans,
@@ -260,7 +260,7 @@ class TestExecuteSingleScenarioUngrouped:
             _make_loan(2, None, balance=750_000),
         ]
 
-        sections, group_names, group_artifacts = _execute_single_scenario(
+        sections, group_names, group_artifacts, _plv = _execute_single_scenario(
             run_id=run_id,
             scenario_name="Base Case",
             loans=loans,
@@ -351,7 +351,7 @@ class TestDivergentGroupAssumptions:
             },
         )
 
-        _, _, group_artifacts = _execute_single_scenario(
+        _, _, group_artifacts, _plv = _execute_single_scenario(
             run_id=run_id,
             scenario_name="Divergent",
             loans=loans,

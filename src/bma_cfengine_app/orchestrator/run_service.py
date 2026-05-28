@@ -332,6 +332,10 @@ def _read_paired_artifact(run_id: str, artifact_name: str) -> list[Any]:
         return []
 
 
+import logging as _logging  # module-level import (MINOR M4 fix)
+_logger = _logging.getLogger(__name__)
+
+
 def _execute_single_scenario(
     run_id: str,
     scenario_name: str,
@@ -342,8 +346,14 @@ def _execute_single_scenario(
     run_mode: str,
     rate_index: Any,
     grouping: GroupingConfig | None,
-) -> tuple[list[str], list[str], dict[str, str]]:
-    """Run one scenario. Returns (sections, group_names, group_artifact_map).
+) -> tuple[list[str], list[str], dict[str, str], dict[str, Any]]:
+    """Run one scenario. Returns (sections, group_names, group_artifact_map, per_loan_visibility_meta).
+
+    per_loan_visibility_meta contains:
+      - per_loan_visibility: bool — True if the paired artifact was written successfully.
+      - per_loan_visibility_error: str — error message if the write failed (absent on success).
+    Callers must include this in the final completed manifest (NOT write a partial manifest
+    from here — partial writes corrupt the manifest with only the visibility key).
 
     Phase 0B refactor (May 2026): the engine is invoked exactly ONCE per
     scenario, regardless of grouping configuration. Per-group artifacts are
@@ -398,8 +408,7 @@ def _execute_single_scenario(
             paired_artifact_error = "No per-loan constituents available (portfolio may have been flushed)"
     except Exception as exc:
         paired_artifact_error = f"{type(exc).__name__}: {exc}"
-        import logging
-        logging.getLogger(__name__).warning(
+        _logger.warning(
             "Run %s scenario %r: failed to write paired artifact — per-loan visibility "
             "will be unavailable. Fallback to aggregate-only path. Error: %s",
             run_id, scenario_name, paired_artifact_error,
@@ -471,19 +480,16 @@ def _execute_single_scenario(
             except Exception:
                 pass
 
-    # OA4: Persist per_loan_visibility in the scenario-level manifest so
-    # build_from_runsetup_ref can surface it without re-reading the artifact.
-    # This avoids the [per_loan_visibility=false] warning path silently failing.
-    per_loan_vis_meta = {
+    # OA4: Return per_loan_visibility metadata to the caller (execute_run) so it
+    # can be included in the final completed manifest without a partial overwrite.
+    # Partial manifest writes corrupt the run manifest; always write full manifests.
+    per_loan_visibility_meta = {
         "per_loan_visibility": paired_artifact_written,
     }
     if paired_artifact_error:
-        per_loan_vis_meta["per_loan_visibility_error"] = paired_artifact_error
-    run_store.save_manifest(run_id, {
-        f"scenario__{_safe_artifact_name(scenario_name)}__per_loan_visibility": per_loan_vis_meta,
-    })
+        per_loan_visibility_meta["per_loan_visibility_error"] = paired_artifact_error
 
-    return sections, group_names, group_artifact_map
+    return sections, group_names, group_artifact_map, per_loan_visibility_meta
 
 
 def execute_run(
@@ -571,6 +577,9 @@ def execute_run(
         all_group_names: list[str] = []
         all_group_artifacts: dict[str, str] = {}
         scenario_names: list[str] = []
+        # OA4: Accumulate per-scenario per_loan_visibility metadata here so it
+        # can be included in the final completed manifest (not a partial write).
+        per_loan_visibility_by_scenario: dict[str, dict[str, Any]] = {}
 
         for sc_spec in scenario_list:
             sc_name = sc_spec.get("name", "Base Case")
@@ -581,7 +590,7 @@ def execute_run(
                 sc_assumptions = AssumptionsPayload(portfolio_defaults=AssumptionSet(**raw_assumptions))
             sc_run_mode = sc_spec.get("run_mode", run_mode)
 
-            sections, gnames,gart_map = _execute_single_scenario(
+            sections, gnames, gart_map, plv_meta = _execute_single_scenario(
                 run_id, sc_name, loans, groups_by_id, group_id_map,
                 sc_assumptions, sc_run_mode, rate_index, grouping,
             )
@@ -590,6 +599,7 @@ def execute_run(
             if gnames and not all_group_names:
                 all_group_names = gnames
             all_group_artifacts.update(gart_map)
+            per_loan_visibility_by_scenario[sc_name] = plv_meta
 
         if all_group_names:
             all_sections.append("group_cashflows")
@@ -635,6 +645,9 @@ def execute_run(
             "group_names": all_group_names,
             "group_artifacts": all_group_artifacts,
             "scenario_names": scenario_names,
+            # OA4: Per-scenario per_loan_visibility — included here (not in partial
+            # manifest writes) so the manifest remains a single consistent document.
+            "per_loan_visibility": per_loan_visibility_by_scenario,
             # Persisted so build_from_runsetup_ref can set DealRunInput.original_collateral_balance
             # correctly on the PAIRED path without defaulting to 0.0.
             "original_collateral_balance": float(total_bal),

@@ -605,6 +605,33 @@ class DealDefinition(BaseModel):
                 f"deal_state_trigger {self.deal_state_trigger!r} not found in triggers"
             )
 
+        # OA5 / M3: Validate group source-token mixing.
+        # A rule with group_id must not mix bare collateral tokens (expanded by
+        # the runtime to GROUP_<id>_*) with explicit GROUP_<other_id>_* tokens
+        # for a DIFFERENT group — that silently routes cash across group boundaries.
+        _BARE_TOKENS = {"CASH", "ACT_INT", "ACT_PRIN", "LOSS"}
+        for rule in self.waterfall_rules:
+            if not rule.group_id:
+                continue
+            all_keys = list(rule.from_sources) + list(rule.to_targets)
+            has_bare = any(k in _BARE_TOKENS for k in all_keys)
+            if has_bare:
+                for key in all_keys:
+                    m = None
+                    for suffix in ("_CASH", "_ACT_INT", "_ACT_PRIN", "_LOSS"):
+                        if key.startswith("GROUP_") and key.endswith(suffix):
+                            prefix_group = key[len("GROUP_"):-len(suffix)]
+                            if prefix_group != rule.group_id:
+                                m = (key, prefix_group)
+                            break
+                    if m:
+                        errors.append(
+                            f"Rule {rule.rule_id!r}: mixes bare collateral tokens "
+                            f"(scoped to group_id={rule.group_id!r}) with explicit "
+                            f"token {m[0]!r} for a different group {m[1]!r}. "
+                            "This silently routes cash across group boundaries."
+                        )
+
         # deal_knobs numeric values are also valid calculation_ref targets for triggers.
         deal_knob_numeric_keys = {
             k for k, v in self.deal_knobs.items()

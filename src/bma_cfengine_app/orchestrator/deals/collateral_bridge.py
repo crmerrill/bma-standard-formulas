@@ -150,6 +150,11 @@ def build_from_runsetup_ref(
         # Loads true per-loan BMAActualCashflow constituents directly via
         # cashflow_persistence (lossless; no LDCMA conversion). This path
         # gives the deal runtime genuine per-loan visibility.
+        # OA4: Check manifest per_loan_visibility metadata to surface recorded errors.
+        plv_manifest = manifest.get("per_loan_visibility") or {}
+        plv_for_scenario = plv_manifest.get(scenario_name, {})
+        plv_error = plv_for_scenario.get("per_loan_visibility_error")
+
         constituents = _read_paired_artifact(run_id, f"{prefix}_portfolio_paired")
         if constituents:
             from bma_standard_formulas.engine import PortfolioCashflow
@@ -171,12 +176,13 @@ def build_from_runsetup_ref(
         # Produces one synthetic constituent per group (or one for the whole
         # pool). Per-loan visibility is NOT available on this path. Emits a
         # warning so operators can identify runs that need to be regenerated.
+        # Build an actionable warning that includes any recorded write error.
+        plv_detail = f" Recorded error: {plv_error}" if plv_error else ""
         warnings.warn(
             f"Run {run_id!r} scenario {scenario_name!r}: per-loan PAIRED artifact "
             f"not found; falling back to aggregate-only LDCMA adapter. "
-            f"Per-loan expression access (loans, loans_by_group) will be unavailable. "
-            f"Re-run the portfolio to generate the paired artifact. "
-            f"[per_loan_visibility=false]",
+            f"Per-loan expression access (loans, loans_by_group) will be unavailable.{plv_detail} "
+            f"Re-run the portfolio to regenerate. [per_loan_visibility=false]",
             UserWarning,
             stacklevel=2,
         )
