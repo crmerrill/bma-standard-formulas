@@ -1914,6 +1914,25 @@ def _apply_z_accrual(ctx: ExecutionContext, period: int) -> None:
         if accrual <= 0.0:
             continue
 
+        # Cap the reroutable accrual by how much pool interest is actually
+        # available from the Z bond's source. For grouped deals use the group
+        # stream; for single-pool deals use the aggregate interest stream.
+        # This prevents the Z mechanism from funding support principal when
+        # the pool has produced no (or insufficient) interest this period.
+        if ws.group_id and ws.group_id in ctx.interest_avail_by_group:
+            available_interest = float(ctx.interest_avail_by_group[ws.group_id][period])
+        elif ctx.interest_avail is not None:
+            available_interest = float(ctx.interest_avail[period])
+        else:
+            available_interest = accrual  # no constraint available; use full accrual
+        accrual = min(accrual, available_interest)
+        if accrual <= 0.0:
+            # No pool interest to reroute this period; Z capitalises without
+            # paying support. opt_interest is NOT cleared so the regular
+            # waterfall can attempt to pay Z in cash (though with no CASH
+            # available this will also produce 0).
+            continue
+
         # Apply accrual to Z balance and pay support principal subject to each
         # support's schedule cap (industry standard: Z accrual flows to support
         # planned balance, not outstanding balance). Excess accrual capitalizes
@@ -1939,23 +1958,33 @@ def _apply_z_accrual(ctx: ExecutionContext, period: int) -> None:
             remaining -= pmt
             accrual_paid_to_supports += pmt
 
-        # Z accrual is pool interest re-routed to support principal. Decrement
-        # both the aggregate `ACT_INT` stream AND — for grouped deals — the
-        # group-specific `GROUP_<id>_ACT_INT` stream so that downstream rules
-        # drawing from either token cannot double-fund the accrual amount.
-        # The combined `CASH` stream is intentionally left alone because deals
-        # that route through `CASH` have opted into combined-stream semantics.
+        # Z accrual re-routes pool interest to support principal. Debit BOTH
+        # the explicit ACT_INT stream and the combined CASH stream so that no
+        # downstream rule (regardless of which source token it uses) can
+        # double-fund the accrued amount. For grouped deals, debit the
+        # group-specific streams as well as the aggregate.
         if accrual_paid_to_supports > 0.0:
             if ctx.interest_avail is not None:
                 ctx.interest_avail[period] = max(
                     0.0,
                     float(ctx.interest_avail[period]) - accrual_paid_to_supports,
                 )
+            if ctx.cash_avail is not None:
+                ctx.cash_avail[period] = max(
+                    0.0,
+                    float(ctx.cash_avail[period]) - accrual_paid_to_supports,
+                )
             if ws.group_id and ws.group_id in ctx.interest_avail_by_group:
                 grp_arr = ctx.interest_avail_by_group[ws.group_id]
                 grp_arr[period] = max(
                     0.0,
                     float(grp_arr[period]) - accrual_paid_to_supports,
+                )
+            if ws.group_id and ws.group_id in ctx.cash_avail_by_group:
+                grp_cash = ctx.cash_avail_by_group[ws.group_id]
+                grp_cash[period] = max(
+                    0.0,
+                    float(grp_cash[period]) - accrual_paid_to_supports,
                 )
 
         # Z's interest does not pay in cash this period; clear after accrual posted.
@@ -2630,11 +2659,11 @@ def run_deal(
                     if pmt > 0.0:
                         if rule.tag in {_OP_PRINCIPAL, _OP_WRITEDOWN} and tgt.nla_balance is not None:
                             tgt.nla_balance[i] = max(0.0, float(tgt.nla_balance[i]) - float(pmt))
-                        if (
-                            rule.tag == _OP_INTEREST
-                            and rule.coverage_mode == "INTEREST_SHORTFALL"
-                            and len(rule.source_keys) == 1
-                        ):
+                        # Coverage-mode payments draw from a source bond/account balance.
+                        # Debit the source bond's NLA when a coverage rule pays from it,
+                        # matching the economic reality that the source's notional
+                        # protection is being consumed.
+                        if rule.coverage_mode in ("INTEREST_SHORTFALL", "PRINCIPAL_ACCELERATION") and len(rule.source_keys) == 1:
                             src_bond = bonds.get(rule.source_keys[0])
                             if src_bond is not None and src_bond.nla_balance is not None:
                                 src_bond.nla_balance[i] = max(

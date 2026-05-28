@@ -387,3 +387,85 @@ def test_coverage_mode_source_from_another_bond():
     assert b_rows[2].end_balance == pytest.approx(9.0, abs=0.01), (
         "Period 2: bond B debited 1.0 as coverage source"
     )
+
+
+# ---------------------------------------------------------------------------
+# RG5-B1: Validator rejects incompatible coverage_mode / rule_type combos
+# ---------------------------------------------------------------------------
+
+
+def test_pay_interest_with_principal_acceleration_rejected():
+    with pytest.raises(Exception, match="PAY_INTEREST cannot use.*PRINCIPAL_ACCELERATION"):
+        DealDefinition(
+            deal_name="IncompatMode",
+            bonds=[
+                BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=5.0, notional=100.0),
+                BondDef(name="B", kind=TrancheKind.CASH_PAY, coupon=0.0, notional=50.0),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="bad",
+                    rule_type=RuleType.PAY_INTEREST,
+                    order=0,
+                    from_sources=["B"],
+                    to_targets=["A"],
+                    coverage_mode=CoverageMode.PRINCIPAL_ACCELERATION,
+                ),
+                RuleNode(rule_id="r", rule_type=RuleType.PAY_RESIDUAL, order=1,
+                         from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )
+
+
+def test_pay_principal_with_interest_shortfall_rejected():
+    with pytest.raises(Exception, match="PAY_PRINCIPAL cannot use.*INTEREST_SHORTFALL"):
+        DealDefinition(
+            deal_name="IncompatMode2",
+            bonds=[
+                BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=0.0, notional=100.0),
+                BondDef(name="B", kind=TrancheKind.CASH_PAY, coupon=0.0, notional=50.0),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="bad",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=0,
+                    from_sources=["B"],
+                    to_targets=["A"],
+                    coverage_mode=CoverageMode.INTEREST_SHORTFALL,
+                ),
+                RuleNode(rule_id="r", rule_type=RuleType.PAY_RESIDUAL, order=1,
+                         from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )
+
+
+# ---------------------------------------------------------------------------
+# RG5-B2: Validator rejects non-NORMAL coverage_mode targeting accounts
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_mode_cannot_target_account():
+    with pytest.raises(Exception, match="cannot target account"):
+        DealDefinition(
+            deal_name="AccountTarget",
+            bonds=[
+                BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=5.0, notional=100.0),
+                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+            ],
+            accounts=[AccountDef(name="RESERVE")],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="bad_target",
+                    rule_type=RuleType.PAY_INTEREST,
+                    order=0,
+                    from_sources=["A"],
+                    to_targets=["RESERVE"],
+                    coverage_mode=CoverageMode.INTEREST_SHORTFALL,
+                ),
+                RuleNode(rule_id="r", rule_type=RuleType.PAY_RESIDUAL, order=1,
+                         from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )

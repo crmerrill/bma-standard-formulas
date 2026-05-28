@@ -103,7 +103,9 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
     migrated = deepcopy(payload)
 
     # ── Stamp the output with the current schema version ─────────────────────
-    migrated.setdefault("schema_version", SCHEMA_VERSION)
+    # Always overwrite: any payload that has been through migrate_deal_payload
+    # is now in 2.0 form regardless of what version was persisted.
+    migrated["schema_version"] = SCHEMA_VERSION
 
     # ── Account hard-cut fields ──────────────────────────────────────────────
     for acct in migrated.get("accounts", []) or []:

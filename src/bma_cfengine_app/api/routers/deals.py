@@ -274,13 +274,19 @@ async def list_deals():
 
 @router.get("/deals/{deal_id}")
 async def get_deal(deal_id: str, version: int | None = Query(None)):
-    """Return a studio snapshot with all legacy IR fields normalized to 2.0 form.
+    """Return a studio snapshot with legacy IR fields normalized to 2.0 form.
 
-    Normalization runs `_normalize_legacy_studio_ir` + `migrate_deal_payload`
-    on the snapshot's `ir` block before returning so UI pages that read `kind`,
-    `account_category`, `notional`, `relations`, etc. always see 2.0-shaped IR
-    regardless of when the deal was saved.  The raw snapshot file is NOT
-    modified — normalization is applied in memory on each GET.
+    The raw snapshot file is NOT modified. Normalization is applied in memory
+    on each GET so the UI always receives 2.0-canonical `kind`, `account_category`,
+    `notional`, `relations`, etc., regardless of when the deal was saved.
+
+    Response shape:
+      - `ir`: the normalized IR (always present)
+      - `ir_display_normalized`: true when normalization was applied
+      - `ir_original_schema_version`: the schema_version field as persisted on disk
+      - `normalization_error`: present when normalization encountered an error;
+        in that case `ir` contains the best-effort partial normalization and
+        the error detail explains what manual fix is needed.
     """
     try:
         snapshot = load_studio_snapshot(deal_id, version=version)
@@ -294,15 +300,33 @@ async def get_deal(deal_id: str, version: int | None = Query(None)):
     if not isinstance(raw_ir, dict):
         return snapshot
 
+    original_schema_version = raw_ir.get("schema_version")
+    normalization_error: str | None = None
+    migrated_ir: dict = raw_ir
+
     try:
         normalized_ir = _normalize_legacy_studio_ir(raw_ir)
         migrated_ir = migrate_deal_payload(normalized_ir)
-    except Exception:
-        # If migration fails (e.g. ambiguous PAY_FROM_RESERVE), return the
-        # raw snapshot so the UI can still display it and the user can fix it.
-        return snapshot
+    except ValueError as exc:
+        # ValueError from migrate_deal_payload means an ambiguous field that
+        # requires manual intervention (e.g. PAY_FROM_RESERVE).  Return the
+        # best-effort normalized form (pre-migration) plus an actionable error.
+        normalization_error = str(exc)
+        try:
+            migrated_ir = _normalize_legacy_studio_ir(raw_ir)
+        except Exception:
+            migrated_ir = raw_ir
+    except Exception as exc:
+        normalization_error = f"Unexpected normalization error: {exc}"
+        migrated_ir = raw_ir
 
-    return {**snapshot, "ir": migrated_ir}
+    return {
+        **snapshot,
+        "ir": migrated_ir,
+        "ir_display_normalized": migrated_ir is not raw_ir,
+        "ir_original_schema_version": original_schema_version,
+        **({"normalization_error": normalization_error} if normalization_error else {}),
+    }
 
 
 @router.post("/deals")
@@ -350,15 +374,26 @@ def _normalize_legacy_studio_ir(raw_ir: Any) -> dict[str, Any]:
     if not isinstance(raw_ir, dict):
         return {}
 
+    # Only normalize known IR sections. Opaque metadata fields like
+    # `studio_workspace_state`, `solver_presets`, `run_history`, etc. must
+    # not be walked — their internal structure is uncontrolled and any key
+    # that happens to match a legacy field name (e.g. `kind`, `rule_type`,
+    # `from_sources`) would be silently rewritten.
+    _NORMALIZABLE_IR_KEYS = frozenset({
+        "bonds", "accounts", "fees", "triggers", "waterfall_rules",
+        "calculations", "collateral_groups", "source_formulas",
+    })
+
     def normalize_node(node: Any) -> Any:
         if isinstance(node, list):
             return [normalize_node(item) for item in node]
         if not isinstance(node, dict):
             return node
 
-        next_node: dict[str, Any] = {
-            key: normalize_node(value) for key, value in node.items()
-        }
+        next_node: dict[str, Any] = {k: v for k, v in node.items()}
+        for key in list(next_node.keys()):
+            if isinstance(next_node[key], (dict, list)):
+                next_node[key] = normalize_node(next_node[key])
 
         basis = next_node.get("basis_type")
         if isinstance(basis, str) and basis in _LEGACY_FEE_BASIS_MAP:
@@ -429,7 +464,15 @@ def _normalize_legacy_studio_ir(raw_ir: Any) -> dict[str, Any]:
 
         return next_node
 
-    return normalize_node(raw_ir)
+    # Build the result: only recurse into known IR sections; copy all other
+    # top-level keys (workspace state, solver presets, metadata) unchanged.
+    result: dict[str, Any] = {}
+    for key, value in raw_ir.items():
+        if key in _NORMALIZABLE_IR_KEYS:
+            result[key] = normalize_node(value)
+        else:
+            result[key] = value
+    return result
 
 
 def _build_inputs(

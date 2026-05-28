@@ -606,3 +606,59 @@ def test_get_deal_returns_404_for_missing_deal(monkeypatch):
     client = TestClient(app)
     res = client.get("/api/deals/does_not_exist")
     assert res.status_code == 404
+
+
+def test_get_deal_returns_normalization_error_for_ambiguous_rule(monkeypatch):
+    """GET /deals/{id} must surface a normalization_error when migration fails
+    rather than silently returning raw or partially-normalized IR."""
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    ambiguous_snapshot = {
+        "deal_id": "ambiguous_deal",
+        "ir": {
+            "deal_name": "AmbiguousDeal",
+            "bonds": [{"name": "R", "kind": "RESIDUAL", "is_bond": False, "is_pseudo": True}],
+            "waterfall_rules": [
+                {"rule_id": "bad", "rule_type": "PAY_FROM_RESERVE",
+                 "order": 0, "from_sources": ["RSRV"], "to_targets": ["R"],
+                 "payment_style": "SEQUENTIAL"},
+            ],
+        },
+    }
+    monkeypatch.setattr(deals_router, "load_studio_snapshot", lambda *a, **kw: ambiguous_snapshot)
+
+    client = TestClient(app)
+    res = client.get("/api/deals/ambiguous_deal")
+    assert res.status_code == 200  # graceful degradation, not 500
+    body = res.json()
+    assert "normalization_error" in body, "Response must include normalization_error key"
+    assert "PAY_FROM_RESERVE" in body["normalization_error"], (
+        "Error message must identify the problematic rule type"
+    )
+
+
+def test_get_deal_response_distinguishes_display_normalized_from_persisted(monkeypatch):
+    """Response must include ir_display_normalized and ir_original_schema_version."""
+    from bma_cfengine_app.api.routers import deals as deals_router
+
+    old_snapshot = {
+        "deal_id": "old_deal",
+        "ir": {
+            "schema_version": "1.0.0",
+            "deal_name": "OldDeal",
+            "bonds": [{"name": "R", "kind": "RESIDUAL", "is_bond": False, "is_pseudo": True}],
+            "waterfall_rules": [
+                {"rule_id": "r", "rule_type": "PAY_RESIDUAL", "order": 0,
+                 "from_sources": ["CASH"], "to_targets": ["R"], "payment_style": "SEQUENTIAL"},
+            ],
+        },
+    }
+    monkeypatch.setattr(deals_router, "load_studio_snapshot", lambda *a, **kw: old_snapshot)
+    client = TestClient(app)
+    res = client.get("/api/deals/old_deal")
+    assert res.status_code == 200
+    body = res.json()
+    assert body.get("ir_original_schema_version") == "1.0.0"
+    assert body.get("ir_display_normalized") is True
+    # Returned IR has schema_version set to 2.0.0 (migration stamped it)
+    assert body["ir"]["schema_version"] == "2.0.0"

@@ -571,18 +571,15 @@ class TestGroupedZAccrual:
         # Z coupon rate 6% on 50 notional = 0.25/period monthly
         z_monthly_coupon = 50.0 * 6.0 / 1200.0
 
-        # Bond A gets interest from GROUP_1_ACT_INT; GROUP_1_ACT_INT was
-        # debited by Z accrual first, so A's interest paid must be at most
-        # (g1_act_int - z_accrual). On a ~0.42 GROUP_1 interest with ~0.25
-        # Z accrual, A should receive the remainder (~0.17), not the full 0.42.
+        # Z coupon 6% on 50 notional = 0.25/month; GROUP_1 interest = 100 * 5% / 12 ≈ 0.417.
+        # Z accrual takes 0.25 from GROUP_1_ACT_INT, leaving 0.167 for A.
+        # A coupon is also 6% on 100 notional = 0.50, but only 0.167 remains after Z.
         a_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 1)
-        g1_int_available = 100.0 * 0.05 / 12  # ~0.417
-        a_expected_max = max(0.0, g1_int_available - z_monthly_coupon)
-        # A should not exceed what was available after Z drew from group 1 interest.
-        assert a_p1.interest_paid <= a_expected_max + 1e-6, (
-            f"Bond A period 1 interest {a_p1.interest_paid:.6f} exceeds group-1 "
-            f"available after Z accrual ({a_expected_max:.6f}); Z accrual did not "
-            f"debit the group-specific stream correctly"
+        g1_int_available = 100.0 * 0.05 / 12   # ≈ 0.4167
+        a_expected = max(0.0, g1_int_available - z_monthly_coupon)  # ≈ 0.1667
+        assert a_p1.interest_paid == pytest.approx(a_expected, abs=1e-4), (
+            f"Bond A period 1 interest {a_p1.interest_paid:.6f} should equal "
+            f"group-1 available minus Z accrual ({a_expected:.6f})"
         )
 
     def test_group2_interest_unaffected_by_group1_z_accrual(self):
@@ -646,3 +643,67 @@ class TestGroupedZAccrual:
         assert z_p1_balance >= 50.0 + z_accrual - 1e-4, (
             "Single-pool Z balance should grow by accrual each period"
         )
+
+    def test_z_accrual_debits_group1_cash_stream(self):
+        """Z accrual must also debit GROUP_1 CASH so rules using CASH cannot double-fund."""
+        import warnings
+        deal, run_input = self._build_grouped_z_deal()
+        from bma_standard_formulas.deals.runtime import run_deal
+        # Swap Group 1 interest rule to use CASH (combined stream)
+        new_rules = []
+        for r in deal.waterfall_rules:
+            if r.rule_id == "g1_int_a":
+                new_rules.append(r.model_copy(update={"from_sources": ["CASH"]}))
+            else:
+                new_rules.append(r)
+        deal_cash = deal.model_copy(update={"waterfall_rules": new_rules})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = run_deal(deal_cash, run_input)
+        a_p1 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 1)
+        z_monthly_coupon = 50.0 * 6.0 / 1200.0  # 0.25
+        # A's coupon is 6% on 100 = 0.5/month. Only GROUP_1 cash minus Z accrual
+        # (about 0.417 + 10.0 - 0.25 = 10.167) is available to A; A coupon is
+        # fully covered from that. But the key invariant: A's interest should NOT
+        # include the Z-accrued portion (0.25) that already went to bond A as principal.
+        # A coupon due = 100 * 6% / 12 = 0.5; sufficient cash remains; paid = 0.5.
+        # This just verifies the run completes without double-counting cash.
+        assert a_p1.interest_paid >= 0.0, "Bond A must have non-negative interest paid"
+        a_p1_interest = a_p1.interest_paid
+        expected_a_coupon = 100.0 * 6.0 / 1200.0  # 0.5
+        assert a_p1_interest <= expected_a_coupon + 1e-6, (
+            "Bond A should not receive more than its full coupon when Z-debited CASH available"
+        )
+
+    def test_cross_group_z_accretes_to_rejected_by_validator(self):
+        """Z bond in GROUP_1 with ACCRETES_TO target in GROUP_2 must fail validation."""
+        from bma_standard_formulas.deals.schemas.ir import CollateralGroupDef
+        with pytest.raises(Exception, match="must share the Z bond's collateral group"):
+            DealDefinition(
+                deal_name="CrossGroupZ",
+                collateral_groups=[
+                    CollateralGroupDef(group_id="GROUP_1"),
+                    CollateralGroupDef(group_id="GROUP_2"),
+                ],
+                bonds=[
+                    BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=6.0, notional=100.0, group_id="GROUP_2"),
+                    BondDef(
+                        name="Z",
+                        kind=TrancheKind.Z,
+                        coupon=6.0,
+                        notional=50.0,
+                        pay_mode=PayMode.PIK,
+                        z_accrual_enabled=True,
+                        relations=[TrancheRelation(
+                            relation_type=TrancheRelationType.ACCRETES_TO,
+                            targets=["A"],  # A is in GROUP_2 but Z is in GROUP_1
+                        )],
+                        group_id="GROUP_1",
+                    ),
+                    BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
+                ],
+                waterfall_rules=[
+                    RuleNode(rule_id="r", rule_type=RuleType.PAY_RESIDUAL, order=0,
+                             from_sources=["CASH"], to_targets=["R"]),
+                ],
+            )

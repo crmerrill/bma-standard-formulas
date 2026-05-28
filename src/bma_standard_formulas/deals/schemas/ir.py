@@ -426,6 +426,25 @@ class DealDefinition(BaseModel):
                     f"Rule {rule.rule_id!r}: coverage_mode {rule.coverage_mode.value} "
                     "is only supported on PAY_INTEREST and PAY_PRINCIPAL"
                 )
+            # Enforce which coverage modes are valid for each rule type.
+            # PAY_INTEREST may only use NORMAL or INTEREST_SHORTFALL.
+            # PAY_PRINCIPAL may only use NORMAL or PRINCIPAL_ACCELERATION.
+            if (
+                rule.rule_type == RuleType.PAY_INTEREST
+                and rule.coverage_mode == CoverageMode.PRINCIPAL_ACCELERATION
+            ):
+                errors.append(
+                    f"Rule {rule.rule_id!r}: PAY_INTEREST cannot use "
+                    "coverage_mode=PRINCIPAL_ACCELERATION; use INTEREST_SHORTFALL or NORMAL"
+                )
+            if (
+                rule.rule_type == RuleType.PAY_PRINCIPAL
+                and rule.coverage_mode == CoverageMode.INTEREST_SHORTFALL
+            ):
+                errors.append(
+                    f"Rule {rule.rule_id!r}: PAY_PRINCIPAL cannot use "
+                    "coverage_mode=INTEREST_SHORTFALL; use PRINCIPAL_ACCELERATION or NORMAL"
+                )
             if rule.coverage_mode != CoverageMode.NORMAL:
                 if len(rule.from_sources) != 1:
                     errors.append(
@@ -438,6 +457,15 @@ class DealDefinition(BaseModel):
                         errors.append(
                             f"Rule {rule.rule_id!r}: coverage_mode {rule.coverage_mode.value} "
                             "requires from_source to be a bond/account name"
+                        )
+                # Non-NORMAL coverage only makes sense for bond targets because
+                # the runtime paths (pay_interest_from_reserve / pay_principal_from_reserve)
+                # only handle bonds. Targeting an account would produce a silent no-op.
+                for tgt in rule.to_targets:
+                    if tgt in account_names:
+                        errors.append(
+                            f"Rule {rule.rule_id!r}: coverage_mode {rule.coverage_mode.value} "
+                            f"cannot target account {tgt!r}; targets must be bonds"
                         )
             for src in rule.from_sources:
                 if src not in valid_sources:
@@ -612,6 +640,20 @@ class DealDefinition(BaseModel):
                     errors.append(
                         f"Bond {bond.name!r}: kind Z requires pay_mode=PIK"
                     )
+                # In grouped deals, a Z bond's ACCRETES_TO targets must reside
+                # in the same collateral group so the accrual only debits that
+                # group's interest stream (not a different group's stream).
+                if group_ids and bond.group_id is not None:
+                    for target_name in accretes_rel_targets:
+                        target_bond = next((b for b in self.bonds if b.name == target_name), None)
+                        if target_bond is not None and target_bond.group_id != bond.group_id:
+                            errors.append(
+                                f"Bond {bond.name!r}: ACCRETES_TO target "
+                                f"{target_name!r} has group_id "
+                                f"{target_bond.group_id!r} but Z bond is in "
+                                f"group {bond.group_id!r}; ACCRETES_TO targets "
+                                "must share the Z bond's collateral group"
+                            )
                 if (
                     bond.accrual_start_period is not None
                     and bond.accrual_end_period is not None

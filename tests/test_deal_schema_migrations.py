@@ -442,12 +442,13 @@ def test_migration_stamps_schema_version():
     assert migrated.get("schema_version") == SCHEMA_VERSION
 
 
-def test_migration_does_not_overwrite_existing_schema_version():
-    """If schema_version is already set, migration must not downgrade it."""
+def test_migration_always_stamps_current_schema_version():
+    """After migration, schema_version must always be the current version.
+    A persisted 1.0.0 payload becomes 2.0.0 after migration."""
     payload = _minimal_deal()
-    payload["schema_version"] = "2.0.0"
+    payload["schema_version"] = "1.0.0"
     migrated = migrate_deal_payload(payload)
-    assert migrated["schema_version"] == "2.0.0"
+    assert migrated["schema_version"] == SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
