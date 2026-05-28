@@ -65,19 +65,23 @@ from bma_standard_formulas.deals.schemas.ir import (
 
 def _series_collateral(
     *,
-    fcc_per_period: float,       # Finance Charge Collections allocated to this series
+    fcc_per_period: float,        # Finance Charge Collections allocated to this series
     principal_per_period: float,  # Principal Collections allocated to this series
+    series_invested_amount: float = 500.0,  # Series' Invested Amount (constant revolving balance)
     n: int,
 ) -> DealRunInput:
     """Collateral representing a series' PRE-ALLOCATED share of master trust cashflows.
 
-    In a real master trust, this would be computed by the trust orchestrator as:
+    This is aggregate (pooled) collateral at the series level — already the
+    allocated share, as computed by the external trust orchestrator:
         fcc_per_period = trust_total_fcc × (series_invested_amount / total_trust_balance)
+
+    PAIRED (per-loan) input is not needed here because the trust orchestrator
+    works at the aggregate series level, not the individual receivable level.
     """
     interest = np.array([0.0] + [fcc_per_period] * (n - 1))
     principal = np.array([0.0] + [principal_per_period] * (n - 1))
-    # Use a constant balance to represent the series' revolving invested amount.
-    bal = np.full(n, fcc_per_period * 12 / 0.20)  # approximate pool at 20% yield
+    bal = np.full(n, series_invested_amount)
     cf = CollateralCashflows(
         cfdate=list(range(n)),
         balance=bal.tolist(), principal=principal.tolist(), interest=interest.tolist(),
@@ -161,7 +165,13 @@ class TestSingleSeriesMasterTrust:
       6. Residual to excess spread / seller
     """
 
-    def _build_series_deal(self, n: int = 12) -> tuple[DealDefinition, DealRunInput]:
+    def _build_series_deal(
+        self,
+        n: int = 12,
+        fcc_per_period: float = 100.0,
+        principal_per_period: float = 50.0,
+        series_invested_amount: float = 500.0,
+    ) -> tuple[DealDefinition, DealRunInput]:
         deal = DealDefinition(
             deal_name="Series2024A",
             series_id="TEST-TRUST-2024-A",
@@ -239,12 +249,10 @@ class TestSingleSeriesMasterTrust:
                          from_sources=["ACT_INT"], to_targets=["R"]),
             ],
         )
-        # Series 2024-A receives its allocated share from the trust orchestrator:
-        # - FCC: $100/period (50% of trust's $200 monthly FCC)
-        # - Principal: $50/period (50% of trust's $100 monthly principal)
         run_input = _series_collateral(
-            fcc_per_period=100.0,
-            principal_per_period=50.0,
+            fcc_per_period=fcc_per_period,
+            principal_per_period=principal_per_period,
+            series_invested_amount=series_invested_amount,
             n=n,
         )
         return deal, run_input
@@ -305,64 +313,43 @@ class TestSingleSeriesMasterTrust:
             )
 
     def test_p_to_i_fires_when_fcc_is_insufficient(self):
-        """When FCC does not fully cover Class A coupon, P-to-I draws from Class B."""
-        # Build a deal with very low FCC (insufficient to cover A coupon).
+        """Stress test: when FCC does not fully cover Class A coupon, P-to-I draws from B.
+        Uses the standard _build_series_deal with reduced FCC (1.0 < A coupon 2.0).
+        """
         # A coupon = 400 × 6% / 12 = 2.0; FCC = 1.0 (not enough).
-        deal = DealDefinition(
-            deal_name="InsufficientFCC",
-            series_id="TEST-2024-STRESS",
-            deal_knobs={},
-            bonds=[
-                BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=6.0, notional=400.0,
-                        seniority=1, required_subordination_pct=10.0),
-                BondDef(name="B", kind=TrancheKind.CASH_PAY, coupon=0.0, notional=75.0,
-                        nla_starting_balance=75.0, seniority=2),
-                BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),
-            ],
-            waterfall_rules=[
-                RuleNode(rule_id="a_int", rule_type=RuleType.PAY_INTEREST, order=0,
-                         from_sources=["ACT_INT"], to_targets=["A"]),
-                RuleNode(
-                    rule_id="p_to_i",
-                    rule_type=RuleType.PAY_INTEREST,
-                    order=1,
-                    from_sources=["B"],
-                    to_targets=["A"],
-                    coverage_mode=CoverageMode.INTEREST_SHORTFALL,
-                    max_amount_expr=(
-                        "A_available_subordination - A_required_subordination "
-                        "if A_available_subordination > A_required_subordination else 0"
-                    ),
-                ),
-                RuleNode(rule_id="resid", rule_type=RuleType.PAY_RESIDUAL, order=2,
-                         from_sources=["CASH"], to_targets=["R"]),
-            ],
+        deal, run_input = self._build_series_deal(
+            n=8,
+            fcc_per_period=1.0,           # insufficient — forces P-to-I
+            principal_per_period=0.0,
+            series_invested_amount=500.0,
         )
-        # FCC = 1.0/period (insufficient for A coupon of 2.0).
-        run_input = _series_collateral(fcc_per_period=1.0, principal_per_period=0.0, n=8)
         result = run_deal(deal, run_input)
 
-        # Period 2: A shortfall from period 1 = 1.0 (FCC 1.0 < coupon 2.0 accrued).
-        # Wait — period 1: FCC covers 1.0 of the 2.0 coupon; shortfall = 1.0.
-        # At period 2 start: int_shortfall = 1.0. P-to-I fires: B_available=75,
-        # A_required=40 (10% of 400), headroom=35 >> 1.0.
+        # Period 2 mechanics (FCC=1.0, A coupon=2.0):
+        # - A accumulated shortfall from period 1 = 1.0 (FCC covered only 1.0 of 2.0)
+        # - Period 2 FCC covers 1.0 of accumulated shortfall
+        # - P-to-I from B covers remaining 1.0 shortfall → A gets 2.0 total
         a_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "A" and r.period == 2)
-        # Total interest at p2: FCC covers 1.0 prior shortfall + P-to-I covers 1.0 = 2.0 total.
         assert a_p2.interest_paid == pytest.approx(2.0, abs=0.1), (
             f"Period 2: FCC (1.0 shortfall) + P-to-I (1.0) = 2.0 — got {a_p2.interest_paid:.4f}"
         )
 
-        # B NLA depletes by P-to-I payments.
+        # B's economic balance depletes by P-to-I payments.
+        # Note: B's NLA may be restored in the same period by REIMBURSE_NLA (SPREAD_ACCT has 10.0).
+        # Economic balance is the right signal here — it reflects the actual debit.
         b_p2 = next(r for r in result.bond_cashflows if r.tranche_id == "B" and r.period == 2)
-        assert b_p2.nla_balance is not None and b_p2.nla_balance < 75.0, (
-            "B NLA must deplete when P-to-I draws from B"
+        assert b_p2.end_balance < 75.0, (
+            f"B economic balance must deplete when P-to-I draws from B (got {b_p2.end_balance:.2f})"
         )
 
-    def test_series_id_preserved_in_output(self):
-        """series_id is a metadata field; run_deal completes without error for a labelled series."""
+    def test_run_deal_accepts_series_id_labelled_deal(self):
+        """run_deal must accept a DealDefinition with series_id set without error.
+        Note: series_id is metadata-only and does NOT appear in ScenarioOutputBundle;
+        it is used by the future TrustOrchestrator to identify series.
+        """
         deal, run_input = self._build_series_deal(n=4)
         assert deal.series_id == "TEST-TRUST-2024-A"
         result = run_deal(deal, run_input)
-        # Just verify the run completes with the correct bond count.
+        # Verify the correct bond set is present in output.
         bond_names = {r.tranche_id for r in result.bond_cashflows}
         assert {"A", "B", "C", "R"} == bond_names

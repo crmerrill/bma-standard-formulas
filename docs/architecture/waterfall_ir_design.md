@@ -2001,16 +2001,37 @@ yet exist. The full mechanics are:
 
 **Architecture for the deferred inter-deal layer:**
 
+The cross-series sharing algorithm must operate at the *period level* because
+excess and shortfall are produced by each series' Priority of Payments waterfall
+— they are not known before the waterfall runs. The correct structure is:
+
 ```
-TrustOrchestrator (future):
+TrustOrchestrator (future) — per-period loop:
   1. Run trust-level cashflow projections (all receivables, full pool)
-  2. For each period:
-     a. Compute total FCC, total principal, total losses
-     b. For each series: allocate FCC = fcc × (series_NLA / total_NLA)
-     c. Apply Shared Excess FCC / Principal reallocation across series
-     d. Call run_deal(series_def, allocated_collateral) for each series
-  3. Aggregate outputs and compute cross-series metrics
+  2. For each period i:
+     a. Compute total FCC_i, total principal_i, total losses_i.
+     b. Base allocation: each series receives
+           series_FCC_i = FCC_i × (series_NLA[i] / total_NLA[i])
+        (similarly for principal).
+     c. Run each series' Priority of Payments waterfall to the "sharing
+        boundary" — the point where excess FCC / excess principal is
+        determined. This produces, for each series, the excess FCC it
+        can contribute and the FCC shortfall it needs.
+     d. Cross-series sharing solver: iterate across series, moving excess
+        FCC from surplus series to deficit series up to each deficit series'
+        Required Investor Yield. This may require multiple passes if
+        there are cascading dependencies (Series A shortfall draws from B
+        excess, B then has less to contribute to C, etc.).
+     e. Resume each series' waterfall with the post-sharing cash amounts
+        to compute the final period cashflows.
+  3. Aggregate outputs and compute cross-series diagnostics (trust excess
+     spread, portfolio yield trigger across all series, etc.).
 ```
+
+This structure means `run_deal()` as currently implemented handles step 2e
+(one series, one period's worth of Priority of Payments). Steps 2a-2d are
+the missing trust-level layer. Each `DealDefinition` (series) is already
+correct for 2e; the orchestrator just needs to produce the right inputs.
 
 Each `DealDefinition` (series) is already a complete model of the series-
 level waterfall. The missing piece is the orchestrator that produces the

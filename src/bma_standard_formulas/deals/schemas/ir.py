@@ -357,11 +357,12 @@ class DealDefinition(BaseModel):
 
     # Phase 8: series identity for master trust series-level isolation.
     # A series_id labels this DealDefinition as one series within a master trust.
-    # It is metadata only — cross-series sharing of Finance Charge Collections
-    # and Principal Collections requires a separate inter-deal sharing layer
-    # (not implemented in Phase 8). Single-series CC deals are fully modelable
-    # using a single DealDefinition with appropriate collateral_groups.
-    series_id: str | None = None
+    # Metadata only — does not change runtime behavior. Used by the future
+    # inter-deal TrustOrchestrator to identify which series this DealDefinition
+    # represents when computing cross-series sharing of excess FCC/principal.
+    # Single-series CC deals receive their PRE-ALLOCATED share of master trust
+    # cash flows as collateral input; no collateral_groups are needed for this.
+    series_id: str | None = Field(default=None, min_length=1)
 
     bonds: list[BondDef] = Field(min_length=1)
     accounts: list[AccountDef] = Field(default_factory=list)
