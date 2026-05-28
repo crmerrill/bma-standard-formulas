@@ -378,6 +378,13 @@ class DealDefinition(BaseModel):
     # cash flows as collateral input; no collateral_groups are needed for this.
     series_id: str | None = Field(default=None, min_length=1)
 
+    # Phase 7 / SR7: Credit-card Discount Option.
+    # Pre-waterfall reclassification of a percentage of principal collections as
+    # finance charges. First-class typed field replacing the old deal_knobs escape
+    # hatch. Range 0.0–100.0 percent; defaults to 0 (option inactive).
+    # deal_knobs["discount_factor"] still honoured in the runtime as a fallback.
+    discount_factor_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+
     # Phase 9: deal-state machine for CC master trust revolving / amortization.
     # When set, names a TriggerNode whose FAIL state transitions the deal to
     # EARLY_AMORTIZATION. The runtime exposes `deal_state` in the expression

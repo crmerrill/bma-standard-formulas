@@ -107,6 +107,18 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
     # is now in 2.0 form regardless of what version was persisted.
     migrated["schema_version"] = SCHEMA_VERSION
 
+    # ── SR7: Migrate deal_knobs.discount_factor → discount_factor_pct ────────
+    # The discount option was originally stored in deal_knobs as an escape hatch;
+    # it is now a first-class typed field. Migrate old payloads transparently.
+    if "discount_factor_pct" not in migrated or migrated.get("discount_factor_pct") is None:
+        knobs = migrated.get("deal_knobs")
+        if isinstance(knobs, dict) and isinstance(knobs.get("discount_factor"), (int, float)):
+            migrated["discount_factor_pct"] = float(knobs["discount_factor"])
+            # Remove from deal_knobs to avoid duplicate processing.
+            knobs_copy = dict(knobs)
+            knobs_copy.pop("discount_factor")
+            migrated["deal_knobs"] = knobs_copy
+
     # ── Account hard-cut fields ──────────────────────────────────────────────
     for acct in migrated.get("accounts", []) or []:
         if isinstance(acct, dict):

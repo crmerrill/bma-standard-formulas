@@ -1,7 +1,7 @@
 """Phase 7: Discount Option + Funding Account accumulation period semantics.
 
 Tests:
-- Discount Option (deal_knobs.discount_factor) reclassifies principal as interest
+- Discount Option (discount_factor_pct typed field) reclassifies principal as interest
   in the ACT_PRIN / ACT_INT streams; combined CASH is unaffected
 - Funding-account minimum_schedule drives accumulation-period deposit targets
 """
@@ -70,8 +70,8 @@ def test_discount_option_reclassifies_principal_as_interest():
     """
     deal = DealDefinition(
         deal_name="DiscountOptionTest",
-        # 20% of principal reclassified as finance charges.
-        deal_knobs={"discount_factor": 20.0},
+        # 20% of principal reclassified as finance charges (typed field, SR7).
+        discount_factor_pct=20.0,
         bonds=[
             BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=6.0, notional=100.0),
             BondDef(name="B", kind=TrancheKind.CASH_PAY, coupon=0.0, notional=100.0),
@@ -124,7 +124,7 @@ def test_discount_option_does_not_change_combined_cash_stream():
         ],
     )
     deal_with_discount = deal_no_discount.model_copy(
-        update={"deal_name": "WithDiscount", "deal_knobs": {"discount_factor": 50.0}}
+        update={"deal_name": "WithDiscount", "discount_factor_pct": 50.0}
     )
     run_input = _split_stream_collateral(balance=100.0, monthly_interest=5.0,
                                           monthly_principal=10.0, n=4)
@@ -142,10 +142,10 @@ def test_discount_option_does_not_change_combined_cash_stream():
 
 
 def test_discount_option_zero_is_noop():
-    """discount_factor=0 must produce identical results to no discount_factor at all."""
+    """discount_factor_pct=0 must produce identical results to default (0)."""
     deal_zero = DealDefinition(
         deal_name="ZeroDiscount",
-        deal_knobs={"discount_factor": 0.0},
+        discount_factor_pct=0.0,
         bonds=[
             BondDef(name="A", kind=TrancheKind.CASH_PAY, coupon=6.0, notional=50.0),
             BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True),

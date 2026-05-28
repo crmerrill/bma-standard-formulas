@@ -224,41 +224,6 @@ def pay_from_reserve(
     return pmt
 
 
-def pay_recourse_interest(
-    from_bond_principal: np.ndarray,
-    from_bond_balance: np.ndarray,
-    to_bond_interest: np.ndarray,
-    to_bond_opt_interest: np.ndarray,
-    to_bond_int_shortfall: np.ndarray,
-    i: int,
-    *,
-    shortfall: bool = False,
-) -> float:
-    target = to_bond_int_shortfall if shortfall else to_bond_opt_interest
-    pmt = max(0.0, target[i])
-    to_bond_interest[i] += pmt
-    target[i] -= pmt
-    from_bond_principal[i] -= pmt
-    from_bond_balance[i] += pmt
-    return pmt
-
-
-def pay_recourse_principal(
-    from_bond_principal: np.ndarray,
-    from_bond_balance: np.ndarray,
-    to_bond_principal: np.ndarray,
-    to_bond_balance: np.ndarray,
-    i: int,
-    amount: float,
-) -> float:
-    pmt = max(0.0, amount)
-    to_bond_principal[i] += pmt
-    to_bond_balance[i] -= pmt
-    from_bond_principal[i] -= pmt
-    from_bond_balance[i] += pmt
-    return pmt
-
-
 # ---------------------------------------------------------------------------
 # Bond update functions — accept BondWorkspace directly (no dict bridge)
 # ---------------------------------------------------------------------------

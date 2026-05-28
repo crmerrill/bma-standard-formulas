@@ -2384,14 +2384,19 @@ def run_deal(
         principal_avail[i] = actual.act_prin[i]
         loss_avail[i] = actual.prin_loss[i]
 
-        # Phase 7: Discount Option — pre-waterfall reclassification of a
+        # Phase 7 / SR7: Discount Option — pre-waterfall reclassification of a
         # fraction of principal collections as finance charges (interest).
-        # deal_knobs.discount_factor (0-100, percent) controls the fraction.
+        # Reads from the typed `discount_factor_pct` field first (promoted in SR7);
+        # falls back to deal_knobs["discount_factor"] for backward compatibility.
         # The combined CASH stream is unchanged; only the split streams shift.
         # Applied to both aggregate and per-group streams so group-scoped rules
         # see the reclassification consistently.
-        _raw_df = deal.deal_knobs.get("discount_factor")
-        discount_factor_pct = float(_raw_df) if isinstance(_raw_df, (int, float)) and _raw_df is not None else 0.0
+        _typed_df = getattr(deal, "discount_factor_pct", None)
+        if _typed_df is not None and float(_typed_df) > 0.0:
+            discount_factor_pct = float(_typed_df)
+        else:
+            _raw_df = deal.deal_knobs.get("discount_factor")
+            discount_factor_pct = float(_raw_df) if isinstance(_raw_df, (int, float)) and _raw_df is not None else 0.0
         discount_factor_pct = max(0.0, min(100.0, discount_factor_pct))
         if discount_factor_pct > 0.0:
             discount_amt = float(principal_avail[i]) * discount_factor_pct / 100.0

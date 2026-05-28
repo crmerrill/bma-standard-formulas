@@ -175,8 +175,7 @@ class TestSingleSeriesMasterTrust:
         deal = DealDefinition(
             deal_name="Series2024A",
             series_id="TEST-TRUST-2024-A",
-            # 2% discount option: reclassifies 2% of principal as finance charges.
-            deal_knobs={"discount_factor": 2.0},
+            discount_factor_pct=2.0,
             bonds=[
                 BondDef(
                     name="A",
