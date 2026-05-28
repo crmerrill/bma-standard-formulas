@@ -143,10 +143,17 @@ def test_rolling_window_trigger_fires_when_average_exceeds_threshold():
 
     trigger_rows = {r.period: r for r in result.trigger_state_history
                     if r.trigger_id == "ExcessSpread"}
-    # With a constant 5% and threshold 2%, trigger should ALWAYS fire.
-    for p in range(1, n):
+    # With window=3: periods 1-2 are blocked (window not yet full → metric=0 < threshold=2%).
+    # From period 3 onwards: rolling average = 5% > 2% → trigger fires.
+    assert trigger_rows[1].state.value == "pass", (
+        "Period 1: window not full — trigger must not fire yet"
+    )
+    assert trigger_rows[2].state.value == "pass", (
+        "Period 2: window still not full — trigger must not fire yet"
+    )
+    for p in range(3, n):
         assert trigger_rows[p].state.value == "fail", (
-            f"Period {p}: trigger should fire (excess_spread=5% > threshold=2%)"
+            f"Period {p}: window full, excess_spread=5% > threshold=2% — must fire"
         )
 
 
@@ -305,3 +312,116 @@ def test_deal_state_trigger_validation_rejects_missing_trigger():
                          from_sources=["CASH"], to_targets=["R"]),
             ],
         )
+
+
+def test_duplicate_trigger_names_rejected():
+    """Trigger names must be unique — the state machine keys by name."""
+    with pytest.raises(Exception, match="duplicate trigger names"):
+        DealDefinition(
+            deal_name="DuplicateTriggers",
+            bonds=[BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True)],
+            triggers=[
+                TriggerNode(name="LossTrigger", metric_type=TriggerMetricType.CUSTOM,
+                            calculation_ref=None, threshold_value=0.05),
+                TriggerNode(name="LossTrigger", metric_type=TriggerMetricType.CUSTOM,
+                            calculation_ref=None, threshold_value=0.10),
+            ],
+            waterfall_rules=[
+                RuleNode(rule_id="r", rule_type=RuleType.PAY_RESIDUAL, order=0,
+                         from_sources=["CASH"], to_targets=["R"]),
+            ],
+        )
+
+
+def test_trigger_below_threshold_comparison():
+    """Triggers with comparison='<' fire when metric falls BELOW the threshold.
+    This is the correct polarity for excess-spread pay-out triggers."""
+    n = 6
+    deal = DealDefinition(
+        deal_name="BelowThreshold",
+        deal_state_trigger="ExcessSpreadFloor",
+        bonds=[BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True)],
+        triggers=[
+            TriggerNode(
+                name="ExcessSpreadFloor",
+                metric_type=TriggerMetricType.CUSTOM,
+                calculation_ref="excess_spread_pct",
+                threshold_value=5.0,   # floor: fire when excess spread < 5%
+                comparison="<",
+            ),
+        ],
+        waterfall_rules=[
+            RuleNode(rule_id="r", rule_type=RuleType.PAY_RESIDUAL, order=0,
+                     from_sources=["CASH"], to_targets=["R"]),
+        ],
+        deal_knobs={"excess_spread_pct": 3.0},  # 3% < 5% floor → trigger fires
+    )
+    run_input = _flat_collateral(balance=100.0, monthly_interest=3.0, monthly_loss=0.0, n=n)
+    result = run_deal(deal, run_input)
+    trigger_rows = {r.period: r for r in result.trigger_state_history
+                    if r.trigger_id == "ExcessSpreadFloor"}
+    assert trigger_rows[1].state.value == "fail", (
+        "Trigger must fire (3% < 5% floor with comparison='<')"
+    )
+    # Deal state must transition to EARLY_AMORTIZATION.
+    assert any(r.end_state == "EARLY_AMORTIZATION" for r in result.deal_state_history), (
+        "deal_state_history must record EARLY_AMORTIZATION transition"
+    )
+
+
+def test_deal_state_history_emitted_when_deal_has_triggers():
+    """deal_state_history must be populated for deals with triggers."""
+    n = 4
+    deal = DealDefinition(
+        deal_name="StateHistoryTest",
+        bonds=[BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True)],
+        triggers=[
+            TriggerNode(name="LossTrig", metric_type=TriggerMetricType.CUMULATIVE_LOSS,
+                        threshold_value=0.5),  # threshold very high — won't fire
+        ],
+        waterfall_rules=[
+            RuleNode(rule_id="r", rule_type=RuleType.PAY_RESIDUAL, order=0,
+                     from_sources=["CASH"], to_targets=["R"]),
+        ],
+    )
+    run_input = _flat_collateral(balance=100.0, monthly_interest=5.0, monthly_loss=0.0, n=n)
+    result = run_deal(deal, run_input)
+    assert len(result.deal_state_history) == n - 1, (
+        f"Expected {n-1} deal_state_history rows, got {len(result.deal_state_history)}"
+    )
+    for row in result.deal_state_history:
+        assert row.begin_state == "REVOLVING"
+        assert row.end_state == "REVOLVING"
+        assert row.transition_trigger is None
+
+
+def test_rolling_window_requires_full_window_before_firing():
+    """Trigger with window_periods=3 must not fire until 3 periods of data exist."""
+    n = 8
+    deal = DealDefinition(
+        deal_name="FullWindowRequired",
+        bonds=[BondDef(name="R", kind=TrancheKind.RESIDUAL, is_bond=False, is_pseudo=True)],
+        triggers=[
+            TriggerNode(
+                name="CumLoss3MA",
+                metric_type=TriggerMetricType.CUMULATIVE_LOSS,
+                threshold_value=0.01,  # 1% — would fire immediately at period 2 without window
+                window_periods=3,
+            ),
+        ],
+        waterfall_rules=[
+            RuleNode(rule_id="r", rule_type=RuleType.PAY_RESIDUAL, order=0,
+                     from_sources=["CASH"], to_targets=["R"]),
+        ],
+    )
+    # 3% loss/period — without window, trigger fires at period 1 (3% > 1%).
+    # With window=3, trigger blocked until period 3 (blocked due to partial window).
+    run_input = _flat_collateral(balance=100.0, monthly_interest=0.0, monthly_loss=3.0, n=n)
+    result = run_deal(deal, run_input)
+    trigger_rows = {r.period: r for r in result.trigger_state_history
+                    if r.trigger_id == "CumLoss3MA"}
+    # Periods 1-2: blocked (window not full, metric=0 < threshold=0.01).
+    assert trigger_rows[1].state.value == "pass", "Period 1: window not full, must not fire"
+    assert trigger_rows[2].state.value == "pass", "Period 2: window not full, must not fire"
+    # Period 3: window full (3 raw values); avg cum loss > threshold → fires.
+    assert trigger_rows[3].state.value == "fail", "Period 3: window full, must fire"

@@ -36,7 +36,7 @@ from .schemas.input import (
 from .schemas.ir import DealDefinition
 from .schemas.output_bond import BondCashflowRow
 from .schemas.output_bundle import ScenarioOutputBundle
-from .schemas.output_waterfall import DealAccountRow, TriggerStateRow, WaterfallTraceRow
+from .schemas.output_waterfall import DealAccountRow, DealStateRow, TriggerStateRow, WaterfallTraceRow
 from .tranche_behaviors import build_tranche_behavior_diagnostics
 
 
@@ -165,6 +165,10 @@ class ExecutionContext:
     # EARLY_AMORTIZATION). Starts at deal.initial_deal_state; transitions to
     # EARLY_AMORTIZATION when deal.deal_state_trigger fires.
     deal_state: str = DealStateType.REVOLVING.value
+    # Phase 9: per-trigger raw metric history for rolling-window averages.
+    # Key = trigger name; value = list of raw metric values in period order.
+    # Updated each period in _evaluate_triggers BEFORE averaging.
+    trigger_metric_history: dict[str, list] = field(default_factory=dict)
     virtual_sources: dict[str, np.ndarray] = field(default_factory=dict)
     cash_avail: np.ndarray | None = None
     # Independent pool-interest and pool-principal streams, populated each
@@ -221,6 +225,7 @@ class ExecutionContext:
     scheduled_constituents_by_group: dict[str, list[BMAScheduledCashflow]] = field(default_factory=dict)
     trace_buf: list[tuple] | None = None
     trigger_rows: list[TriggerStateRow] = field(default_factory=list)
+    deal_state_rows: list = field(default_factory=list)  # list[DealStateRow]
     # Per-period dictionary of `cash_at_<rule_id>` snapshots so a later rule
     # can anchor its `max_amount_expr` to the cash level at an earlier rule
     # boundary (used to model face-weighted percentage splits like the FNR
@@ -2045,28 +2050,6 @@ def _apply_z_accrual(ctx: ExecutionContext, period: int) -> None:
             ws.z_released = True
 
 
-def _rolling_avg_metric(
-    trigger_rows: list,
-    trigger_name: str,
-    current_period: int,
-    window: int,
-) -> float | None:
-    """Compute the rolling average of a trigger's metric over the last `window` periods.
-
-    Scans `trigger_rows` for prior periods of the same trigger and averages the
-    `metric_value` over up to `window` periods (including the current period's
-    base metric if provided separately). Returns None when there are fewer than
-    `window` historical rows to average.
-    """
-    rows = [
-        r.metric_value
-        for r in trigger_rows
-        if r.trigger_id == trigger_name and r.period < current_period
-    ]
-    rows = rows[-(window - 1):]  # keep only the last (window-1) prior periods
-    if not rows:
-        return None
-    return float(np.mean(rows))
 
 
 def _evaluate_triggers(
@@ -2104,12 +2087,20 @@ def _evaluate_triggers(
             base_metric = float(ctx.calculation_values.get(ref, 0.0))
 
         # Phase 9: apply window averaging if window_periods is set.
+        # Update raw metric history FIRST (before averaging) so the current period's
+        # raw value is included in the window.
         window = getattr(trigger, "window_periods", None)
         if window and window > 1:
-            avg = _rolling_avg_metric(ctx.trigger_rows, trigger.name, i, window)
-            # If fewer prior periods exist than the window, report base metric without
-            # the rolling flag (trigger cannot fire until window is complete).
-            metric = avg if avg is not None else base_metric
+            hist = ctx.trigger_metric_history.setdefault(trigger.name, [])
+            hist.append(base_metric)
+            if len(hist) >= window:
+                # Full window available: use rolling average of last `window` raw values.
+                metric = float(np.mean(hist[-window:]))
+            else:
+                # Window not yet full: block trigger from firing.
+                # Using 0.0 ensures the trigger compares against 0, which typically
+                # means "not breaching" until the full window of data is collected.
+                metric = 0.0
         else:
             metric = base_metric
 
@@ -2118,7 +2109,17 @@ def _evaluate_triggers(
             threshold = trigger.threshold_schedule[i]
         if trigger.comparison_ref:
             threshold = float(ctx.calculation_values.get(trigger.comparison_ref, threshold))
-        active = metric > threshold
+        comparison = getattr(trigger, "comparison", ">") or ">"
+        if comparison == ">":
+            active = metric > threshold
+        elif comparison == ">=":
+            active = metric >= threshold
+        elif comparison == "<":
+            active = metric < threshold
+        elif comparison == "<=":
+            active = metric <= threshold
+        else:
+            active = metric > threshold
 
         trig_bond = ctx.bonds.get(trigger.name)
         if trig_bond is not None:
@@ -2374,13 +2375,33 @@ def run_deal(
         if deal.triggers:
             _evaluate_triggers(deal, ctx, i, orig_collat_bal, cum_loss_cache)
 
-        # Phase 9: update deal state machine.
-        # When a deal_state_trigger fires, transition to EARLY_AMORTIZATION.
-        # The state is "sticky" — once in EARLY_AMORTIZATION it stays there.
+        # Phase 9: deal state machine update.
+        # Convention: triggers are evaluated at the START of period i (before rules).
+        # When a deal_state_trigger fires, deal_state transitions to EARLY_AMORTIZATION
+        # WITHIN THE SAME PERIOD, so rules in period i already see the new state.
+        # This mirrors the standard CC master trust distribution-date convention where
+        # a pay-out event triggered on the determination date affects the same period's
+        # distributions. If next-period-only semantics are needed, gate individual rules
+        # with condition_expr referring to the prior period's trigger state instead.
+        # Record begin_state BEFORE the transition so the DealStateRow captures the delta.
+        _begin_state = ctx.deal_state
         _deal_state_trigger = getattr(deal, "deal_state_trigger", None)
+        _transition_trigger: str | None = None
         if _deal_state_trigger and ctx.deal_state != DealStateType.EARLY_AMORTIZATION.value:
             if ctx.trigger_states.get(_deal_state_trigger):
                 ctx.deal_state = DealStateType.EARLY_AMORTIZATION.value
+                _transition_trigger = _deal_state_trigger
+        # Emit a DealStateRow for every period when the deal has triggers.
+        if deal.triggers:
+            ctx.deal_state_rows.append(
+                DealStateRow(
+                    scenario_name=scenario_name,
+                    period=i,
+                    begin_state=_begin_state,
+                    end_state=ctx.deal_state,
+                    transition_trigger=_transition_trigger,
+                )
+            )
         # deal_state is passed as a parameter to _build_expr_context below.
 
         _update_virtual_sources(deal, ctx, run_input, i, orig_collat_bal)
@@ -2935,6 +2956,7 @@ def run_deal(
         deal_accounts=account_rows,
         waterfall_trace=trace_rows,
         trigger_state_history=ctx.trigger_rows,
+        deal_state_history=ctx.deal_state_rows,
         pac_tac_diagnostics=pac_tac_rows,
         structure_composition=structure_rows,
     )

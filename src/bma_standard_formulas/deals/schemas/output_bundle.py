@@ -17,6 +17,7 @@ from .output_structuring import (
 )
 from .output_waterfall import (
     DealAccountRow,
+    DealStateRow,
     TriggerStateRow,
     WaterfallTraceRow,
 )
@@ -30,6 +31,9 @@ class ScenarioOutputBundle(BaseModel):
     deal_accounts: list[DealAccountRow] = Field(default_factory=list)
     waterfall_trace: list[WaterfallTraceRow] = Field(default_factory=list)
     trigger_state_history: list[TriggerStateRow] = Field(default_factory=list)
+    # Phase 9: per-period deal state history for auditing REVOLVING → EARLY_AMORTIZATION
+    # transitions. Only populated when deal has triggers.
+    deal_state_history: list[DealStateRow] = Field(default_factory=list)
     tranche_risk_summary: list[TrancheRiskSummaryRow] = Field(default_factory=list)
     credit_enhancement: list[CreditEnhancementRow] = Field(default_factory=list)
     pac_tac_diagnostics: list[PacTacDiagnosticsRow] = Field(default_factory=list)

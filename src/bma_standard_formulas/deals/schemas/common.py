@@ -226,14 +226,21 @@ class TriggerMetricType(str, Enum):
     OC_TEST = "OC_TEST"
     IC_TEST = "IC_TEST"
     CUSTOM = "CUSTOM"
-    # Phase 9: rolling-window averages for CC master trust pay-out triggers.
-    # Metric is computed as the average of the underlying metric over the
-    # last `window_periods` periods (set on TriggerNode). Three-month rolling
-    # averages are standard for excess-spread, portfolio-yield, and pay-rate
-    # triggers in CC master trust prospectuses.
-    EXCESS_SPREAD_3MO_AVG = "EXCESS_SPREAD_3MO_AVG"
-    PORTFOLIO_YIELD_3MO_AVG = "PORTFOLIO_YIELD_3MO_AVG"
-    BASE_RATE_3MO_AVG = "BASE_RATE_3MO_AVG"
+    # Phase 9: rolling-window averages are expressed as CUSTOM triggers with
+    # a calculation_ref pointing to the relevant metric AND window_periods set
+    # on the TriggerNode. This is more flexible than named metric types because
+    # excess spread, portfolio yield, and base rate are all deal-specific
+    # calculations that vary by prospectus definition.
+    #
+    # Example:
+    #   CalculationNode(name="excess_spread_rate", expression="collateral_net_rate - ..."),
+    #   TriggerNode(name="ExcessSpreadTrigger", metric_type=CUSTOM,
+    #               calculation_ref="excess_spread_rate",
+    #               threshold_value=3.5, comparison="<",  # fires when BELOW threshold
+    #               window_periods=3)
+    #
+    # No dedicated enum values for individual rolling metrics — they would be
+    # misleadingly similar to CUSTOM without adding expressiveness.
 
 
 class DealStateType(str, Enum):

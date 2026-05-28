@@ -288,9 +288,16 @@ class TriggerNode(BaseModel):
 
     # Phase 9: rolling-window average for CC master trust triggers.
     # When set, the trigger metric is averaged over the last window_periods
-    # periods before comparing to the threshold.  Standard for excess-spread,
-    # portfolio-yield, and base-rate triggers (typically window_periods=3).
+    # periods (including the current period). Trigger cannot fire until the
+    # full window of data exists (partial-window periods report metric=0).
     window_periods: int | None = Field(default=None, ge=1)
+
+    # Phase 9: comparison polarity for the trigger condition.
+    # ">" (default): trigger fires when metric > threshold (e.g. loss trigger)
+    # "<": trigger fires when metric < threshold (e.g. excess-spread pay-out
+    #       trigger fires when rolling average excess spread < floor rate)
+    # ">=", "<=": inclusive variants
+    comparison: str = Field(default=">", pattern=r"^(>|>=|<|<=)$")
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +406,14 @@ class DealDefinition(BaseModel):
 
     @model_validator(mode="after")
     def _validate_references(self) -> "DealDefinition":
+        # Phase 9: trigger names must be unique (state machine keys by name).
+        trigger_name_list = [t.name for t in self.triggers]
+        if len(trigger_name_list) != len(set(trigger_name_list)):
+            dupes = [n for n in trigger_name_list if trigger_name_list.count(n) > 1]
+            raise ValueError(
+                f"DealDefinition: duplicate trigger names: {sorted(set(dupes))}"
+            )
+
         bond_names = {b.name for b in self.bonds}
         account_names = {a.name for a in self.accounts}
         fee_names = {f.name for f in self.fees}

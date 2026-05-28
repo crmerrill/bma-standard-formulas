@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from .common import Dollars, SchemaMetadata, TriggerState
+from .common import Dollars, DealStateType, SchemaMetadata, TriggerState
 
 
 class DealAccountRow(BaseModel):
@@ -61,3 +61,16 @@ class TriggerStateRow(BaseModel):
     first_breach_period: Optional[int] = None
     cure_period: Optional[int] = None
     days_in_breach: int = 0
+
+
+class DealStateRow(BaseModel):
+    """Phase 9: per-period deal state record for auditing state transitions.
+
+    Emitted once per period so callers can observe when and why the deal
+    transitioned (e.g. REVOLVING → EARLY_AMORTIZATION on trigger FAIL).
+    """
+    scenario_name: str
+    period: int = Field(ge=0)
+    begin_state: str  # deal state at start of period (before triggers)
+    end_state: str    # deal state at end of period (after trigger evaluation)
+    transition_trigger: Optional[str] = None  # trigger that caused the transition, if any
