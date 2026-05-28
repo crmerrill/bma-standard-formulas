@@ -142,6 +142,11 @@ interface TargetInfo {
   scheduleToleranceBps?: number | null;
   /** Machine-generated schedule derivation provenance (preserved from block.data). */
   scheduleDerivation?: Record<string, unknown> | null;
+  /** Non-scalar RateOrSchedule fields stashed in block.data (Phase 5). */
+  couponSchedule?: unknown;
+  marginSchedule?: unknown;
+  capSchedule?: unknown;
+  floorSchedule?: unknown;
   supportTranches?: string[];
   relations?: Array<{ relation_type: string; targets: string[] }>;
   zReleaseTrigger?: string | null;
@@ -167,6 +172,11 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
       let zAccrualEnabledFromData: boolean | undefined;
       let scheduleDerivationFromData: Record<string, unknown> | null | undefined;
       let scheduleToleranceBpsFromData: number | null | undefined;
+      // Non-scalar coupon/margin/cap/floor schedules stashed by irToBlocklyState.
+      let couponScheduleFromData: unknown;
+      let marginScheduleFromData: unknown;
+      let capScheduleFromData: unknown;
+      let floorScheduleFromData: unknown;
       if (typeof t.data === "string" && t.data.trim()) {
         try {
           const parsed = JSON.parse(t.data) as Record<string, unknown>;
@@ -225,6 +235,10 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
           if (typeof parsed.schedule_tolerance_bps === "number") {
             scheduleToleranceBpsFromData = parsed.schedule_tolerance_bps;
           }
+          if (Array.isArray(parsed.coupon_schedule)) couponScheduleFromData = parsed.coupon_schedule;
+          if (Array.isArray(parsed.margin_schedule)) marginScheduleFromData = parsed.margin_schedule;
+          if (Array.isArray(parsed.cap_schedule)) capScheduleFromData = parsed.cap_schedule;
+          if (Array.isArray(parsed.floor_schedule)) floorScheduleFromData = parsed.floor_schedule;
         } catch {
           // Ignore malformed block.data; fall back to visible fields.
         }
@@ -254,6 +268,10 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
         relations: relationData,
         zReleaseTrigger: null,
         zAccrualEnabled: zAccrualEnabledFromData,
+        couponSchedule: couponScheduleFromData,
+        marginSchedule: marginScheduleFromData,
+        capSchedule: capScheduleFromData,
+        floorSchedule: floorScheduleFromData,
       });
     } else if (t.type === "residual_target") {
       // Read kind from block.data (irToBlocklyState stashes {kind:"RESIDUAL"})
@@ -296,13 +314,25 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
  * common names are mapped to valid categories so generated IR passes validation.
  */
 function _canonicalAccountCategory(raw: string): string {
+  // Check exact enum values first (highest priority).
+  const EXACT: Record<string, string> = {
+    RESERVE: "RESERVE",
+    PREFUNDING: "PREFUNDING",
+    REVOLVING: "REVOLVING",
+    PAYMENT: "PAYMENT",
+    SPREAD_ACCOUNT: "SPREAD_ACCOUNT",
+  };
+  if (EXACT[raw.toUpperCase()]) return EXACT[raw.toUpperCase()];
+  // Common well-known abbreviations.
   const u = raw.toUpperCase();
-  if (u === "RESERVE" || u.includes("RESERVE")) return "RESERVE";
-  if (u === "PREFUNDING" || u === "PFA" || u === "IFA" || u.includes("PREFUND") || u.includes("FUNDING")) return "PREFUNDING";
-  if (u === "REVOLVING" || u.includes("REVOLV")) return "REVOLVING";
-  if (u === "PAYMENT" || u.includes("PAYMENT")) return "PAYMENT";
-  if (u === "SPREAD_ACCOUNT" || u.includes("SPREAD")) return "SPREAD_ACCOUNT";
-  return "RESERVE"; // sensible default for unrecognized names
+  if (u === "PFA" || u === "IFA") return "PREFUNDING";
+  if (u.startsWith("SPREAD")) return "SPREAD_ACCOUNT";
+  if (u.startsWith("PREFUND") || u.includes("FUNDING")) return "PREFUNDING";
+  if (u.startsWith("REVOLV")) return "REVOLVING";
+  // PAYMENT checked before RESERVE because "PAYMENT_RESERVE" should be PAYMENT.
+  if (u.startsWith("PAYMENT")) return "PAYMENT";
+  if (u.startsWith("RESERVE") || u.endsWith("RESERVE") || u.includes("_RESERVE")) return "RESERVE";
+  return "RESERVE"; // default for unrecognised names
 }
 
 /** Parse the rule-level block.data payload stashed by irToBlocklyState. */
@@ -799,7 +829,8 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
       name,
       kind: resolvedKind,
       group_id: info.groupId ?? null,
-      coupon: info.coupon || 0,
+      // Prefer non-scalar schedule stashed in block.data (Phase 5 RateOrSchedule).
+      coupon: info.couponSchedule ?? info.coupon ?? 0,
       notional_pct_of_collateral: Number(info.sizePctPool || 0),
       notional: info.faceAmt || 0,
       is_bond: !isResidualLike,

@@ -616,9 +616,22 @@ function _bondDataPayload(bond: IRBond): Record<string, unknown> {
   if (bond.schedule_derivation != null) {
     data.schedule_derivation = bond.schedule_derivation;
   }
-  // Stash user/machine tolerance so it is not reset to the default 25 bps on save.
   if (typeof bond.schedule_tolerance_bps === "number") {
     data.schedule_tolerance_bps = bond.schedule_tolerance_bps;
+  }
+  // Stash non-scalar coupon/margin/cap/floor schedules (RateOrSchedule) so they
+  // survive load→edit→save without collapsing to the block's scalar COUPON field.
+  if (Array.isArray((bond as Record<string, unknown>).coupon)) {
+    data.coupon_schedule = (bond as Record<string, unknown>).coupon;
+  }
+  if (Array.isArray((bond as Record<string, unknown>).margin)) {
+    data.margin_schedule = (bond as Record<string, unknown>).margin;
+  }
+  if (Array.isArray((bond as Record<string, unknown>).cap)) {
+    data.cap_schedule = (bond as Record<string, unknown>).cap;
+  }
+  if (Array.isArray((bond as Record<string, unknown>).floor_rate)) {
+    data.floor_schedule = (bond as Record<string, unknown>).floor_rate;
   }
   if (bond.relations && bond.relations.length > 0) data.relations = bond.relations;
   // Stash z_accrual_enabled as an explicit boolean (including false) so the
