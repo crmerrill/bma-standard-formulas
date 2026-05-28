@@ -1,5 +1,13 @@
 """Build DealRunInput payloads from either Run Setup refs or deal-native inputs.
 
+RG2 (May 2026): the bridge prefers the true per-loan PAIRED artifact when
+available — ``{prefix}_portfolio_paired`` — which serializes all per-loan
+BMAActualCashflow constituents in long format. Loading this artifact gives
+the deal runtime genuine per-loan visibility (``loans`` expression accessor,
+``constituents_by_group``) instead of one synthetic aggregate constituent.
+Falls back to the LDCMA-adapter path when the PAIRED artifact is absent
+(backward compatibility with runs produced before this change).
+
 Phase 1g (May 2026): the bridge now produces ``PairedCollateralInput``
 payloads (BMA-native PortfolioCashflow) for both single-pool and grouped
 runs. The legacy ``from_portfolio_cashflow`` / ``from_grouped_portfolio_cashflows``
@@ -9,19 +17,17 @@ bit-identical to the pre-1g LDCMA path (Phase 1e parity tests).
 
 Phase 0C (May 2026): the bridge reads per-group portfolio artifacts when
 the source run was grouped, producing a multi-group payload that the
-deal runtime routes via ``GROUP_<id>_*`` source tokens.  Pre-Phase-0C the
-bridge always read only the aggregate artifact, which meant multi-group
-deals could not be wired to a Run-Setup-driven portfolio run from the UI.
+deal runtime routes via ``GROUP_<id>_*`` source tokens.
 
 The bridge is tightly coupled to the orchestrator's artifact-naming
 convention (see ``run_service._execute_single_scenario``):
 
-    {prefix}_portfolio_actual                  - aggregate (always)
-    {prefix}_group_{safe_group_id}_actual      - per group (grouped runs)
+    {prefix}_portfolio_paired                  - per-loan PAIRED (RG2, preferred)
+    {prefix}_portfolio_actual                  - aggregate (fallback)
+    {prefix}_group_{safe_group_id}_actual      - per group (grouped, fallback)
 
-The grouped path is selected when the run manifest carries non-empty
-``group_names``.  Single-pool runs continue to use the aggregate-only
-path unchanged.
+The PAIRED artifact is selected when present; aggregate fallback is used
+with an explicit ``per_loan_visibility=false`` metadata note when absent.
 """
 from __future__ import annotations
 
@@ -29,13 +35,16 @@ import re
 import warnings
 from typing import Any
 
+import warnings
+
 from bma_standard_formulas.deals.adapters import (
     from_grouped_portfolio_cashflows,
     from_portfolio_cashflow,
     ldcma_to_paired,
 )
-from bma_standard_formulas.deals.schemas.input import DealRunInput
+from bma_standard_formulas.deals.schemas.input import DealRunInput, PairedCollateralInput
 
+from ...orchestrator.run_service import _read_paired_artifact
 from ...storage import run_store
 
 
@@ -137,18 +146,45 @@ def build_from_runsetup_ref(
     for scenario_name in selected:
         prefix = _safe_artifact_name(scenario_name)
 
-        # The bridge bridges DataFrame artifacts to the BMA-native PAIRED
-        # input via the LDCMA-format adapters as a transitional step.
-        # The adapters emit DeprecationWarning (Phase 1h) but the bridge
-        # IS the migration machinery here, so suppress at the call site —
-        # we're not a caller that should be alerted to migrate.
+        # ── Preferred path: per-loan PAIRED artifact (RG2) ──────────────────
+        # Loads true per-loan BMAActualCashflow constituents directly via
+        # cashflow_persistence (lossless; no LDCMA conversion). This path
+        # gives the deal runtime genuine per-loan visibility.
+        constituents = _read_paired_artifact(run_id, f"{prefix}_portfolio_paired")
+        if constituents:
+            from bma_standard_formulas.engine import PortfolioCashflow
+            from bma_standard_formulas.engine.portfolio import PortfolioMode
+            portfolio = PortfolioCashflow(
+                constituents=constituents,
+                mode=PortfolioMode.ACTUAL_ONLY,
+            )
+            deal_inputs[scenario_name] = DealRunInput(
+                collateral=PairedCollateralInput(portfolio=portfolio),
+                original_collateral_balance=float(
+                    manifest.get("original_collateral_balance") or 0.0
+                ),
+                loan_count=loan_count or len(constituents),
+            )
+            continue
+
+        # ── Fallback path: LDCMA-format aggregate artifacts ──────────────────
+        # Produces one synthetic constituent per group (or one for the whole
+        # pool). Per-loan visibility is NOT available on this path. Emits a
+        # warning so operators can identify runs that need to be regenerated.
+        warnings.warn(
+            f"Run {run_id!r} scenario {scenario_name!r}: per-loan PAIRED artifact "
+            f"not found; falling back to aggregate-only LDCMA adapter. "
+            f"Per-loan expression access (loans, loans_by_group) will be unavailable. "
+            f"Re-run the portfolio to generate the paired artifact. "
+            f"[per_loan_visibility=false]",
+            UserWarning,
+            stacklevel=2,
+        )
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
 
             if group_names:
-                # Grouped run: prefer per-group artifacts.  If they're all
-                # missing for this scenario, fall through to the aggregate
-                # artifact so a partially-built run remains usable.
                 group_dfs = _load_group_dataframes(run_id, prefix, group_names)
                 if group_dfs:
                     ldcma_input = from_grouped_portfolio_cashflows(
@@ -159,8 +195,6 @@ def build_from_runsetup_ref(
                     deal_inputs[scenario_name] = ldcma_to_paired(ldcma_input)
                     continue
 
-            # Single-pool path (or grouped run with missing per-group artifacts):
-            # use the aggregate artifact.
             agg_section = f"{prefix}_portfolio_actual"
             df = run_store.load_artifact(run_id, agg_section)
             ldcma_input = from_portfolio_cashflow(

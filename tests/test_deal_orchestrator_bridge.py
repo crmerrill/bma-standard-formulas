@@ -320,3 +320,140 @@ def test_persist_scenario_artifacts_writes_extended_outputs(monkeypatch, tmp_pat
     assert "Base_Case_structure_composition" in keys
     assert "Base_Case_decrement_table" in keys
     assert "Base_Case_stress_matrix" in keys
+
+
+# ---------------------------------------------------------------------------
+# RG2: True PAIRED constituent persistence and per-loan visibility
+# ---------------------------------------------------------------------------
+
+
+def test_runsetup_ref_with_paired_artifact_preserves_per_loan_constituents(monkeypatch, tmp_path):
+    """When the orchestrator has saved a {prefix}_portfolio_paired artifact,
+    build_from_runsetup_ref() must reconstruct a PortfolioCashflow whose
+    actual_constituents() has the original loan count and loan_ids.
+
+    RG2: uses cashflow_persistence directly (no DataFrame round-trip).
+    """
+    import dataclasses
+    import warnings
+    import numpy as np
+    import pandas as pd
+    from bma_cfengine_app.orchestrator.run_service import _write_paired_artifact
+    from bma_standard_formulas.deals.adapters import ldcma_to_paired
+    from bma_standard_formulas.deals.schemas.input import (
+        CollateralCashflows, PooledCollateralInput, DealRunInput,
+    )
+
+    _use_tmp_workspace(monkeypatch, tmp_path)
+    run_id = "rg2_paired_test"
+
+    n = 5
+    def _cf(balance: float) -> CollateralCashflows:
+        p = np.array([0.0] + [balance / n] * (n - 1))
+        b = np.array([balance - i * (balance / n) for i in range(n)])
+        interest = np.array([0.0] + [b[i - 1] * 6.0 / 1200 for i in range(1, n)])
+        return CollateralCashflows(
+            cfdate=list(range(n)),
+            balance=b.tolist(), principal=p.tolist(), interest=interest.tolist(),
+            cashflow=(p + interest).tolist(),
+            loss=[0.0]*n, prepbal=[0.0]*n, defbal=[0.0]*n, recovery=[0.0]*n,
+            principal_sched=p.tolist(), principal_unsched=[0.0]*n,
+            cpr=[0.0]*n, cdr=[0.0]*n, sev=[0.0]*n, dq=[0.0]*n, surv_fac=[1.0]*n,
+            sched_coupon=[6.0]*n, sched_netcoupon=[6.0]*n,
+            coupon=[6.0]*n, effcoupon=[6.0]*n,
+            sched_balance=b.tolist(), discount_factor=[1.0]*n,
+        )
+
+    # Build two synthetic per-loan BMAActualCashflow objects via ldcma_to_paired.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        g1_run = ldcma_to_paired(
+            DealRunInput(collateral=PooledCollateralInput(collateral=_cf(1_000_000.0)),
+                         original_collateral_balance=1_000_000.0, loan_count=1),
+            loan_count=1,
+        )
+        g2_run = ldcma_to_paired(
+            DealRunInput(collateral=PooledCollateralInput(collateral=_cf(500_000.0)),
+                         original_collateral_balance=500_000.0, loan_count=1),
+            loan_count=1,
+        )
+
+    g1_acts = [dataclasses.replace(c, loan_id=1, group_id="GROUP_1")
+               for c in g1_run.collateral.portfolio.actual_constituents()]
+    g2_acts = [dataclasses.replace(c, loan_id=2, group_id="GROUP_2")
+               for c in g2_run.collateral.portfolio.actual_constituents()]
+
+    run_store.save_manifest(run_id, {
+        "status": "completed",
+        "scenario_names": ["Base Case"],
+        "loan_count": 2,
+        "group_names": ["GROUP_1", "GROUP_2"],
+    })
+
+    # Persist via cashflow_persistence — no DataFrame, no type coercion.
+    _write_paired_artifact(run_id, "Base_Case_portfolio_paired", g1_acts + g2_acts)
+
+    # Also save aggregate fallback artifact.
+    agg_df = pd.DataFrame({"perf_bal": [0.0]*n, "act_am": [0.0]*n, "act_int": [0.0]*n,
+                            "prin_loss": [0.0]*n, "vol_prepay": [0.0]*n,
+                            "new_def": [0.0]*n, "prin_recov": [0.0]*n})
+    run_store.save_artifact(run_id, "Base_Case_portfolio_actual", agg_df)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        built = build_from_runsetup_ref(run_id, scenario_names=["Base Case"])
+
+    run_input = built["Base Case"]
+    assert run_input.collateral.mode == "PAIRED"
+    portfolio = run_input.collateral.portfolio
+
+    # Must have 2 true per-loan constituents — not 1 synthetic aggregate.
+    constituents = portfolio.actual_constituents()
+    assert len(constituents) == 2, f"Expected 2 constituents, got {len(constituents)}"
+    loan_ids = {int(c.loan_id) for c in constituents}
+    assert loan_ids == {1, 2}, f"Expected {{1, 2}}, got {loan_ids}"
+
+    # Per-group routing must work.
+    by_group = portfolio.actual_constituents_by_group()
+    assert "GROUP_1" in by_group and "GROUP_2" in by_group
+    assert int(by_group["GROUP_1"][0].loan_id) == 1
+    assert int(by_group["GROUP_2"][0].loan_id) == 2
+
+
+def test_runsetup_ref_falls_back_gracefully_without_paired_artifact(monkeypatch, tmp_path):
+    """Without a paired artifact, bridge falls back to LDCMA path and emits UserWarning."""
+    _use_tmp_workspace(monkeypatch, tmp_path)
+    run_id = "rg2_fallback"
+    import pandas as pd
+    import numpy as np
+    n = 4
+    agg_df = pd.DataFrame({
+        "perf_bal": np.linspace(100.0, 60.0, n),
+        "act_am": np.full(n, 10.0),
+        "vol_prepay": np.zeros(n),
+        "act_int": np.full(n, 0.5),
+        "new_def": np.zeros(n),
+        "prin_recov": np.zeros(n),
+        "prin_loss": np.zeros(n),
+    })
+    run_store.save_manifest(run_id, {
+        "status": "completed",
+        "scenario_names": ["Base Case"],
+        "loan_count": 3,
+    })
+    run_store.save_artifact(run_id, "Base_Case_portfolio_actual", agg_df)
+
+    import warnings
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        built = build_from_runsetup_ref(run_id, scenario_names=["Base Case"])
+        user_warnings = [str(x.message) for x in w if issubclass(x.category, UserWarning)]
+
+    # Must still produce a valid DealRunInput.
+    assert "Base Case" in built
+    assert built["Base Case"].collateral.mode == "PAIRED"
+
+    # Must warn about absent per-loan visibility.
+    assert any("per_loan_visibility=false" in msg for msg in user_warnings), (
+        "Expected per_loan_visibility=false warning when paired artifact absent"
+    )

@@ -249,6 +249,59 @@ def _bma_scheduled_to_dataframe(scheduled: Any) -> pd.DataFrame:
     })
 
 
+def _write_paired_artifact(run_id: str, artifact_name: str, constituents: list[Any]) -> None:
+    """Persist per-loan BMAActualCashflow constituents directly via cashflow_persistence.
+
+    Uses the existing Parquet-native I/O so the round-trip is lossless —
+    no DataFrame conversion, no type coercion.  Each constituent is written
+    as a separate row group keyed by a unique ``cf_id``.
+
+    Constituents with an empty or shared ``cf_id`` (common when synthesized
+    via adapters) are stamped with a unique UUID before writing so the
+    persistence module can distinguish them on read.
+
+    (RG2: replaces the lossy DataFrame long-format path.)
+    """
+    import dataclasses
+    from uuid import uuid4
+    from bma_standard_formulas.engine.cashflow_persistence import write_cashflow
+    from ..storage import run_store as _rs
+
+    seen_ids: set[str] = set()
+    out_dir = _rs._outputs_dir(run_id)
+    path = out_dir / f"{artifact_name}.parquet"
+    mode = "write"
+    for cf in constituents:
+        cf_id = getattr(cf, "cf_id", "")
+        if not cf_id or cf_id in seen_ids:
+            cf = dataclasses.replace(cf, cf_id=str(uuid4()))
+        seen_ids.add(cf.cf_id)
+        write_cashflow(cf, path=path, mode=mode)
+        mode = "append"
+
+
+def _read_paired_artifact(run_id: str, artifact_name: str) -> list[Any]:
+    """Load per-loan BMAActualCashflow constituents from a paired Parquet artifact.
+
+    Returns an empty list when the artifact does not exist or fails to load.
+    (RG2: replaces the lossy DataFrame path in build_from_runsetup_ref.)
+    """
+    from bma_standard_formulas.engine.cashflow_persistence import read_actual
+    from ..storage import run_store as _rs
+
+    out_dir = _rs._outputs_dir(run_id)
+    path = out_dir / f"{artifact_name}.parquet"
+    if not path.exists():
+        return []
+    try:
+        result = read_actual(path)
+        if not isinstance(result, list):
+            result = [result]
+        return result
+    except Exception:
+        return []
+
+
 def _execute_single_scenario(
     run_id: str,
     scenario_name: str,
@@ -301,6 +354,17 @@ def _execute_single_scenario(
     actual_df = _dedup_cols(portfolio.to_dataframe())
     run_store.save_artifact(run_id, f"{prefix}_portfolio_actual", actual_df)
     run_store.save_artifact_csv(run_id, f"{prefix}_portfolio_actual", actual_df)
+
+    # Per-loan PAIRED artifact (RG2): persist true per-loan BMAActualCashflow
+    # constituents via cashflow_persistence (lossless Parquet; no DataFrame
+    # conversion). Stored as {prefix}_portfolio_paired — preferred by the bridge
+    # over the aggregate LDCMA path; aggregate kept as fallback.
+    try:
+        actuals = portfolio.actual_constituents()
+        if actuals:
+            _write_paired_artifact(run_id, f"{prefix}_portfolio_paired", actuals)
+    except Exception:
+        pass  # Non-fatal: aggregate artifact is the fallback
 
     if run_mode in ("paired", "scheduled"):
         try:

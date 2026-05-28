@@ -154,22 +154,37 @@ def _decode_meta(raw: dict[str, str], cls: type) -> dict[str, object]:
 
         target_type = meta_types[key]
         origin = get_origin(target_type)
+        union_arms: list[type] = []
         if origin in (Union, UnionType):
-            args = [a for a in get_args(target_type) if a is not type(None)]
-            target_type = args[0] if args else object
+            union_arms = [a for a in get_args(target_type) if a is not type(None)]
+            target_type = union_arms[0] if union_arms else object
 
-        if target_type in (int, np.int64):
-            typed[key] = int(val)
-        elif target_type in (float, np.float64):
-            typed[key] = float(val)
-        elif target_type in (bool, np.bool_):
-            typed[key] = val.lower() in ("true", "1")
-        elif target_type is str:
-            typed[key] = val
-        elif target_type is np.datetime64:
-            typed[key] = np.datetime64(val)
+        def _coerce(t: type, v: str) -> object:
+            if t in (int, np.int64):
+                return int(v)
+            if t in (float, np.float64):
+                return float(v)
+            if t in (bool, np.bool_):
+                return v.lower() in ("true", "1")
+            if t is str:
+                return v
+            if t is np.datetime64:
+                return np.datetime64(v)
+            return v
+
+        # For Union types with multiple concrete arms (e.g. int | str),
+        # try each arm in order and accept the first that succeeds.
+        if union_arms:
+            for arm in union_arms:
+                try:
+                    typed[key] = _coerce(arm, val)
+                    break
+                except (ValueError, TypeError):
+                    continue
+            else:
+                typed[key] = val
         else:
-            typed[key] = val
+            typed[key] = _coerce(target_type, val)
     return typed
 
 
