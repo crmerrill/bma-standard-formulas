@@ -85,43 +85,47 @@ export const BLOCKLY_CSS_OVERRIDES = `
   font-weight: 500 !important;
 }
 
-/* --- Editable field backgrounds — white so text is always legible ---
-   .blocklyFieldRect is the standard body rect for text/number/dropdown fields.
-   We target it by class, not by positional combinators, to avoid catching
-   unrelated rects (e.g. dropdown indicator rects that have separate styling). */
+/* --- Editable field backgrounds — white for contrast against block color ---
+   .blocklyFieldRect is the named body rect for text / number / dropdown fields.
+   Target by class only, not positional combinators. */
 .blocklyFieldRect {
   fill: #ffffff !important;
   fill-opacity: 1 !important;
-  stroke: rgba(0,0,0,0.15) !important;
-  rx: 3 !important;
+  stroke: rgba(0,0,0,0.18) !important;
 }
 
-/* Text inside all editable field bodies — dark */
+/* --- Field value text — dark on white field background ---
+   Blockly v10 Zelos places the value <text> element as a sibling of
+   .blocklyFieldRect within the same <g>.  Using the CSS general sibling
+   combinator (~) reliably matches it regardless of which wrapper classes
+   Blockly applies (field_input, field_number, field_dropdown differ). */
+.blocklyFieldRect ~ text {
+  fill: #111827 !important;
+  font-family: 'Inter', system-ui, sans-serif !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+}
+
+/* Belt-and-suspenders: also target via editableText descendant in case the
+   DOM nesting differs between Blockly versions. */
+.blocklyEditableText text,
 .blocklyEditableText .blocklyText {
   fill: #111827 !important;
   font-weight: 500 !important;
 }
 
-/* Dropdown field text value */
+/* Dropdown field text class (Blockly may apply this to value text) */
 .blocklyDropdownText {
   fill: #111827 !important;
-  font-family: 'Inter', system-ui, sans-serif !important;
   font-size: 11px !important;
 }
 
-/* Dropdown arrow — the polygon/path element that draws the chevron.
-   In Blockly v10 Zelos renderer, .blocklyDropDownArrow is the group
-   containing the arrow polygon. Dark fill makes it visible on white. */
+/* Dropdown arrow chevron — dark so it's visible on white field background */
+.blocklyDropDownArrow polygon,
+.blocklyDropDownArrow path,
 .blocklyDropDownArrow {
   fill: #374151 !important;
 }
-.blocklyDropDownArrow polygon,
-.blocklyDropDownArrow path {
-  fill: #374151 !important;
-}
-
-/* Don't re-style .blocklyDropdownRect (Blockly v10 doesn't use that class
-   for the indicator; leaving it alone prevents accidental white-on-white). */
 
 /* --- HTML input when editing a field (click to type) ---
    Blockly injects this element with inline styles; these !important rules
