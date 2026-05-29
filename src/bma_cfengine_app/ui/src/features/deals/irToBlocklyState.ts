@@ -232,6 +232,65 @@ interface BlocklyWorkspaceState {
  * rules in any group (in which case the caller should leave the
  * canvas empty).
  */
+/**
+ * Build pay_accretion_redirect blocks for Z bonds in a group.
+ *
+ * The runtime handles Z accrual implicitly (via z_accrual_enabled flag and
+ * ACCRETES_TO relations on the bond). To make this visible on the Blockly
+ * canvas, the synthesizer injects an explicit accretion_redirect block so
+ * the analyst can see which bonds receive the Z coupon as principal.
+ *
+ * Returns an array of blocks (one per Z bond with accrual enabled), or []
+ * if no qualifying Z bonds are in this group.
+ */
+function _buildZAccretionRedirectBlocks(
+  groupId: string | null,
+  groupRules: IRRule[],
+  bonds: IRBond[],
+  bondByName: Map<string, IRBond>,
+): BlocklyBlock[] {
+  const blocks: BlocklyBlock[] = [];
+
+  for (const bond of bonds) {
+    // Only Z bonds with accrual enabled in the current group.
+    if ((bond.kind ?? "") !== "Z") continue;
+    if (!bond.z_accrual_enabled) continue;
+    if (groupId !== null && bond.group_id !== groupId) continue;
+
+    // Find the ACCRETES_TO relation targets.
+    const accretesTo: string[] = [];
+    for (const rel of bond.relations ?? []) {
+      if ((rel as Record<string, unknown>).relation_type === "ACCRETES_TO") {
+        const targets = (rel as Record<string, unknown>).targets as string[] | undefined;
+        if (Array.isArray(targets)) accretesTo.push(...targets);
+      }
+    }
+    if (accretesTo.length === 0) continue;
+
+    // Build bond_target blocks for the ACCRETES_TO targets.
+    const targetChain = chainBlocks(
+      accretesTo
+        .map((n) => targetToBlock(n, bondByName))
+        .filter((b): b is BlocklyBlock => b !== null),
+    );
+    if (!targetChain) continue;
+
+    const block: BlocklyBlock = {
+      type: "pay_accretion_redirect",
+      fields: {
+        Z_TRANCHE: bond.name,
+        SOURCE: "ACT_PRIN",
+        MAX_PAY: 0,
+      },
+      inputs: { TARGETS: { block: targetChain } },
+    };
+    _attachData(block, { group_id: bond.group_id ?? groupId ?? undefined });
+    blocks.push(block);
+  }
+
+  return blocks;
+}
+
 export function synthesizeWorkspaceState(
   ir: IRForSynthesis,
 ): BlocklyWorkspaceState | null {
@@ -280,12 +339,50 @@ export function synthesizeWorkspaceState(
     );
     if (groupRules.length === 0) continue;
 
+    // OA-Z: If the group contains a Z bond with z_accrual_enabled + ACCRETES_TO,
+    // inject a pay_accretion_redirect block after the last PAC rule that targets
+    // the Z's accretion targets. This makes the Z accrual mechanic explicit on the
+    // canvas — without it the analyst can't see where the Z coupon is redirected.
+    const zRedirectBlocks: BlocklyBlock[] = _buildZAccretionRedirectBlocks(
+      groupId,
+      groupRules,
+      ir.bonds ?? [],
+      bondByName,
+    );
+
     const grouped = _groupConsecutiveTriggers(groupRules);
     const ruleBlocks: BlocklyBlock[] = [];
     for (const item of grouped) {
       if (item.kind === "rule") {
         const blk = ruleToBlock(item.rule, bondByName, feeByName);
         if (blk) ruleBlocks.push(blk);
+        // Insert Z accretion redirect blocks immediately after the last rule
+        // that targets the ACCRETES_TO bonds (usually PAC II principal rule).
+        if (
+          zRedirectBlocks.length > 0 &&
+          item.rule.rule_type === "PAY_PRINCIPAL" &&
+          !item.rule.cap_mode &&
+          (item.rule.to_targets ?? []).some((t) => {
+            const b = bondByName.get(t);
+            return b && b.kind === "PAC";
+          })
+        ) {
+          // Check this is the last PAC rule before Z (look ahead for Z target)
+          const thisOrder = item.rule.order ?? 0;
+          const nextRuleHasZ = groupRules.some(
+            (r) =>
+              (r.order ?? 0) > thisOrder &&
+              (r.to_targets ?? []).some((t) => {
+                const b = bondByName.get(t);
+                return b?.kind === "Z";
+              }),
+          );
+          if (nextRuleHasZ) {
+            for (const zb of zRedirectBlocks) ruleBlocks.push(zb);
+            // Clear so we only inject once
+            zRedirectBlocks.length = 0;
+          }
+        }
       } else {
         const trig = triggerByName.get(item.triggerName);
         if (!trig) continue;

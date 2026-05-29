@@ -287,19 +287,37 @@ describe("IR round-trip: synthesizeWorkspaceState → generateDealIR", () => {
     expect(ba?.notional).toBe(50_000_000);
   });
 
-  it("rule ordering is preserved (order field matches)", () => {
+  it("rule ordering is preserved: relative order of original rules maintained", () => {
+    // The synthesizer may inject synthetic blocks (e.g. Z accretion redirect)
+    // that the original IR expressed implicitly. This means absolute `order`
+    // values of rules after the injection point can shift. The invariant we
+    // test is RELATIVE ordering: if rule A comes before rule B in the original,
+    // A must also come before B in the round-tripped IR.
     const regen = roundTrip(CANONICAL_MULTI_GROUP_IR);
     const original = CANONICAL_MULTI_GROUP_IR;
-    const origBySourceTarget = new Map(
-      (original.waterfall_rules ?? []).map((r) => [
-        `${r.rule_type}|${(r.to_targets ?? []).sort().join(",")}|${r.group_id ?? ""}|${r.cap_mode ?? ""}`,
-        r.order,
-      ])
-    );
-    for (const regenRule of regen.waterfall_rules ?? []) {
-      const key = `${regenRule.rule_type}|${(regenRule.to_targets ?? []).sort().join(",")}|${regenRule.group_id ?? ""}|${regenRule.cap_mode ?? ""}`;
-      if (origBySourceTarget.has(key)) {
-        expect(regenRule.order).toBe(origBySourceTarget.get(key));
+
+    function ruleKey(r: { rule_type: string; to_targets?: string[]; group_id?: string | null; cap_mode?: string | null }) {
+      return `${r.rule_type}|${(r.to_targets ?? []).sort().join(",")}|${r.group_id ?? ""}|${r.cap_mode ?? ""}`;
+    }
+
+    // Build order map from regenerated rules.
+    const regenOrderByKey = new Map<string, number>();
+    for (const r of regen.waterfall_rules ?? []) {
+      regenOrderByKey.set(ruleKey(r), r.order ?? 0);
+    }
+
+    // For every pair of original rules that both survive in the regen IR,
+    // verify relative ordering is preserved.
+    const origRules = (original.waterfall_rules ?? []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    for (let i = 0; i < origRules.length; i++) {
+      for (let j = i + 1; j < origRules.length; j++) {
+        const ki = ruleKey(origRules[i]);
+        const kj = ruleKey(origRules[j]);
+        const oi = regenOrderByKey.get(ki);
+        const oj = regenOrderByKey.get(kj);
+        if (oi !== undefined && oj !== undefined) {
+          expect(oi).toBeLessThan(oj);
+        }
       }
     }
   });

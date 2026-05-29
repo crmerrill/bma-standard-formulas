@@ -140,6 +140,8 @@ def build_fnr_2006_018_group_1_deal(
     sup_po_spec = next(c for c in GROUP_1_CLASSES if c["type"] == "SUP_PO")
 
     bonds: list[BondDef] = []
+    pac_i_support_names = [s["name"] for s in sup_bond_specs] + ["PO"]
+    pac_ii_support_names = [s["name"] for s in sup_bond_specs] + ["PO"]
     for spec in pac_i_bond_specs:
         per_bond = _per_bond_planned_balance_schedule(
             pac_i_monthly, pac_i_bond_specs, spec["name"], n_periods
@@ -151,10 +153,14 @@ def build_fnr_2006_018_group_1_deal(
             coupon=spec["coupon_pct"] if spec["coupon_pct"] > 0 else None,
             notional=spec["size"],
             schedule_contract=per_bond,
+            # Prospectus: Group I bonds are the first-priority PAC tier.
+            # Group II bonds (TA, TB) are a separate lower-priority aggregate,
+            # paid only after Group I reaches its planned balance each period.
+            schedule_priority_tier=1,
             relations=[
                 TrancheRelation(
                     relation_type=TrancheRelationType.SUPPORTED_BY,
-                    targets=[s["name"] for s in sup_bond_specs] + ["PO"],
+                    targets=pac_i_support_names,
                 )
             ],
         ))
@@ -169,10 +175,13 @@ def build_fnr_2006_018_group_1_deal(
             coupon=spec["coupon_pct"],
             notional=spec["size"],
             schedule_contract=per_bond,
+            # Group II = second priority tier; paid after Group I each period.
+            schedule_priority_tier=2,
+            schedule_depends_on="PA",  # canonical reference to Grp I anchor bond
             relations=[
                 TrancheRelation(
                     relation_type=TrancheRelationType.SUPPORTED_BY,
-                    targets=[s["name"] for s in sup_bond_specs] + ["PO"],
+                    targets=pac_ii_support_names,
                 )
             ],
         ))

@@ -74,9 +74,27 @@ def verify_structure(
                     f"{bond.name}: model-driven schedule selected; confirm PAC/TAC priority and excess-principal routing in waterfall order."
                 )
             if bond.schedule_priority_tier is None:
-                warnings.append(
-                    f"{bond.name}: schedule priority tier not set; PAC/TAC precedence should be explicit."
-                )
+                # Only warn when there are multiple PAC/TAC bonds in the same group —
+                # if there's only one PAC tier, the ordering is unambiguous and the
+                # warning is noise.  Multi-tier deals (PAC I + PAC II) need explicit
+                # tiers so the runtime applies the correct priority cascade.
+                pac_tac_bonds_in_group = [
+                    b for b in deal.bonds
+                    if b.kind in (TrancheKind.PAC, TrancheKind.TAC)
+                    and b.group_id == bond.group_id
+                ]
+                if len(pac_tac_bonds_in_group) > 1:
+                    # Check if any of them already have distinct tiers — if so,
+                    # the missing tier is a real gap.
+                    tiers_set = {
+                        b.schedule_priority_tier
+                        for b in pac_tac_bonds_in_group
+                        if b.schedule_priority_tier is not None
+                    }
+                    if tiers_set or len(pac_tac_bonds_in_group) > 3:
+                        warnings.append(
+                            f"{bond.name}: schedule priority tier not set; PAC/TAC precedence should be explicit."
+                        )
             if bond.schedule_depends_on:
                 suggestions.append(
                     f"{bond.name}: depends_on={bond.schedule_depends_on}. Verify referenced schedule tier is paid earlier in waterfall."
