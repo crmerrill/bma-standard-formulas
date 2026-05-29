@@ -85,23 +85,25 @@ export const BLOCKLY_CSS_OVERRIDES = `
   font-weight: 500 !important;
 }
 
-/* --- Editable field backgrounds ---
-   Dark semi-transparent overlay so all fields read the same regardless of
-   which block color is behind them. White text (Blockly auto-computed for
-   dark blocks) reads clearly on this dark overlay.
-   NOTE: Do NOT use white fields + CSS text overrides — Blockly applies text
-   color via SVG inline styles that vary by field type and renderer version,
-   making CSS overrides unreliable. Dark fields + auto-white-text = reliable. */
+/* --- Field backgrounds ---
+   field_input / field_number: white bg + black text is set PROGRAMMATICALLY
+   in applyDynamicColors() via field.textElement_.style.fill and
+   field.borderRect_.style.fill — CSS alone cannot reliably override Blockly's
+   SVG inline text color across field types and renderer versions.
+
+   field_dropdown: keep the block-derived dark semi-transparent overlay so
+   the dropdown reads as part of the block. Dropdown text color is left to
+   Blockly's auto-computation (white for dark blocks = always readable). */
 .blocklyFieldRect {
-  fill: rgba(0, 0, 0, 0.45) !important;
-  stroke: rgba(255, 255, 255, 0.12) !important;
+  fill: rgba(0, 0, 0, 0.35) !important;
+  stroke: rgba(255, 255, 255, 0.1) !important;
   rx: 3 !important;
 }
 
-/* Dropdown arrow — lighter so visible against the dark field overlay */
+/* Dropdown arrow visible against dark overlay */
 .blocklyDropDownArrow polygon,
 .blocklyDropDownArrow path {
-  fill: rgba(255, 255, 255, 0.7) !important;
+  fill: rgba(255, 255, 255, 0.75) !important;
 }
 
 /* --- HTML input when editing a field (click to type) ---
@@ -110,10 +112,10 @@ export const BLOCKLY_CSS_OVERRIDES = `
    Goal: identical appearance to the SVG display mode (white bg, dark text,
    same font, same size — no visual change when you click). */
 .blocklyHtmlInput {
-  /* Match the dark SVG field overlay so there's no visual jump on click */
-  background: rgba(0, 0, 20, 0.75) !important;
-  color: #f1f5f9 !important;
-  border: 1px solid rgba(255,255,255,0.2) !important;
+  /* Matches the programmatic white bg + black text set in applyDynamicColors */
+  background: #ffffff !important;
+  color: #111827 !important;
+  border: 1px solid rgba(0,0,0,0.25) !important;
   border-radius: 3px !important;
   font-family: 'Inter', system-ui, sans-serif !important;
   font-size: 11px !important;

@@ -266,23 +266,28 @@ export const DEAL_BLOCKS = [
   },
 
   // Account target — initial balance as % of bond stack or fixed $
-  // The ACCOUNT_TYPE field is a free-text account NAME (e.g. "RESERVE", "PFA",
-  // "SPREAD_ACCT"). irGenerator._canonicalAccountCategory() maps it to a valid
-  // AccountCategory enum. Accounts are declared in the Properties panel first;
-  // this block references them by name.
+  // Account target: the ACCOUNT_TYPE dropdown is populated dynamically by the
+  // "account_type_dynamic_fields" extension which scans the PropertyPanel's
+  // account list. Accounts must be defined in Deal Specifications before they
+  // can be referenced here.
   {
     type: "account_target",
     message0: "→ %1 init %2 %3",
     args0: [
-      { type: "field_input", name: "ACCOUNT_TYPE", text: "RESERVE" },
+      {
+        type: "field_dropdown",
+        name: "ACCOUNT_TYPE",
+        options: [["RESERVE", "RESERVE"]] as [string, string][],
+      },
       { type: "field_dropdown", name: "INITIAL_MODE", options: ACCOUNT_INITIAL_MODE },
       { type: "field_number", name: "INITIAL_AMT", value: 0, min: 0, precision: 0.01 },
     ],
     previousStatement: "target_item",
     nextStatement: "target_item",
-    colour: "#16a34a",
+    colour: "#166534",
+    extensions: ["account_type_dynamic_fields"],
     tooltip:
-      "Account receiving cash. Init: % bond stack = percent of total bond face; $ amount = fixed starting balance. Greens vary by account.",
+      "Account receiving cash. Accounts are defined in Deal Specifications. Init: % bond stack = percent of total bond face; $ amount = fixed starting balance.",
   },
 
   // Residual target — simplest target, just a name, no face/coupon

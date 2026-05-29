@@ -87,6 +87,41 @@ export function useBlocklyWorkspace({
         // extension already registered in a prior workspace mount
       }
 
+      // Dynamic account dropdown: scans the workspace for declared accounts
+      // and populates the ACCOUNT_TYPE dropdown. Runs on block init and
+      // refreshes whenever the workspace changes via onWorkspaceChange.
+      try {
+        Blockly.Extensions.register("account_type_dynamic_fields", function() {
+          const block = this as any;
+          // Refresh the account dropdown options from the current workspace.
+          function refreshAccountOptions() {
+            const ws = block.workspace;
+            if (!ws) return;
+            const field = block.getField("ACCOUNT_TYPE");
+            if (!field) return;
+            const names: string[] = [];
+            for (const b of ws.getAllBlocks(false)) {
+              if (b.type === "account_target" && b.id !== block.id) {
+                const n = b.getFieldValue("ACCOUNT_TYPE");
+                if (n && !names.includes(n)) names.push(n);
+              }
+            }
+            // Hardcoded standard account names always available.
+            const standards = ["RESERVE", "PREFUNDING", "SPREAD_ACCOUNT", "REVOLVING", "PAYMENT"];
+            for (const s of standards) {
+              if (!names.includes(s)) names.push(s);
+            }
+            const current = field.getValue() || names[0];
+            const opts: [string, string][] = names.map((n) => [n, n]);
+            if (!names.includes(current)) opts.unshift([current, current]);
+            try { field.menuGenerator_ = opts; } catch { /* read-only */ }
+          }
+          setTimeout(refreshAccountOptions, 50);
+        });
+      } catch {
+        // extension already registered
+      }
+
       let resolvedTheme = theme;
       if (typeof theme === "object" && theme.name) {
         resolvedTheme = Blockly.Theme.defineTheme(theme.name, theme);

@@ -69,6 +69,46 @@ export function residualColor(name: string, _index: number): string {
   return RESIDUAL_PALETTE[hashName(name) % RESIDUAL_PALETTE.length];
 }
 
+/**
+ * For field_input and field_number: make the background white and text black.
+ *
+ * CSS cannot reliably override Blockly's SVG inline text fill (it varies by
+ * renderer, field type, and Blockly version). We instead set it directly on
+ * the field's textElement_ after Blockly has rendered the block, using the
+ * same Blockly 12 internal API that Blockly itself uses.
+ *
+ * field_dropdown is left alone — it correctly uses block-derived colors.
+ */
+function _styleInputFields(block: any): void {
+  if (!block.inputList) return;
+  for (const input of block.inputList) {
+    if (!input.fieldRow) continue;
+    for (const field of input.fieldRow) {
+      const type = field.constructor?.name ?? "";
+      // Only style text/number input fields, not dropdowns or labels.
+      const isInput = type === "FieldTextInput" || type === "FieldInput" ||
+                      type === "FieldNumber" ||
+                      // Blockly 12 sometimes uses different class names
+                      (field.textElement_ && !field.menu_ && !field.arrow_);
+      const isDropdown = type === "FieldDropdown" || field.menu_ !== undefined ||
+                         field.arrow_ !== undefined;
+      if (isInput && !isDropdown && field.textElement_) {
+        try {
+          // White rect background
+          if (field.borderRect_) {
+            field.borderRect_.style.fill = "#ffffff";
+            field.borderRect_.style.fillOpacity = "1";
+            field.borderRect_.style.stroke = "rgba(0,0,0,0.2)";
+          }
+          // Black text on white background
+          field.textElement_.style.fill = "#111827";
+          field.textElement_.style.fontWeight = "500";
+        } catch { /* ignore */ }
+      }
+    }
+  }
+}
+
 export function applyDynamicColors(workspace: any): void {
   if (!workspace) return;
   const allBlocks = workspace.getAllBlocks(false);
@@ -95,20 +135,28 @@ export function applyDynamicColors(workspace: any): void {
         const name = block.getFieldValue("NAME");
         const idx = bondNames.indexOf(name);
         if (idx >= 0) block.setColour(bondColor(name, idx));
+        _styleInputFields(block);
         break;
       }
       case "account_target": {
         const name = block.getFieldValue("ACCOUNT_TYPE");
         const idx = accountNames.indexOf(name);
         if (idx >= 0) block.setColour(accountColor(name, idx));
+        _styleInputFields(block);
         break;
       }
       case "residual_target": {
         const name = block.getFieldValue("NAME");
         const idx = residualNames.indexOf(name);
         if (idx >= 0) block.setColour(residualColor(name, idx));
+        _styleInputFields(block);
         break;
       }
+      default:
+        // Apply to ALL blocks — pay rules, PAC blocks, fees, etc. also have
+        // field_input and field_number fields that need white + black text.
+        _styleInputFields(block);
+        break;
     }
   }
 }
