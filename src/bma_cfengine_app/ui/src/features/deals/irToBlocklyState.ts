@@ -612,6 +612,16 @@ function _bondDataPayload(bond: IRBond): Record<string, unknown> {
   if (bond.schedule_contract && bond.schedule_contract.length > 0) {
     data.schedule_contract = bond.schedule_contract;
   }
+  // Stash schedule parameters so load→Blockly→save is lossless for PAC/TAC bonds.
+  // These live on the PAC rule block when the user edits live; but when a saved IR
+  // is loaded via irToBlocklyState (no PAC block created), they must survive via
+  // bond_target block.data so irGenerator can emit the correct values.
+  if (bond.schedule_model_type != null) data.schedule_model_type = bond.schedule_model_type;
+  if (bond.schedule_speed_low != null) data.schedule_speed_low = bond.schedule_speed_low;
+  if (bond.schedule_speed_high != null) data.schedule_speed_high = bond.schedule_speed_high;
+  if (bond.schedule_priority_tier != null) data.schedule_priority_tier = bond.schedule_priority_tier;
+  if (bond.schedule_depends_on != null) data.schedule_depends_on = bond.schedule_depends_on;
+  if (bond.schedule_custom_vector != null) data.schedule_custom_vector = bond.schedule_custom_vector;
   // Stash machine-generated schedule provenance so it survives load/edit/save.
   if (bond.schedule_derivation != null) {
     data.schedule_derivation = bond.schedule_derivation;

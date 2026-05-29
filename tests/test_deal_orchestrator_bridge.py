@@ -457,3 +457,119 @@ def test_runsetup_ref_falls_back_gracefully_without_paired_artifact(monkeypatch,
     assert any("per_loan_visibility=false" in msg for msg in user_warnings), (
         "Expected per_loan_visibility=false warning when paired artifact absent"
     )
+
+
+# ---------------------------------------------------------------------------
+# SR8: Observable paired-artifact write failures (acceptance tests)
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_records_paired_artifact_write_failure(monkeypatch, tmp_path):
+    """When _write_paired_artifact raises, the error must be recorded in the
+    manifest per_loan_visibility section and a logger warning must be emitted.
+    """
+    import warnings
+    import numpy as np
+    import pandas as pd
+    from unittest.mock import patch
+    from bma_cfengine_app.orchestrator.run_service import _write_paired_artifact
+
+    _use_tmp_workspace(monkeypatch, tmp_path)
+    run_id = "sr8_write_fail"
+    n = 3
+    agg_df = pd.DataFrame({
+        "perf_bal": np.full(n, 100.0),
+        "act_am": np.full(n, 5.0),
+        "vol_prepay": np.zeros(n),
+        "act_int": np.full(n, 0.5),
+        "new_def": np.zeros(n),
+        "prin_recov": np.zeros(n),
+        "prin_loss": np.zeros(n),
+    })
+    run_store.save_manifest(run_id, {
+        "status": "completed",
+        "scenario_names": ["Base Case"],
+        "loan_count": 1,
+    })
+    run_store.save_artifact(run_id, "Base_Case_portfolio_actual", agg_df)
+
+    # Inject a manifest that records a prior write failure — this is what
+    # _execute_single_scenario produces when _write_paired_artifact throws.
+    injected_error = "IOError: disk full"
+    run_store.save_manifest(run_id, {
+        "status": "completed",
+        "scenario_names": ["Base Case"],
+        "loan_count": 1,
+        "per_loan_visibility": {
+            "Base Case": {
+                "per_loan_visibility": False,
+                "per_loan_visibility_error": injected_error,
+            }
+        },
+    })
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        built = build_from_runsetup_ref(run_id, scenario_names=["Base Case"])
+        user_warnings = [str(x.message) for x in w if issubclass(x.category, UserWarning)]
+
+    # Deal still usable via fallback.
+    assert "Base Case" in built
+
+    # Bridge warning must reference the recorded write error.
+    assert any(
+        "per_loan_visibility=false" in msg and injected_error in msg
+        for msg in user_warnings
+    ), (
+        f"Expected bridge warning to include the recorded write error. Got: {user_warnings}"
+    )
+
+
+def test_bridge_warning_distinguishes_missing_vs_failed_artifact(monkeypatch, tmp_path):
+    """Bridge warning text differs when:
+      (a) artifact was never attempted (no per_loan_visibility in manifest), vs
+      (b) artifact was attempted but failed (per_loan_visibility_error present).
+
+    Both cases emit [per_loan_visibility=false], but (b) includes 'Recorded error'.
+    """
+    import warnings
+    import numpy as np
+    import pandas as pd
+
+    _use_tmp_workspace(monkeypatch, tmp_path)
+
+    def _save_run(rid, with_error: bool):
+        n = 2
+        agg_df = pd.DataFrame({
+            "perf_bal": np.full(n, 50.0), "act_am": np.full(n, 2.0),
+            "vol_prepay": np.zeros(n), "act_int": np.full(n, 0.25),
+            "new_def": np.zeros(n), "prin_recov": np.zeros(n), "prin_loss": np.zeros(n),
+        })
+        manifest: dict = {"status": "completed", "scenario_names": ["Base Case"], "loan_count": 1}
+        if with_error:
+            manifest["per_loan_visibility"] = {
+                "Base Case": {"per_loan_visibility": False, "per_loan_visibility_error": "BOOM"}
+            }
+        run_store.save_manifest(rid, manifest)
+        run_store.save_artifact(rid, "Base_Case_portfolio_actual", agg_df)
+
+    # (a) no error metadata
+    _save_run("sr8_no_error", with_error=False)
+    with warnings.catch_warnings(record=True) as wa:
+        warnings.simplefilter("always")
+        build_from_runsetup_ref("sr8_no_error", scenario_names=["Base Case"])
+    warns_a = [str(x.message) for x in wa if issubclass(x.category, UserWarning)]
+    assert any("per_loan_visibility=false" in m for m in warns_a)
+    assert not any("Recorded error" in m for m in warns_a), (
+        "Should not say 'Recorded error' when no error was recorded"
+    )
+
+    # (b) error metadata present
+    _save_run("sr8_with_error", with_error=True)
+    with warnings.catch_warnings(record=True) as wb:
+        warnings.simplefilter("always")
+        build_from_runsetup_ref("sr8_with_error", scenario_names=["Base Case"])
+    warns_b = [str(x.message) for x in wb if issubclass(x.category, UserWarning)]
+    assert any("per_loan_visibility=false" in m and "Recorded error" in m for m in warns_b), (
+        "Must include 'Recorded error' when per_loan_visibility_error is in manifest"
+    )

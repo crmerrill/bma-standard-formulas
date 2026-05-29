@@ -172,6 +172,13 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
       let zAccrualEnabledFromData: boolean | undefined;
       let scheduleDerivationFromData: Record<string, unknown> | null | undefined;
       let scheduleToleranceBpsFromData: number | null | undefined;
+      // Schedule parameters stashed by irToBlocklyState (load-path only).
+      let scheduleModelTypeFromData: TargetInfo["scheduleModelType"] | undefined;
+      let scheduleSpeedLowFromData: number | null | undefined;
+      let scheduleSpeedHighFromData: number | null | undefined;
+      let schedulePriorityTierFromData: number | null | undefined;
+      let scheduleDependsOnFromData: string | null | undefined;
+      let scheduleCustomVectorFromData: string | null | undefined;
       // Non-scalar coupon/margin/cap/floor schedules stashed by irToBlocklyState.
       let couponScheduleFromData: unknown;
       let marginScheduleFromData: unknown;
@@ -235,6 +242,28 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
           if (typeof parsed.schedule_tolerance_bps === "number") {
             scheduleToleranceBpsFromData = parsed.schedule_tolerance_bps;
           }
+          // Restore schedule parameters stashed by irToBlocklyState._bondDataPayload.
+          // These are only present when the bond was loaded from a saved IR (no live
+          // PAC block available). If a live PAC block IS present, emitPacTacSchedule
+          // overwrites these via registerTargets, so there is no double-write.
+          if (typeof (parsed as Record<string, unknown>).schedule_model_type === "string") {
+            scheduleModelTypeFromData = (parsed as Record<string, unknown>).schedule_model_type as TargetInfo["scheduleModelType"];
+          }
+          if (typeof (parsed as Record<string, unknown>).schedule_speed_low === "number") {
+            scheduleSpeedLowFromData = (parsed as Record<string, unknown>).schedule_speed_low as number;
+          }
+          if (typeof (parsed as Record<string, unknown>).schedule_speed_high === "number") {
+            scheduleSpeedHighFromData = (parsed as Record<string, unknown>).schedule_speed_high as number;
+          }
+          if (typeof (parsed as Record<string, unknown>).schedule_priority_tier === "number") {
+            schedulePriorityTierFromData = (parsed as Record<string, unknown>).schedule_priority_tier as number;
+          }
+          if (typeof (parsed as Record<string, unknown>).schedule_depends_on === "string") {
+            scheduleDependsOnFromData = (parsed as Record<string, unknown>).schedule_depends_on as string;
+          }
+          if (typeof (parsed as Record<string, unknown>).schedule_custom_vector === "string") {
+            scheduleCustomVectorFromData = (parsed as Record<string, unknown>).schedule_custom_vector as string;
+          }
           if (Array.isArray(parsed.coupon_schedule)) couponScheduleFromData = parsed.coupon_schedule;
           if (Array.isArray(parsed.margin_schedule)) marginScheduleFromData = parsed.margin_schedule;
           if (Array.isArray(parsed.cap_schedule)) capScheduleFromData = parsed.cap_schedule;
@@ -264,6 +293,12 @@ function extractTargets(ruleBlock: any, inputName = "TARGETS"): TargetInfo[] {
         scheduleContract: scheduleContractFromData.length > 0 ? scheduleContractFromData : [],
         scheduleToleranceBps: scheduleToleranceBpsFromData,
         scheduleDerivation: scheduleDerivationFromData,
+        scheduleModelType: scheduleModelTypeFromData,
+        scheduleSpeedLow: scheduleSpeedLowFromData,
+        scheduleSpeedHigh: scheduleSpeedHighFromData,
+        schedulePriorityTier: schedulePriorityTierFromData,
+        scheduleDependsOn: scheduleDependsOnFromData,
+        scheduleCustomVector: scheduleCustomVectorFromData,
         supportTranches: [],
         relations: relationData,
         zReleaseTrigger: null,
@@ -479,10 +514,30 @@ function registerTargets(targets: TargetInfo[], ctx: Ctx): void {
           existing.zAccrualEnabled !== undefined ? existing.zAccrualEnabled
           : t.zAccrualEnabled !== undefined ? t.zAccrualEnabled
           : undefined,
-        // Preserve schedule provenance from whichever encounter has it.
+        // Preserve schedule provenance and parameters from whichever encounter has them.
+        // PAC-block path sets these on registerTargets; load path has them in block.data.
+        // In both cases: first non-null value wins so neither path clobbers the other.
         scheduleDerivation:
           existing.scheduleDerivation != null ? existing.scheduleDerivation
           : t.scheduleDerivation,
+        scheduleModelType:
+          existing.scheduleModelType != null ? existing.scheduleModelType
+          : t.scheduleModelType,
+        scheduleSpeedLow:
+          existing.scheduleSpeedLow != null ? existing.scheduleSpeedLow
+          : t.scheduleSpeedLow,
+        scheduleSpeedHigh:
+          existing.scheduleSpeedHigh != null ? existing.scheduleSpeedHigh
+          : t.scheduleSpeedHigh,
+        schedulePriorityTier:
+          existing.schedulePriorityTier != null ? existing.schedulePriorityTier
+          : t.schedulePriorityTier,
+        scheduleDependsOn:
+          existing.scheduleDependsOn != null ? existing.scheduleDependsOn
+          : t.scheduleDependsOn,
+        scheduleCustomVector:
+          existing.scheduleCustomVector != null ? existing.scheduleCustomVector
+          : t.scheduleCustomVector,
       });
     } else if (t.accountType) {
       if (!ctx.accounts.has(t.name)) ctx.accounts.set(t.name, t);

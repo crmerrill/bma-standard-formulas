@@ -443,4 +443,43 @@ describe("SR2 + SR3 block.data round-trip", () => {
     // Default tolerance is 25 bps when not in block.data
     expect(pac?.schedule_tolerance_bps).toBe(25);
   });
+
+  it("SR3: schedule_model_type and speed band round-trip from block.data (load path)", () => {
+    // When a saved IR is loaded via irToBlocklyState (no PAC rule block created),
+    // irGenerator must recover schedule_model_type/speed_low/high/priority_tier
+    // from bond_target block.data, not lose them.
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [
+        bondTargetBlock("PA", 1000, {
+          kind: "PAC",
+          schedule_model_type: "PSA",
+          schedule_speed_low: 100,
+          schedule_speed_high: 250,
+          schedule_priority_tier: 1,
+          schedule_depends_on: "PB",
+          schedule_contract: [{ period: 1, target_principal: 5 }],
+        }),
+      ]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const pa = ir.bonds.find((b) => b.name === "PA");
+    expect(pa?.schedule_model_type).toBe("PSA");
+    expect(pa?.schedule_speed_low).toBe(100);
+    expect(pa?.schedule_speed_high).toBe(250);
+    expect(pa?.schedule_priority_tier).toBe(1);
+    expect(pa?.schedule_depends_on).toBe("PB");
+  });
+
+  it("SR3: schedule_model_type=null when absent from block.data (normal bond)", () => {
+    const ws = makeWorkspace([
+      paySequentialBlock("CASH", [bondTargetBlock("A", 100)]),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const a = ir.bonds.find((b) => b.name === "A");
+    expect(a?.schedule_model_type).toBeNull();
+    expect(a?.schedule_speed_low).toBeNull();
+    expect(a?.schedule_speed_high).toBeNull();
+  });
 });
