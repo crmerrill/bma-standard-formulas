@@ -26,9 +26,11 @@ function hashName(name: string): number {
 function hslToHex(h: number, s: number, l: number): string {
   h = ((h % 360) + 360) % 360;
   s = Math.max(0, Math.min(100, s));
-  // Hard cap: lightness ≤ 44 so Blockly always renders WHITE text on the block.
-  // Blockly's auto-text-color flips to black above ~50% perceived brightness.
-  l = Math.max(24, Math.min(44, l));
+  // Lightness range 48-60%: keeps Blockly's perceived brightness ≥ 128 so
+  // it renders BLACK text.  Black text is readable BOTH on the pastel block
+  // background AND inside the white field_input / field_number boxes.
+  // (Capping at ≤ 44% forced white text, which was invisible inside white fields.)
+  l = Math.max(48, Math.min(60, l));
 
   const s1 = s / 100;
   const l1 = l / 100;
@@ -68,8 +70,8 @@ export function bondColor(name: string, index: number): string {
   // names still visibly differ (e.g. PA vs PB in adjacent slots).
   hue = (hue + (h % 9) - 4 + 360) % 360;
 
-  const sat = 64 + (h % 14);   // 64-77: vivid, clearly distinct from pay rules
-  const light = 30 + (h % 14); // 30-43: always dark enough for white Blockly text
+  const sat = 55 + (h % 18);   // 55-72: saturated but not garish at lighter L
+  const light = 50 + (h % 10); // 50-59: inside 48-60 clamp → black text always
   return hslToHex(hue, sat, light);
 }
 
@@ -79,8 +81,8 @@ export function bondColor(name: string, index: number): string {
 export function accountColor(name: string, index: number): string {
   const h = hashName(name) + index * 5003;
   const hue = 108 + ((index * 23 + (h % 11)) % 58); // 108-165
-  const sat = 54 + ((h >>> 2) % 20);   // 54-73
-  const light = 28 + ((h >>> 6) % 14); // 28-41
+  const sat = 50 + ((h >>> 2) % 20);   // 50-69
+  const light = 50 + ((h >>> 6) % 10); // 50-59 → black text
   return hslToHex(hue, sat, light);
 }
 
@@ -88,8 +90,8 @@ export function accountColor(name: string, index: number): string {
 export function residualColor(name: string, index: number): string {
   const h = hashName(name) + index * 3001;
   const hue = 258 + ((index * 19 + (h % 13)) % 62); // 258-319
-  const sat = 54 + ((h >>> 2) % 20);   // 54-73
-  const light = 28 + ((h >>> 6) % 14); // 28-41
+  const sat = 50 + ((h >>> 2) % 20);   // 50-69
+  const light = 50 + ((h >>> 6) % 10); // 50-59 → black text
   return hslToHex(hue, sat, light);
 }
 

@@ -106,10 +106,13 @@ const RULE_SOURCE_MAP: Record<string, string> = {
 };
 
 function normalizeRuleSource(source: string | null | undefined): string {
-  const token = source || "COLLECTION";
-  // If the token is in the map, use the mapped value.
-  // If not, pass the token through unchanged so that account/bond names
-  // used as coverage-mode sources are not silently collapsed to CASH.
+  // Default to CASH when the field is empty (field_input default not saved yet).
+  const token = (source || "").trim() || "CASH";
+  // Canonical names (CASH, ACT_INT, ACT_PRIN, LOSS, bucket names, account
+  // names) pass through unchanged. Legacy dropdown values (COLLECTION,
+  // INT_COLLECTION, PRIN_COLLECTION, DISTRIBUTION, RESERVE) are remapped
+  // for backward compatibility with workspaces saved before SOURCE became
+  // a field_input.
   if (Object.prototype.hasOwnProperty.call(RULE_SOURCE_MAP, token)) {
     return RULE_SOURCE_MAP[token];
   }

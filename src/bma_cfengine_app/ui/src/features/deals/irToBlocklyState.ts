@@ -178,14 +178,15 @@ function _stripGroupPrefix(key: string): string {
  * "COLLECTION" matches the irGenerator's `RULE_SOURCE_MAP` inverse.
  */
 function ruleSourceForUI(source: string): string {
+  // Strip the GROUP_<id>_ prefix for grouped rules; the canonical name
+  // is used directly as the field_input value (SOURCE is now field_input,
+  // not field_dropdown, so any token name is valid).
   const stripped = _stripGroupPrefix(source);
-  if (stripped === "CASH") return "COLLECTION";
-  if (stripped === "ACT_INT") return "INT_COLLECTION";
-  if (stripped === "ACT_PRIN") return "PRIN_COLLECTION";
-  // Legacy alias: old IRs that pre-date the BMA-native token rename
-  // may carry a bare `COLLATERAL` token. Map it to the canonical CASH
-  // dropdown value so legacy fixtures still round-trip correctly.
-  if (stripped === "COLLATERAL") return "COLLECTION";
+  // Map legacy aliases to canonical names for backward compat.
+  if (stripped === "COLLATERAL") return "CASH";
+  // Canonical names (CASH, ACT_INT, ACT_PRIN, LOSS, bucket names, account
+  // names, etc.) pass through verbatim — they're exactly what the analyst
+  // should see in the SOURCE field_input.
   return stripped;
 }
 
@@ -573,6 +574,10 @@ function waterfallRuleToBlock(
     group_id: rule.group_id,
     cap_mode: rule.cap_mode,
     coverage_mode: rule.coverage_mode,
+    // Stash the canonical from_sources so that custom bucket names
+    // (e.g. WAWG_BUCKET, PO_BUCKET) survive the round-trip even when
+    // the SOURCE dropdown falls back to "COLLECTION" for unknown values.
+    canonical_source: (rule.from_sources ?? []).join(",") || undefined,
   });
   return block;
 }

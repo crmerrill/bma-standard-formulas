@@ -45,7 +45,7 @@ describe("synthesizeWorkspaceState", () => {
     expect(head.type).toBe("pay_fee");
     expect(head.fields).toMatchObject({
       PAYEE: "TRUSTEE",
-      SOURCE: "COLLECTION",
+      SOURCE: "CASH",
       BASIS: "PCT_POOL",
       FREQ: "MONTHLY",
     });
@@ -70,7 +70,7 @@ describe("synthesizeWorkspaceState", () => {
     expect(seq.type).toBe("pay_sequential");
     expect(seq.fields).toMatchObject({
       PAY_TYPE: "INTEREST",
-      SOURCE: "COLLECTION",
+      SOURCE: "CASH",
       LIMIT: "UNTIL_ZERO",
       MAX_PAY: 0,
     });
@@ -451,8 +451,8 @@ describe("synthesizeWorkspaceState", () => {
       };
       const state = synthesizeWorkspaceState(deal);
       const block = state!.blocks.blocks[0];
-      // ACT_INT (with rule.group_id=GROUP_1) -> "INT_COLLECTION" UI value.
-      expect(block.fields?.SOURCE).toBe("INT_COLLECTION");
+      // ACT_INT (with rule.group_id=GROUP_1) -> canonical "ACT_INT" (GROUP_ prefix stripped).
+      expect(block.fields?.SOURCE).toBe("ACT_INT");
     });
 
     it("partitions multi-group rules into one chain per group at distinct x positions", () => {

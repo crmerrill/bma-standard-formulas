@@ -111,7 +111,7 @@ export const DEAL_BLOCKS = [
     message0: "Pay Sequential %1 from %2 %3 limit %4 max pay $%5 %6 targets: %7",
     args0: [
       { type: "field_dropdown", name: "PAY_TYPE", options: PAYMENT_TYPE_OPTIONS },
-      { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
+      { type: "field_input", name: "SOURCE", text: "CASH" },
       { type: "input_dummy" },
       { type: "field_dropdown", name: "LIMIT", options: LIMIT_OPTIONS },
       { type: "field_number", name: "MAX_PAY", value: 0, min: 0, precision: 1 },
@@ -130,7 +130,7 @@ export const DEAL_BLOCKS = [
     message0: "Pay Pro Rata %1 from %2 %3 by %4 max pay $%5 %6 targets: %7",
     args0: [
       { type: "field_dropdown", name: "PAY_TYPE", options: PAYMENT_TYPE_OPTIONS },
-      { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
+      { type: "field_input", name: "SOURCE", text: "CASH" },
       { type: "input_dummy" },
       { type: "field_dropdown", name: "BASIS", options: [["Balance", "BALANCE"], ["Face", "FACE"], ["Equal", "EQUAL"]] },
       { type: "field_number", name: "MAX_PAY", value: 0, min: 0, precision: 1 },
@@ -152,7 +152,7 @@ export const DEAL_BLOCKS = [
       { type: "field_number", name: "SPEED_LOW", value: 100, min: 0, precision: 0.01 },
       { type: "field_number", name: "SPEED_HIGH", value: 275, min: 0, precision: 0.01 },
       { type: "field_input", name: "CUSTOM_VECTOR", text: "ramp(100,275,24)" },
-      { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
+      { type: "field_input", name: "SOURCE", text: "ACT_PRIN" },
       { type: "field_number", name: "PRIORITY_TIER", value: 1, min: 1, precision: 1 },
       { type: "field_input", name: "DEPENDS_ON", text: "" },
     ],
@@ -174,7 +174,7 @@ export const DEAL_BLOCKS = [
       { type: "field_dropdown", name: "MODEL_TYPE", options: PREPAY_MODEL_OPTIONS },
       { type: "field_number", name: "SPEED_LOW", value: 175, min: 0, precision: 0.01 },
       { type: "field_input", name: "CUSTOM_VECTOR", text: "ramp(175,175,24)" },
-      { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
+      { type: "field_input", name: "SOURCE", text: "ACT_PRIN" },
       { type: "field_number", name: "PRIORITY_TIER", value: 3, min: 1, precision: 1 },
       { type: "field_input", name: "DEPENDS_ON", text: "PAC_I" },
     ],
@@ -194,7 +194,7 @@ export const DEAL_BLOCKS = [
     message0: "Accretion Redirect while %1 accrues from %2 max pay $%3 targets: %4",
     args0: [
       { type: "field_input", name: "Z_TRANCHE", text: "Z" },
-      { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
+      { type: "field_input", name: "SOURCE", text: "ACT_PRIN" },
       { type: "field_number", name: "MAX_PAY", value: 0, min: 0, precision: 1 },
       { type: "input_statement", name: "TARGETS", check: "target_item" },
     ],
@@ -210,7 +210,7 @@ export const DEAL_BLOCKS = [
     message0: "Pay Fee %1 from %2 %3 %4 freq %5",
     args0: [
       { type: "field_dropdown", name: "PAYEE", options: FEE_PAYEE_OPTIONS },
-      { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
+      { type: "field_input", name: "SOURCE", text: "CASH" },
       { type: "field_dropdown", name: "BASIS", options: FEE_BASIS_OPTIONS },
       { type: "field_number", name: "AMOUNT", value: 0, min: 0, precision: 0.01 },
       { type: "field_dropdown", name: "FREQ", options: FEE_FREQUENCY_OPTIONS },
@@ -226,9 +226,9 @@ export const DEAL_BLOCKS = [
     type: "split_account",
     message0: "Split %1 into %2 and %3",
     args0: [
-      { type: "field_dropdown", name: "SOURCE", options: ACCOUNT_SOURCE_OPTIONS },
-      { type: "field_input", name: "OUT_1", text: "Principal Collection" },
-      { type: "field_input", name: "OUT_2", text: "Interest Collection" },
+      { type: "field_input", name: "SOURCE", text: "ACT_PRIN" },
+      { type: "field_input", name: "OUT_1", text: "ACT_PRIN_A" },
+      { type: "field_input", name: "OUT_2", text: "ACT_PRIN_B" },
     ],
     previousStatement: "waterfall_item",
     nextStatement: "waterfall_item",
@@ -259,7 +259,7 @@ export const DEAL_BLOCKS = [
     ],
     previousStatement: "target_item",
     nextStatement: "target_item",
-    colour: "#dc2626",
+    colour: "#e87070",  // softer red L≈55% → black text, readable in white input fields
     extensions: ["bond_target_dynamic_fields"],
     tooltip:
       "Bond target. Face in dollars. Red/orange hues vary by tranche name (property panel syncs names).",
