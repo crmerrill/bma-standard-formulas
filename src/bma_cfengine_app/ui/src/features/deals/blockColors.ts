@@ -1,15 +1,18 @@
 /**
  * Dynamic colors for target blocks only.
  *
- * Pay rules keep their static blues / blue-greens from block definitions (calm
- * “structure” layer). Targets inside them use saturated, well-separated hues so
- * tranches are scannable at a glance:
- *   — Bonds: red → orange (warm, high spread)
- *   — Accounts: emerald / jade greens (clearly not blue pay rules)
- *   — Residuals: violet → purple (equity / remainder read)
+ * Pay rules keep their static blues / blue-greens from block definitions.
+ * Targets use saturated, well-separated hues so tranches are scannable.
  *
- * Each family uses hash + index + large primes so similar names still diverge;
- * saturation/lightness vary in bands that stay readable on the dark workspace.
+ * Design rules:
+ *   1. LIGHTNESS ≤ 44% everywhere — keeps Blockly's automatic text color WHITE.
+ *      Above ~50% lightness Blockly switches to black text, which is nearly
+ *      invisible on a dark canvas. Hard cap at 44%.
+ *   2. Bond hues use a GOLDEN-RATIO SPREAD (137.5°/step) across the usable arc,
+ *      skipping green/teal (100-200°) and violet (250-320°) which belong to
+ *      accounts and residuals. This gives 15+ bonds fully distinct colors with
+ *      no repeats before the sequence wraps.
+ *   3. Accounts stay in greens (108-165°), residuals in violet-purple (258-320°).
  */
 
 function hashName(name: string): number {
@@ -23,7 +26,9 @@ function hashName(name: string): number {
 function hslToHex(h: number, s: number, l: number): string {
   h = ((h % 360) + 360) % 360;
   s = Math.max(0, Math.min(100, s));
-  l = Math.max(0, Math.min(100, l));
+  // Hard cap: lightness ≤ 44 so Blockly always renders WHITE text on the block.
+  // Blockly's auto-text-color flips to black above ~50% perceived brightness.
+  l = Math.max(24, Math.min(44, l));
 
   const s1 = s / 100;
   const l1 = l / 100;
@@ -36,33 +41,56 @@ function hslToHex(h: number, s: number, l: number): string {
   return `#${f(0)}${f(8)}${f(4)}`;
 }
 
-/** Bonds — reds through orange (≈0°–50°), wide spread via hash + index primes */
+/**
+ * Bonds — golden-ratio hue spread (137.5°/step) remapped to avoid the green/teal
+ * (100-200°) and violet (250-320°) arcs used by accounts and residuals.
+ * With 15 bonds this produces 15 fully distinct, readable colors before any wrap.
+ */
 export function bondColor(name: string, index: number): string {
-  const h = hashName(name) + index * 7919;
-  const hue = (h + index * 47) % 51; // 0–50: crimson → orange
-  const sat = 50 + ((h >>> 2) % 28); // 50–77
-  const light = 38 + ((h >>> 6) % 20); // 38–57
-  return hslToHex(hue, Math.min(sat, 80), Math.min(light, 58));
+  const h = hashName(name);
+  // Golden angle (137.5°) gives maximum perceptual separation at each step.
+  const rawHue = (index * 137.508) % 360;
+
+  // Remap to skip green/teal (100-200°) and violet (250-320°):
+  //   0-99   → kept as-is (red, orange, yellow)
+  //   100-249 → compressed to 205-249 (blue/indigo/cyan-dark)
+  //   250-359 → shifted to 320-359 (magenta/rose/hot-pink)
+  let hue: number;
+  if (rawHue < 100) {
+    hue = rawHue;
+  } else if (rawHue < 250) {
+    hue = 205 + ((rawHue - 100) / 150) * 44;
+  } else {
+    hue = 320 + ((rawHue - 250) / 110) * 39;
+  }
+
+  // Small per-name variation (±4°) so identically-indexed bonds with similar
+  // names still visibly differ (e.g. PA vs PB in adjacent slots).
+  hue = (hue + (h % 9) - 4 + 360) % 360;
+
+  const sat = 64 + (h % 14);   // 64-77: vivid, clearly distinct from pay rules
+  const light = 30 + (h % 14); // 30-43: always dark enough for white Blockly text
+  return hslToHex(hue, sat, light);
 }
 
 /**
- * Accounts — greens (≈108°–158°), away from pay-rule teals (~175°+) and bonds.
+ * Accounts — greens (108-165°), clearly separated from bonds and residuals.
  */
 export function accountColor(name: string, index: number): string {
   const h = hashName(name) + index * 5003;
-  const hue = 108 + (h % 52) + (index * 7) % 12;
-  const sat = 46 + ((h >>> 2) % 26);
-  const light = 36 + ((h >>> 6) % 18);
-  return hslToHex(Math.min(Math.max(hue, 108), 165), Math.min(sat, 76), Math.min(light, 56));
+  const hue = 108 + ((index * 23 + (h % 11)) % 58); // 108-165
+  const sat = 54 + ((h >>> 2) % 20);   // 54-73
+  const light = 28 + ((h >>> 6) % 14); // 28-41
+  return hslToHex(hue, sat, light);
 }
 
-/** Residuals — violet / purple / magenta (≈258°–320°) */
+/** Residuals — violet / purple (258-320°) */
 export function residualColor(name: string, index: number): string {
   const h = hashName(name) + index * 3001;
-  const hue = 258 + (h % 64) + (index * 9) % 14;
-  const sat = 44 + ((h >>> 2) % 28);
-  const light = 40 + ((h >>> 6) % 16);
-  return hslToHex(Math.min(Math.max(hue, 258), 322), Math.min(sat, 74), Math.min(light, 56));
+  const hue = 258 + ((index * 19 + (h % 13)) % 62); // 258-319
+  const sat = 54 + ((h >>> 2) % 20);   // 54-73
+  const light = 28 + ((h >>> 6) % 14); // 28-41
+  return hslToHex(hue, sat, light);
 }
 
 /**
