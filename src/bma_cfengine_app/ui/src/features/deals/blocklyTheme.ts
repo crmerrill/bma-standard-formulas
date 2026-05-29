@@ -85,36 +85,43 @@ export const BLOCKLY_CSS_OVERRIDES = `
   font-weight: 500 !important;
 }
 
-/* --- Editable field rects (white background so text is legible) --- */
-.blocklyEditableText > .blocklyFieldRect,
-.blocklyEditableText > rect {
+/* --- Editable field backgrounds — white so text is always legible ---
+   .blocklyFieldRect is the standard body rect for text/number/dropdown fields.
+   We target it by class, not by positional combinators, to avoid catching
+   unrelated rects (e.g. dropdown indicator rects that have separate styling). */
+.blocklyFieldRect {
   fill: #ffffff !important;
   fill-opacity: 1 !important;
-  stroke: rgba(0,0,0,0.18) !important;
+  stroke: rgba(0,0,0,0.15) !important;
   rx: 3 !important;
 }
-/* Text INSIDE white field boxes must be dark */
+
+/* Text inside all editable field bodies — dark */
 .blocklyEditableText .blocklyText {
   fill: #111827 !important;
   font-weight: 500 !important;
 }
 
-/* --- Dropdown fields (white background, dark text, dark arrow) --- */
+/* Dropdown field text value */
 .blocklyDropdownText {
   fill: #111827 !important;
   font-family: 'Inter', system-ui, sans-serif !important;
   font-size: 11px !important;
 }
-/* The dropdown field background rect */
-.blocklyEditableText.blocklyDropDown > .blocklyFieldRect,
-.blocklyDropdownRect {
-  fill: #ffffff !important;
-  stroke: rgba(0,0,0,0.18) !important;
-}
-/* Dropdown arrow/chevron — dark so it's visible on white */
+
+/* Dropdown arrow — the polygon/path element that draws the chevron.
+   In Blockly v10 Zelos renderer, .blocklyDropDownArrow is the group
+   containing the arrow polygon. Dark fill makes it visible on white. */
 .blocklyDropDownArrow {
   fill: #374151 !important;
 }
+.blocklyDropDownArrow polygon,
+.blocklyDropDownArrow path {
+  fill: #374151 !important;
+}
+
+/* Don't re-style .blocklyDropdownRect (Blockly v10 doesn't use that class
+   for the indicator; leaving it alone prevents accidental white-on-white). */
 
 /* --- HTML input when editing a field (click to type) ---
    Blockly injects this element with inline styles; these !important rules
