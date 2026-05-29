@@ -245,24 +245,25 @@ def build_fnr_2006_018_group_1_deal(
         ))
         order += 1
 
-    # 1. Interest cascade: PAY_INTEREST rules draw from the dedicated
-    #    `ACT_INT` stream (pool interest cash). Z is PIK -- its accrued
-    #    coupon is capitalized into Z balance and re-routed to TA principal
-    #    by the Z-accrual mechanic, with the matching pool interest deducted
-    #    from ACT_INT so the principal cascade sees only true pool principal.
-    for name in pac_i_targets + pac_ii_targets + sup_targets_seq:
-        if name == "EO" or name == "PO":  # zero-coupon bonds, no interest payment.
-            continue
-        add(f"r_int_{name}", RuleType.PAY_INTEREST, ["ACT_INT"], [name])
+    # 1. Interest: one rule pays all interest-bearing bonds simultaneously.
+    #    EO and PO are zero-coupon (no cash interest). Z is PIK -- its
+    #    coupon capitalizes into Z balance via the Z-accrual mechanic and
+    #    is NOT paid as cash here; ACT_INT is deducted automatically so
+    #    the principal cascade sees only true pool principal.
+    interest_targets = [n for n in pac_i_targets + pac_ii_targets + sup_targets_seq
+                        if n not in ("EO", "PO")]
+    add("r_int_all", RuleType.PAY_INTEREST, ["ACT_INT"], interest_targets,
+        style=PaymentStyle.SEQUENTIAL)
 
-    # 2. Principal cascade: PAY_PRINCIPAL rules draw from the dedicated
-    #    `ACT_PRIN` stream (pool principal cash + Z accrual amount routed
-    #    here via the Z mechanic). This is the prospectus's "Group 1 Cash
-    #    Flow Distribution Amount" priority of payments verbatim.
-    for name in pac_i_targets:
-        add(f"r_prin_{name}", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"], [name])
-    for name in pac_ii_targets:
-        add(f"r_prin_{name}", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"], [name])
+    # 2. Principal cascade — one rule per tier, SEQUENTIAL style so the
+    #    runtime pays bonds within each tier left-to-right until each
+    #    bond's schedule cap (or balance) is exhausted before moving on.
+    #    This faithfully represents the prospectus's Aggregate Group
+    #    Planned Balance priority without needing one rule per bond.
+    add("r_prin_pac_i", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"], pac_i_targets,
+        style=PaymentStyle.SEQUENTIAL)
+    add("r_prin_pac_ii", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"], pac_ii_targets,
+        style=PaymentStyle.SEQUENTIAL)
     add("r_prin_Z", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"], ["Z"])
 
     # Step 4 -- Support cash split using the SPLIT_CASH IR primitive.
@@ -317,34 +318,16 @@ def build_fnr_2006_018_group_1_deal(
     # the prospectus's steps (v) and (vi) for PAC, and ensures the
     # support PO drains last (after PAC cleanup) so we do not accidentally
     # steal cash that the published priority sends to PAC II/I cleanup.
-    for name in pac_ii_targets:
-        add(
-            f"r_prin_{name}_uncapped",
-            RuleType.PAY_PRINCIPAL,
-            ["ACT_PRIN"],
-            [name],
-            cap_mode=CapMode.NONE,
-        )
-    for name in pac_i_targets:
-        add(
-            f"r_prin_{name}_uncapped",
-            RuleType.PAY_PRINCIPAL,
-            ["ACT_PRIN"],
-            [name],
-            cap_mode=CapMode.NONE,
-        )
-    # Support cleanup -- supports + PO each get a final "to zero" rule so
-    # tail-period residual principal that survives the face-weighted split
-    # (e.g., when WA-WG retire one period before PO does) drains to whoever
-    # still has balance.
-    for name in sup_targets_seq + ["PO"]:
-        add(
-            f"r_prin_{name}_uncapped",
-            RuleType.PAY_PRINCIPAL,
-            ["ACT_PRIN"],
-            [name],
-            cap_mode=CapMode.NONE,
-        )
+    # Cleanup cascade: one rule per tier with cap_mode=NONE so any
+    # residual principal after the schedule-capped phase drains to
+    # whoever still has balance ("without regard to Planned Balance").
+    add("r_prin_pac_ii_cleanup", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"],
+        pac_ii_targets, style=PaymentStyle.SEQUENTIAL, cap_mode=CapMode.NONE)
+    add("r_prin_pac_i_cleanup", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"],
+        pac_i_targets, style=PaymentStyle.SEQUENTIAL, cap_mode=CapMode.NONE)
+    # Support cleanup — supports + PO each drain any residual principal.
+    add("r_prin_sup_cleanup", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"],
+        sup_targets_seq + ["PO"], style=PaymentStyle.SEQUENTIAL, cap_mode=CapMode.NONE)
     # Residual sweeps both streams: leftover pool interest (after bond cash
     # interest and Z accrual) plus leftover pool principal (e.g., after
     # cleanup rules retire all bonds) flow to the residual class.
@@ -448,24 +431,16 @@ def build_fnr_2006_018_group_2_deal(n_periods: int = 240) -> DealDefinition:
     interest_targets = [s["name"] for s in seq_specs] + [ntl_io["name"]]
     principal_targets = [s["name"] for s in seq_specs] + [seq_po["name"]]
 
-    # 1. Pay interest on each cash-paying bond from ACT_INT.
-    for name in interest_targets:
-        add(f"r_int_{name}", RuleType.PAY_INTEREST, ["ACT_INT"], [name])
+    # 1. Pay interest on all cash-paying bonds from ACT_INT (one rule).
+    add("r_int_all", RuleType.PAY_INTEREST, ["ACT_INT"], interest_targets,
+        cap_mode=None)
 
-    # 2. Sequential principal cascade BA -> BC -> BD -> DO from ACT_PRIN.
-    for name in principal_targets:
-        add(f"r_prin_{name}", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"], [name])
+    # 2. Sequential principal cascade BA -> BC -> BD -> DO (one rule).
+    add("r_prin_seq", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"], principal_targets)
 
-    # 3. Cleanup cascade: every bond gets a `cap_mode=NONE` rule so any
-    # leftover principal cash drains to whoever still has balance.
-    for name in principal_targets:
-        add(
-            f"r_prin_{name}_uncapped",
-            RuleType.PAY_PRINCIPAL,
-            ["ACT_PRIN"],
-            [name],
-            cap_mode=CapMode.NONE,
-        )
+    # 3. Cleanup: one rule drains all remaining principal to whoever has balance.
+    add("r_prin_cleanup", RuleType.PAY_PRINCIPAL, ["ACT_PRIN"],
+        principal_targets, cap_mode=CapMode.NONE)
 
     # 4. Residual sweeps both streams.
     add("r_resid_int", RuleType.PAY_RESIDUAL, ["ACT_INT"], ["R"])
