@@ -618,7 +618,7 @@ function applyPacTacSemantics(
     supportsRaw: string;
   },
 ): TargetInfo[] {
-  const scheduleContract = buildSyntheticScheduleFromModel({
+  const syntheticContract = buildSyntheticScheduleFromModel({
     behavior,
     modelType,
     speedLow,
@@ -631,6 +631,19 @@ function applyPacTacSemantics(
     .filter(Boolean);
   return targets.map((target) => {
     if (!target.isBond) return target;
+    // Schedule-contract precedence:
+    //   1. Non-empty synthetic (user set real PSA / CPR / CUSTOM_VECTOR params) — wins.
+    //   2. Non-empty block.data schedule (prospectus tables, loaded via irToBlocklyState) — fallback.
+    //   3. Empty array — last resort.
+    // This prevents CUSTOM_VECTOR mode with an empty text field (the default when
+    // irToBlocklyState synthesizes a PAC block from a prospectus-derived IR) from
+    // overwriting the stored schedule_contract that lives in block.data.
+    const storedContract = target.scheduleContract ?? [];
+    const resolvedContract = syntheticContract.length > 0
+      ? syntheticContract
+      : storedContract.length > 0
+        ? storedContract
+        : [];
     return {
       ...target,
       kind: behavior,
@@ -640,7 +653,7 @@ function applyPacTacSemantics(
       scheduleSpeedLow: speedLow,
       scheduleSpeedHigh: speedHigh,
       scheduleCustomVector: customVector.trim() || null,
-      scheduleContract,
+      scheduleContract: resolvedContract,
       scheduleToleranceBps: null,
       supportTranches,
     };

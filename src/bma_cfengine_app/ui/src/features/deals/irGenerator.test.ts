@@ -471,6 +471,73 @@ describe("SR2 + SR3 block.data round-trip", () => {
     expect(pa?.schedule_depends_on).toBe("PB");
   });
 
+  it("SR3/PAC: block.data schedule_contract preserved through PAC block round-trip", () => {
+    // When irToBlocklyState synthesizes a PAC block from a prospectus-derived IR,
+    // it sets MODEL_TYPE=CUSTOM_VECTOR with empty CUSTOM_VECTOR text. Previously
+    // applyPacTacSemantics would overwrite the bond's block.data schedule_contract
+    // with the empty synthetic result, destroying the prospectus schedule.
+    // This test verifies the stored schedule is preserved.
+    const prospectusSchedule = [
+      { period: 1, target_balance: 900 },
+      { period: 12, target_balance: 800 },
+      { period: 24, target_balance: 600 },
+    ];
+    const ws = makeWorkspace([
+      makeMockBlock("pay_pac_schedule", {
+        MODEL_TYPE: "CUSTOM_VECTOR",
+        SPEED_LOW: 0,
+        SPEED_HIGH: 0,
+        CUSTOM_VECTOR: "",    // empty — as synthesized by irToBlocklyState
+        SOURCE: "ACT_PRIN",
+        PRIORITY_TIER: 1,
+        DEPENDS_ON: "",
+      }, {
+        TARGETS: bondTargetBlock("PA", 1000, {
+          kind: "PAC",
+          schedule_contract: prospectusSchedule,  // stored in block.data
+        }),
+        SUPPORT_BONDS: bondTargetBlock("WA", 200),
+      }),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const pa = ir.bonds.find((b) => b.name === "PA");
+    expect(pa?.schedule_contract).toHaveLength(3);
+    expect(pa?.schedule_contract[0]).toMatchObject({ period: 1 });
+    expect(pa?.schedule_contract[2]).toMatchObject({ period: 24 });
+  });
+
+  it("SR3: live PSA schedule overrides block.data when non-empty", () => {
+    // When the user has set real PSA parameters, the synthetic schedule should win
+    // over any stale schedule in block.data.
+    const staleBlockDataSchedule = [{ period: 1, target_balance: 999 }];
+    const ws = makeWorkspace([
+      makeMockBlock("pay_pac_schedule", {
+        MODEL_TYPE: "PSA",
+        SPEED_LOW: 100,
+        SPEED_HIGH: 250,
+        CUSTOM_VECTOR: "",
+        SOURCE: "ACT_PRIN",
+        PRIORITY_TIER: 1,
+        DEPENDS_ON: "",
+      }, {
+        TARGETS: bondTargetBlock("PA", 1000, {
+          kind: "PAC",
+          schedule_contract: staleBlockDataSchedule,  // stale
+        }),
+        SUPPORT_BONDS: bondTargetBlock("WA", 200),
+      }),
+      paySequentialBlock("CASH", [residualBlock()]),
+    ]);
+    const ir = run(ws);
+    const pa = ir.bonds.find((b) => b.name === "PA");
+    // PSA derivation with speed_low=100, speed_high=250 produces synthetic
+    // schedule (2 entries: lo and hi).  It must override the stale block.data.
+    expect(pa?.schedule_contract.length).toBeGreaterThan(0);
+    // The stale single-entry schedule should NOT appear.
+    expect(pa?.schedule_contract[0]).not.toMatchObject({ target_balance: 999 });
+  });
+
   it("SR3: schedule_model_type=null when absent from block.data (normal bond)", () => {
     const ws = makeWorkspace([
       paySequentialBlock("CASH", [bondTargetBlock("A", 100)]),
