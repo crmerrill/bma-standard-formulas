@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, Field, model_validator
 
 from .common import (
+    BUILTIN_STREAMS,
     SCHEMA_VERSION,
     AccountCategory,
     AccrualPeriod,
@@ -509,7 +510,6 @@ class DealDefinition(BaseModel):
         #   GROUP_<id>_ACT_PRIN  - pool principal only (act_am + vol_prepay)
         #   GROUP_<id>_LOSS      - loss stream for writedowns (BMA prin_loss)
         # Validator accepts any of these as a from_source or to_target.
-        BUILTIN_STREAMS = {"CASH", "ACT_INT", "ACT_PRIN", "LOSS"}
         group_stream_names: set[str] = set()
         for gid in group_ids:
             for suffix in BUILTIN_STREAMS:
@@ -666,12 +666,11 @@ class DealDefinition(BaseModel):
         # A rule with group_id must not mix bare collateral tokens (expanded by
         # the runtime to GROUP_<id>_*) with explicit GROUP_<other_id>_* tokens
         # for a DIFFERENT group — that silently routes cash across group boundaries.
-        _BARE_TOKENS = {"CASH", "ACT_INT", "ACT_PRIN", "LOSS"}
         for rule in self.waterfall_rules:
             if not rule.group_id:
                 continue
             all_keys = list(rule.from_sources) + list(rule.to_targets)
-            has_bare = any(k in _BARE_TOKENS for k in all_keys)
+            has_bare = any(k in BUILTIN_STREAMS for k in all_keys)
             if has_bare:
                 for key in all_keys:
                     m = None

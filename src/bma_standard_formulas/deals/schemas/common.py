@@ -17,6 +17,23 @@ from pydantic import BaseModel, Field
 # MUST call it before attempting model_validate().
 SCHEMA_VERSION = "2.0.0"
 
+# ---------------------------------------------------------------------------
+# Canonical built-in stream token names (OA11)
+# ---------------------------------------------------------------------------
+# These are the only bare source/target tokens with special runtime meaning.
+# Rules may use them directly (single-pool) or tagged with group_id (multi-pool,
+# where the runtime auto-prefixes them to GROUP_<id>_<TOKEN>).
+# Any other token is interpreted as a bond, account, fee, or split-stream name.
+
+BUILTIN_STREAM_CASH = "CASH"
+BUILTIN_STREAM_ACT_INT = "ACT_INT"
+BUILTIN_STREAM_ACT_PRIN = "ACT_PRIN"
+BUILTIN_STREAM_LOSS = "LOSS"
+
+BUILTIN_STREAMS: frozenset[str] = frozenset(
+    {BUILTIN_STREAM_CASH, BUILTIN_STREAM_ACT_INT, BUILTIN_STREAM_ACT_PRIN, BUILTIN_STREAM_LOSS}
+)
+
 # Machine-readable compatibility notes consumed by migrations and API error
 # messages.  Each entry describes one class of 1.x → 2.0 breaking change.
 SCHEMA_COMPATIBILITY: dict[str, str] = {
