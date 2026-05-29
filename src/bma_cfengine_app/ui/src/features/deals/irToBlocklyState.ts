@@ -676,6 +676,9 @@ function splitCashRuleToBlock(rule: IRRule): BlocklyBlock | null {
     group_id: rule.group_id,
     target_weights: rule.target_weights,
     extra_targets: targets.length > 2 ? targets.slice(2) : undefined,
+    // Multi-source SPLIT_CASH (N→1 sweep-back): stash extra sources so the
+    // round-trip can recover them (the SOURCE field only holds sources[0]).
+    extra_sources: (rule.from_sources ?? []).length > 1 ? (rule.from_sources ?? []).slice(1) : undefined,
   });
   return block;
 }

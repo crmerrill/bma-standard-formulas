@@ -433,11 +433,23 @@ function emitSplitCash(block: any, ctx: Ctx): void {
 
   if (targets.length === 0) return;
 
+  // Recover extra from_sources stashed by irToBlocklyState for N→1 sweep-back rules.
+  const extraSources: string[] = [];
+  if (typeof block.data === "string" && block.data.trim()) {
+    try {
+      const parsed = JSON.parse(block.data) as Record<string, unknown>;
+      if (Array.isArray(parsed.extra_sources)) {
+        extraSources.push(...(parsed.extra_sources as string[]).filter(Boolean));
+      }
+    } catch { /* ignore */ }
+  }
+  const allSources = extraSources.length > 0 ? [source, ...extraSources] : [source];
+
   ctx.rules.push({
     rule_id: ruleId || `split_${ctx.order}`,
     rule_type: "SPLIT_CASH",
     order: ctx.order,
-    from_sources: [source],
+    from_sources: allSources,
     to_targets: targets,
     payment_style: "SEQUENTIAL",
     max_amount_fixed: null,
@@ -669,23 +681,27 @@ function emitSequential(block: any, ctx: Ctx): void {
   const maxPay = Number(block.getFieldValue("MAX_PAY")) || 0;
   const { ruleId: savedRuleId, groupId, capMode, coverageMode } = extractRuleBlockData(block);
 
-  targets.forEach((t, i) => {
-    ctx.rules.push({
-      rule_id: savedRuleId || `rule_${ctx.order}`,
-      rule_type: ruleType,
-      order: ctx.order,
-      from_sources: [source],
-      to_targets: [t.name],
-      payment_style: "SEQUENTIAL",
-      max_amount_fixed: maxPay > 0 && i === 0 ? maxPay : null,
-      condition_trigger: ctx.activeTrigger,
-      condition_invert: ctx.conditionInvert,
-      group_id: groupId,
-      cap_mode: capMode,
-      coverage_mode: coverageMode,
-    });
-    ctx.order++;
+  // Emit ONE rule with all targets. SEQUENTIAL payment_style tells the runtime
+  // to pay each target in left-to-right order, which is identical to separate
+  // per-bond rules ordered 0, 1, 2, …  Using one rule is correct, produces a
+  // round-trip-stable IR, and keeps the canvas readable (one block per waterfall
+  // step rather than one block per bond).
+  if (targets.length === 0) return;
+  ctx.rules.push({
+    rule_id: savedRuleId || `rule_${ctx.order}`,
+    rule_type: ruleType,
+    order: ctx.order,
+    from_sources: [source],
+    to_targets: targets.map((t) => t.name),
+    payment_style: "SEQUENTIAL",
+    max_amount_fixed: maxPay > 0 ? maxPay : null,
+    condition_trigger: ctx.activeTrigger,
+    condition_invert: ctx.conditionInvert,
+    group_id: groupId,
+    cap_mode: capMode,
+    coverage_mode: coverageMode,
   });
+  ctx.order++;
 }
 
 function emitProRata(block: any, ctx: Ctx): void {
