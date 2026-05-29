@@ -75,44 +75,61 @@ export const BLOCKLY_CSS_OVERRIDES = `
   border-right: 1px solid #1e293b !important;
 }
 
-/* --- Block text --- */
+/* --- Block body labels (non-editable: "→", "face $", "cpn", etc.) ---
+   These render on the block's colored background. Blockly computes their
+   color automatically from block brightness. We set the font but leave the
+   fill alone so Blockly's white/black auto-choice is preserved. */
 .blocklyText {
   font-family: 'Inter', system-ui, sans-serif !important;
-  fill: #e2e8f0 !important;
-}
-.blocklyDropdownText {
-  font-family: 'Inter', system-ui, sans-serif !important;
-  fill: #e2e8f0 !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
 }
 
-/* --- Editable field rects: dark background instead of white --- */
+/* --- Editable field rects (white background so text is legible) --- */
 .blocklyEditableText > .blocklyFieldRect,
 .blocklyEditableText > rect {
-  fill: rgba(0, 0, 0, 0.35) !important;
-  stroke: rgba(255, 255, 255, 0.08) !important;
-  rx: 4 !important;
+  fill: #ffffff !important;
+  fill-opacity: 1 !important;
+  stroke: rgba(0,0,0,0.18) !important;
+  rx: 3 !important;
 }
-/* Number and text field values should be light */
+/* Text INSIDE white field boxes must be dark */
 .blocklyEditableText .blocklyText {
-  fill: #f1f5f9 !important;
+  fill: #111827 !important;
+  font-weight: 500 !important;
 }
 
-/* --- Dropdown arrow --- */
-.blocklyDropdownRect {
-  fill: rgba(0, 0, 0, 0.3) !important;
-  stroke: rgba(255, 255, 255, 0.06) !important;
-  rx: 4 !important;
-}
-
-/* --- HTML input fields (inline editing) --- */
-.blocklyHtmlInput {
-  background: #1e293b !important;
-  color: #f1f5f9 !important;
-  border: 1px solid #475569 !important;
-  border-radius: 4px !important;
-  font-family: 'JetBrains Mono', monospace !important;
+/* --- Dropdown fields (also white background) --- */
+.blocklyDropdownText {
+  fill: #111827 !important;
+  font-family: 'Inter', system-ui, sans-serif !important;
   font-size: 11px !important;
-  padding: 2px 6px !important;
+}
+.blocklyDropdownRect {
+  fill: #ffffff !important;
+  stroke: rgba(0,0,0,0.18) !important;
+  rx: 3 !important;
+}
+
+/* --- HTML input when editing a field (click to type) ---
+   Blockly injects this element with inline styles; these !important rules
+   override both the Blockly inline styles AND the dark-theme body styles.
+   Goal: identical appearance to the SVG display mode (white bg, dark text,
+   same font, same size — no visual change when you click). */
+.blocklyHtmlInput {
+  background: #ffffff !important;
+  color: #111827 !important;
+  border: 1px solid rgba(0,0,0,0.25) !important;
+  border-radius: 3px !important;
+  /* Match the SVG font exactly so the text doesn't jump size/family */
+  font-family: 'Inter', system-ui, sans-serif !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  padding: 1px 4px !important;
+  outline: 2px solid rgba(245,158,11,0.5) !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+  min-width: 40px !important;
 }
 
 /* --- Dropdown menus (outside SVG) --- */

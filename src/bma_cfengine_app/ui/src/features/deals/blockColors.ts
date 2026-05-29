@@ -26,11 +26,10 @@ function hashName(name: string): number {
 function hslToHex(h: number, s: number, l: number): string {
   h = ((h % 360) + 360) % 360;
   s = Math.max(0, Math.min(100, s));
-  // Lightness range 48-60%: keeps Blockly's perceived brightness ≥ 128 so
-  // it renders BLACK text.  Black text is readable BOTH on the pastel block
-  // background AND inside the white field_input / field_number boxes.
-  // (Capping at ≤ 44% forced white text, which was invisible inside white fields.)
-  l = Math.max(48, Math.min(60, l));
+  // Lightness range 55-65%: bright pastels with black Blockly text.
+  // Field boxes (white bg, dark text from blocklyTheme.ts) are always readable.
+  // Block labels ("→", "face $") are also black — readable on pastel backgrounds.
+  l = Math.max(55, Math.min(65, l));
 
   const s1 = s / 100;
   const l1 = l / 100;
@@ -70,8 +69,8 @@ export function bondColor(name: string, index: number): string {
   // names still visibly differ (e.g. PA vs PB in adjacent slots).
   hue = (hue + (h % 9) - 4 + 360) % 360;
 
-  const sat = 55 + (h % 18);   // 55-72: saturated but not garish at lighter L
-  const light = 50 + (h % 10); // 50-59: inside 48-60 clamp → black text always
+  const sat = 52 + (h % 18);   // 52-69: saturated pastels
+  const light = 56 + (h % 10); // 56-65: bright enough for black auto-text
   return hslToHex(hue, sat, light);
 }
 
@@ -81,8 +80,8 @@ export function bondColor(name: string, index: number): string {
 export function accountColor(name: string, index: number): string {
   const h = hashName(name) + index * 5003;
   const hue = 108 + ((index * 23 + (h % 11)) % 58); // 108-165
-  const sat = 50 + ((h >>> 2) % 20);   // 50-69
-  const light = 50 + ((h >>> 6) % 10); // 50-59 → black text
+  const sat = 48 + ((h >>> 2) % 18);   // 48-65
+  const light = 56 + ((h >>> 6) % 10); // 56-65 → black text
   return hslToHex(hue, sat, light);
 }
 
@@ -90,8 +89,8 @@ export function accountColor(name: string, index: number): string {
 export function residualColor(name: string, index: number): string {
   const h = hashName(name) + index * 3001;
   const hue = 258 + ((index * 19 + (h % 13)) % 62); // 258-319
-  const sat = 50 + ((h >>> 2) % 20);   // 50-69
-  const light = 50 + ((h >>> 6) % 10); // 50-59 → black text
+  const sat = 48 + ((h >>> 2) % 18);   // 48-65
+  const light = 56 + ((h >>> 6) % 10); // 56-65 → black text
   return hslToHex(hue, sat, light);
 }
 

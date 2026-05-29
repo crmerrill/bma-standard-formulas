@@ -62,52 +62,6 @@
   --radius-lg: calc(var(--radius) + 2px);
 }
 
-/* ─────────────────────────────────────────────────────────────────────────
-   Blockly field rendering fixes
-   ─────────────────────────────────────────────────────────────────────────
-   Problem: Blockly computes ONE text color per block (white for dark blocks,
-   black for light blocks) and applies it to BOTH:
-     (a) block body labels ("→", "face $", "cpn") — correct when white on dark
-     (b) editable field values (NAME, coupon number) inside white field boxes
-         — WRONG: white text on white rect = invisible
-   Fix: target only the editable field text and force it dark.
-   ───────────────────────────────────────────────────────────────────────── */
-
-/* SVG text inside editable field boxes (not editing) — force dark fill */
-.blocklyDraggable .blocklyEditableText .blocklyText,
-.blocklyEditableText .blocklyText {
-  fill: #111827 !important;
-  font-weight: 500 !important;
-  font-size: 11px !important;
-}
-
-/* Editable field background — keep white so text is readable */
-.blocklyEditableText .blocklyFieldRect,
-.blocklyEditableText rect {
-  fill: #ffffff !important;
-  fill-opacity: 0.92 !important;
-}
-
-/* Non-editable labels on block body ("face $", "→" etc.) — keep whatever
-   Blockly computes so they stay readable on the colored block background */
-
-/* HTML input when editing a field (click to type) — match the SVG appearance */
-.blocklyHtmlInput {
-  color: #111827 !important;
-  background: #ffffff !important;
-  font-size: 11px !important;
-  font-weight: 500 !important;
-  font-family: "JetBrains Mono", "Fira Code", monospace !important;
-  min-width: 60px !important;
-  border: 1px solid #6b7280 !important;
-  border-radius: 2px !important;
-  padding: 1px 4px !important;
-}
-
-/* Dropdown fields — same dark text treatment */
-.blocklyDropdownText {
-  fill: #111827 !important;
-}
 
 @layer base {
   * {

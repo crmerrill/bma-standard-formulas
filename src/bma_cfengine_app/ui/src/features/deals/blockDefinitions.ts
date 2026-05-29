@@ -259,7 +259,7 @@ export const DEAL_BLOCKS = [
     ],
     previousStatement: "target_item",
     nextStatement: "target_item",
-    colour: "#e87070",  // softer red L≈55% → black text, readable in white input fields
+    colour: "#e89090",  // pastel red L≈68% → black Blockly text, readable in white fields
     extensions: ["bond_target_dynamic_fields"],
     tooltip:
       "Bond target. Face in dollars. Red/orange hues vary by tranche name (property panel syncs names).",
