@@ -292,6 +292,26 @@ def migrate_deal_payload(payload: dict[str, Any]) -> dict[str, Any]:
             bond.setdefault("relations", [])
             bond.setdefault("z_accrual_enabled", False)
             bond.setdefault("z_release_trigger", None)
+
+            # OA7 migration invariants: ensure migrated bonds satisfy DealDefinition
+            # validators without requiring callers to know the new invariant rules.
+            migrated_kind = bond.get("kind", "CASH_PAY")
+            if migrated_kind == "Z":
+                # Z bonds require z_accrual_enabled=True and pay_mode=PIK.
+                # Legacy Z bonds that didn't set these explicitly are corrected here
+                # so that migrate_deal_payload() output always satisfies the invariant.
+                if not bond.get("z_accrual_enabled"):
+                    bond["z_accrual_enabled"] = True
+                if bond.get("pay_mode") == "CASH_PAY":
+                    bond["pay_mode"] = "PIK"
+            elif migrated_kind in ("PAC", "TAC"):
+                # PAC/TAC require schedule_contract or schedule_model_type.
+                # Legacy deals without a schedule get a PSA placeholder so the deal
+                # can load and run (the user can re-derive the schedule in the Studio).
+                has_contract = bool(bond.get("schedule_contract"))
+                has_model = bond.get("schedule_model_type") not in (None, "")
+                if not has_contract and not has_model:
+                    bond["schedule_model_type"] = "PSA"
     # cap_mode generalization: if the legacy `ignore_schedule_cap=True` flag
     # is set and no explicit cap_mode is provided, infer the cleanup
     # interpretation. If neither is set, leave cap_mode as None so the

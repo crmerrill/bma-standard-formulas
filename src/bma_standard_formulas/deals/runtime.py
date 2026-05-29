@@ -1273,14 +1273,15 @@ class LoanProxy:
     def __getattr__(self, name: str):
         if name in _LOAN_SCALAR_ATTRS:
             val = getattr(self._cf, name, None)
-            # Numeric scalars cast to float for expression-context
-            # consistency; loan_id casts to int; group_id passes through as-is
-            # (may be str, int, or None depending on how BMAActualCashflow was
-            # constructed — always normalize to str before cross-group comparisons).
+            # Numeric scalars cast to float for expression-context consistency.
+            # loan_id is always int; group_id is passed through as-is (str | int | None)
+            # to preserve backward compatibility with expressions that compare
+            # loan.group_id == "GROUP_1" (str) or loan.group_id == 1 (int).
+            # Callers that need canonical str form should use str(loan.group_id).
             if name == "loan_id":
                 return int(val or 0)
             if name == "group_id":
-                return str(val) if val is not None else None  # normalise to str | None
+                return val  # str | int | None — do not coerce; preserve expression semantics
             if val is None:
                 return 0.0
             return float(val)

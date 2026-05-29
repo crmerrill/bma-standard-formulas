@@ -733,6 +733,30 @@ function emitPacTacSchedule(block: any, ctx: Ctx, behavior: "PAC" | "TAC"): void
   });
   registerTargets([...targets, ...supportTargets], ctx);
 
+  // SR3 fix: live PAC block values must override any stale schedule metadata
+  // that was already registered from an earlier bond_target block.data.
+  // registerTargets uses first-non-null merge, so load-path data from block.data
+  // of an earlier occurrence could win over the user's live PAC field values.
+  // After registration, forcibly write the authoritative PAC-derived schedule
+  // metadata so that live edits always take precedence.
+  for (const target of targets) {
+    if (!target.isBond) continue;
+    const existing = ctx.bonds.get(target.name);
+    if (existing) {
+      ctx.bonds.set(target.name, {
+        ...existing,
+        scheduleModelType: target.scheduleModelType,
+        scheduleSpeedLow: target.scheduleSpeedLow,
+        scheduleSpeedHigh: target.scheduleSpeedHigh,
+        schedulePriorityTier: target.schedulePriorityTier,
+        scheduleDependsOn: target.scheduleDependsOn,
+        scheduleCustomVector: target.scheduleCustomVector,
+        scheduleContract: target.scheduleContract,
+        kind: target.kind,
+      });
+    }
+  }
+
   const { ruleId: pacRuleId, groupId: pacGroupId, capMode: pacCapMode } = extractRuleBlockData(block);
   targets.forEach((target) => {
     ctx.rules.push({

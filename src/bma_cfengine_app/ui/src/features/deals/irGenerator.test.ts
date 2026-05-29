@@ -513,11 +513,20 @@ describe("OA5: account_category emits only valid AccountCategory enum values", (
     }
   });
 
-  it("non-standard source-vocabulary account name maps to a valid category", () => {
-    // OA5: CAP_INTEREST, EXPENSE, SWAP_HEDGE are in FEE_SOURCE_OPTIONS but not
-    // valid AccountCategory values. _canonicalAccountCategory must map them.
-    const sourceNames = ["CAP_INTEREST", "EXPENSE", "SWAP_HEDGE", "YIELD_SUPPLEMENT"];
-    for (const name of sourceNames) {
+  it("non-standard source-vocabulary names fall through to RESERVE (documented default)", () => {
+    // OA5: CAP_INTEREST, EXPENSE, SWAP_HEDGE, YIELD_SUPPLEMENT are in
+    // FEE_SOURCE_OPTIONS but not valid AccountCategory values.
+    // _canonicalAccountCategory maps them all to RESERVE (the documented
+    // fallback for unrecognised names — these are source labels, not
+    // structural account categories). Assert the specific mapping so a
+    // future change to the fallback is caught by this test.
+    const expectedFallback: Record<string, string> = {
+      CAP_INTEREST:     "RESERVE",
+      EXPENSE:          "RESERVE",
+      SWAP_HEDGE:       "RESERVE",
+      YIELD_SUPPLEMENT: "RESERVE",
+    };
+    for (const [name, expected] of Object.entries(expectedFallback)) {
       const ws = makeWorkspace([
         paySequentialBlock("CASH", [accountBlock(name)]),
         paySequentialBlock("CASH", [residualBlock()]),
@@ -525,7 +534,7 @@ describe("OA5: account_category emits only valid AccountCategory enum values", (
       const ir = run(ws);
       const acct = ir.accounts?.find((a) => a.name === name);
       expect(acct).toBeDefined();
-      expect(VALID_CATEGORIES.has(acct!.account_category)).toBe(true);
+      expect(acct!.account_category).toBe(expected);
     }
   });
 });
