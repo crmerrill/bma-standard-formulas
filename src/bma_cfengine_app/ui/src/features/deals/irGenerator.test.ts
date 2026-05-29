@@ -483,3 +483,49 @@ describe("SR2 + SR3 block.data round-trip", () => {
     expect(a?.schedule_speed_high).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// OA5: Account category is always a valid schema enum value
+// ---------------------------------------------------------------------------
+
+describe("OA5: account_category emits only valid AccountCategory enum values", () => {
+  const VALID_CATEGORIES = new Set([
+    "RESERVE", "PREFUNDING", "REVOLVING", "PAYMENT", "SPREAD_ACCOUNT",
+  ]);
+
+  function accountBlock(name: string): ReturnType<typeof makeMockBlock> {
+    return makeMockBlock("account_target", {
+      ACCOUNT_TYPE: name,
+      INITIAL_MODE: "PCT_STACK",
+      INITIAL_AMT: 0,
+    });
+  }
+
+  it("standard category names pass through unchanged", () => {
+    for (const cat of VALID_CATEGORIES) {
+      const ws = makeWorkspace([
+        paySequentialBlock("CASH", [accountBlock(cat)]),
+        paySequentialBlock("CASH", [residualBlock()]),
+      ]);
+      const ir = run(ws);
+      const acct = ir.accounts?.find((a) => a.name === cat);
+      expect(acct?.account_category).toBe(cat);
+    }
+  });
+
+  it("non-standard source-vocabulary account name maps to a valid category", () => {
+    // OA5: CAP_INTEREST, EXPENSE, SWAP_HEDGE are in FEE_SOURCE_OPTIONS but not
+    // valid AccountCategory values. _canonicalAccountCategory must map them.
+    const sourceNames = ["CAP_INTEREST", "EXPENSE", "SWAP_HEDGE", "YIELD_SUPPLEMENT"];
+    for (const name of sourceNames) {
+      const ws = makeWorkspace([
+        paySequentialBlock("CASH", [accountBlock(name)]),
+        paySequentialBlock("CASH", [residualBlock()]),
+      ]);
+      const ir = run(ws);
+      const acct = ir.accounts?.find((a) => a.name === name);
+      expect(acct).toBeDefined();
+      expect(VALID_CATEGORIES.has(acct!.account_category)).toBe(true);
+    }
+  });
+});

@@ -60,8 +60,10 @@ SCHEMA_COMPATIBILITY: dict[str, str] = {
     "token_rename": (
         "Collateral source tokens INT_CASH and PRIN_CASH were renamed to "
         "ACT_INT and ACT_PRIN in 2.0.  The COLLATERAL token was removed "
-        "(use CASH).  migrate_deal_payload() does NOT rewrite token strings "
-        "inside IR expressions; update deal IR directly."
+        "(use CASH).  migrate_deal_payload() rewrites these tokens inside "
+        "from_sources and to_targets lists.  Tokens embedded inside "
+        "expression strings (condition_expr, amount_expr) are NOT rewritten "
+        "by migration — update those expressions directly."
     ),
 }
 

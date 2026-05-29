@@ -266,6 +266,11 @@ export const DEAL_BLOCKS = [
   },
 
   // Account target — initial balance as % of bond stack or fixed $
+  // OA5 NOTE: The ACCOUNT_TYPE field uses ACCOUNT_SOURCE_OPTIONS (source vocabulary)
+  // as the account NAME, not the account category. irGenerator._canonicalAccountCategory()
+  // maps any value to a valid AccountCategory enum before emitting IR, so invalid enum
+  // values are never generated. A future UX improvement should use a separate
+  // ACCOUNT_CATEGORY_OPTIONS dropdown restricted to the 5 valid schema values.
   {
     type: "account_target",
     message0: "→ %1 init %2 %3",

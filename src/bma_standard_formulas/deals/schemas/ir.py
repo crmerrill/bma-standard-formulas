@@ -113,6 +113,30 @@ class BondDef(BaseModel):
                 )
         return value
 
+    @model_validator(mode="after")
+    def _validate_bond_invariants(self) -> "BondDef":
+        errors: list[str] = []
+
+        # OA8: RateOrSchedule duplicate from_period validation (always enforced).
+        for field_name in ("coupon", "margin", "cap", "floor"):
+            val = getattr(self, field_name, None)
+            if isinstance(val, list) and len(val) > 1:
+                periods = [e.from_period for e in val]
+                if len(periods) != len(set(periods)):
+                    errors.append(
+                        f"Bond {self.name!r}: {field_name} schedule has duplicate "
+                        f"from_period values: {sorted(periods)}"
+                    )
+
+        # OA7 note: PAC/TAC schedule requirement and Z invariant are validated
+        # at the DealDefinition level in _validate_references so that isolated
+        # BondDef construction (tests, partial IR authoring) is not rejected
+        # before the full context is available.
+
+        if errors:
+            raise ValueError("\n".join(errors))
+        return self
+
     name: str = Field(min_length=1)
     kind: TrancheKind = TrancheKind.CASH_PAY
     is_bond: bool = True
@@ -438,6 +462,32 @@ class DealDefinition(BaseModel):
             raise ValueError(
                 "Deal IR validation failed with uniqueness errors:\n"
                 + "\n".join(f"- {e}" for e in uniqueness_errors)
+            )
+
+        # ── OA7: Bond structural invariants ──────────────────────────────────
+        # Validated here (not on BondDef) so isolated BondDef construction
+        # in tests/partial authoring isn't blocked before a full deal is wired.
+        bond_invariant_errors: list[str] = []
+        for b in self.bonds:
+            if b.kind in (TrancheKind.PAC, TrancheKind.TAC):
+                has_contract = bool(b.schedule_contract)
+                has_model = b.schedule_model_type is not None
+                if not has_contract and not has_model:
+                    bond_invariant_errors.append(
+                        f"Bond {b.name!r}: kind={b.kind.value} requires either "
+                        "schedule_contract (explicit period targets) or "
+                        "schedule_model_type (PSA/CPR/ABS/CUSTOM_VECTOR). "
+                        "Add a schedule_contract or set schedule_model_type."
+                    )
+            if b.kind == TrancheKind.Z and not b.z_accrual_enabled:
+                bond_invariant_errors.append(
+                    f"Bond {b.name!r}: kind=Z should have z_accrual_enabled=True. "
+                    "Use kind=CASH_PAY if no PIK accrual is intended."
+                )
+        if bond_invariant_errors:
+            raise ValueError(
+                "Deal IR bond invariant violations:\n"
+                + "\n".join(f"- {e}" for e in bond_invariant_errors)
             )
 
         bond_names = {b.name for b in self.bonds}

@@ -16,4 +16,16 @@ export default defineConfig({
   build: {
     outDir: "dist",
   },
+  test: {
+    environment: "jsdom",
+    setupFiles: "./src/test/setup.ts",
+    css: true,
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    exclude: ["e2e/**"],
+    coverage: {
+      reporter: ["text", "html"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/main.tsx"],
+    },
+  },
 });

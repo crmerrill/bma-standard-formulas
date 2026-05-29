@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 import App from "./App";
 import * as api from "./services/api";
+import { expectNoA11yViolations } from "./test/a11y";
 
 vi.mock("./services/api", () => ({
   getRun: vi.fn(),
@@ -208,5 +209,10 @@ describe("App shell flows", () => {
     );
     render(<App />);
     expect(screen.getByText("History mock")).toBeInTheDocument();
+  });
+
+  it("a11y: app shell has no detectable accessibility violations", async () => {
+    const { container } = render(<App />);
+    await expectNoA11yViolations(container);
   });
 });

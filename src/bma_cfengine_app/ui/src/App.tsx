@@ -276,6 +276,7 @@ export default function App() {
       </span>
       <input
         type="date"
+        aria-label="As-of date"
         value={asofDate}
         onChange={(e) => setAsofDate(e.target.value)}
         className="px-2 py-0.5 bg-input-background border border-border rounded text-xs text-foreground"

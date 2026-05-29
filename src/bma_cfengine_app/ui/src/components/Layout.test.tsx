@@ -4,6 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 import Layout from "./Layout";
+import { expectNoA11yViolations } from "../test/a11y";
 
 afterEach(() => {
   cleanup();
@@ -38,5 +39,19 @@ describe("Layout", () => {
 
     await user.click(screen.getByRole("button", { name: "New Session" }));
     expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("a11y: has no detectable accessibility violations", async () => {
+    const { container } = render(
+      <Layout
+        currentPage="intake"
+        pageTitle="Tape Intake"
+        onNavigate={vi.fn()}
+        enabledPages={new Set(["intake", "history"])}
+      >
+        <div>Content</div>
+      </Layout>,
+    );
+    await expectNoA11yViolations(container);
   });
 });

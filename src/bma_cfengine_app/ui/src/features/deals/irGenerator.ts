@@ -7,7 +7,8 @@
  * RG10: IR types are imported from the shared ir-types.ts module.
  */
 
-// Import shared IR types for local use within this file.
+// Import shared IR types and constants for local use within this file.
+import { SCHEMA_VERSION } from "./ir-types";
 import type {
   BondDefIR,
   AccountDefIR,
@@ -987,7 +988,7 @@ export function generateDealIR(workspace: any): DealDefinitionIR {
   }));
 
   return {
-    schema_version: "2.0.0",
+    schema_version: SCHEMA_VERSION,
     deal_name: "Deal",
     bonds,
     accounts,

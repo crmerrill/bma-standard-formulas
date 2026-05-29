@@ -7,7 +7,13 @@
  *
  * RG10: Centralised here so irGenerator.ts, irToBlocklyState.ts, PropertyPanel.tsx,
  * and test files share one source of truth rather than maintaining divergent copies.
+ *
+ * OA11: SCHEMA_VERSION is defined here as the single TS source of truth.
+ * irGenerator.ts imports it so the version is never hard-coded in two places.
  */
+
+/** Current schema version. Must match SCHEMA_VERSION in Python common.py. */
+export const SCHEMA_VERSION = "2.0.0";
 
 export type TrancheKind =
   | "CASH_PAY"
