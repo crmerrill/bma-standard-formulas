@@ -38,13 +38,23 @@ async function openStructuredAnalysis(page: Page) {
   await expect(page.getByRole("heading", { name: "Structured Deal Analysis" })).toBeVisible();
 }
 
+/**
+ * The page renders multiple <select> elements (run selector, optional compare
+ * run selector, artifact selector). Find the one whose option list contains
+ * the named artifact. This avoids the brittle assumption that the artifact
+ * dropdown is always the Nth combobox.
+ */
 async function selectArtifact(page: Page, artifactName: string) {
-  // The "Artifacts" panel is collapsible; ensure it's open before selecting.
-  const artifactsToggle = page.getByRole("button", { name: "Artifacts" });
-  await artifactsToggle.click();
-  await artifactsToggle.click();
-  const select = page.getByRole("combobox").first();
-  await select.selectOption(artifactName);
+  const selects = page.getByRole("combobox");
+  const count = await selects.count();
+  for (let i = 0; i < count; i += 1) {
+    const options = await selects.nth(i).locator("option").allTextContents();
+    if (options.some((o) => o.trim() === artifactName)) {
+      await selects.nth(i).selectOption(artifactName);
+      return;
+    }
+  }
+  throw new Error(`Artifact dropdown containing "${artifactName}" not found`);
 }
 
 test.describe("Structurer journey: senior-sub credit enhancement ladder [Peak53][Dutch][AngelOak]", () => {
@@ -53,15 +63,15 @@ test.describe("Structurer journey: senior-sub credit enhancement ladder [Peak53]
 
     // Process: structurer clicks into "Bond Risk" tab to inspect tranche risk.
     await page.getByRole("button", { name: "Bond Risk" }).click();
-    await expect(page.getByText("Per-tranche WAL")).toBeVisible();
+    await expect(page.getByText("Per-tranche WAL, CE and risk metrics.")).toBeVisible();
 
     await selectArtifact(page, "base_case_tranche_risk_summary");
 
-    // Result: subordination/CE must obey the senior-sub ladder. If this ever
-    // regresses to junior >= senior CE, the UI is misleading the structurer
+    // Result: subordination/CE must obey the senior-sub ladder. Renders 30, 10, 0 from fixture.
+    // If this regresses to junior >= senior CE, structurers would be misled
     // about the deal's loss-protection ordering ([Dutch §4.6.1]).
-    await expect(page.getByText("30")).toBeVisible(); // senior CE
-    await expect(page.getByText("10")).toBeVisible(); // mezz CE
+    await expect(page.getByRole("cell", { name: "30.0000", exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "10.0000", exact: true })).toBeVisible();
   });
 });
 
@@ -69,16 +79,15 @@ test.describe("Structurer journey: stepdown trigger breach diagnostic [Guggenhei
   test("Waterfall + Triggers exposes failed stepdown periods", async ({ page }) => {
     await openStructuredAnalysis(page);
 
-    // Process: structurer opens "Waterfall + Triggers" to confirm whether
-    // delinquency/loss tests blocked stepdown in any period (FRM §"OC tests").
     await page.getByRole("button", { name: "Waterfall + Triggers" }).click();
     await expect(page.getByText("Waterfall trace and trigger timelines.")).toBeVisible();
 
     await selectArtifact(page, "base_case_trigger_state_history");
 
-    // Result: at least one period must show FAIL (fixture seeds breach 70..130).
+    // Result: at least one period must show FAIL (fixture seeds breach periods 70..130).
     // If trigger breaches silently disappear, structurers will miss real risk.
-    await expect(page.getByText("FAIL").first()).toBeVisible();
+    await expect(page.getByRole("cell", { name: "FAIL" }).first()).toBeVisible();
+    await expect(page.getByRole("cell", { name: "PASS" }).first()).toBeVisible();
   });
 });
 
@@ -86,18 +95,15 @@ test.describe("Structurer journey: PAC schedule adherence [RBC]", () => {
   test("Deal Risk view surfaces PAC schedule misses with bps gap", async ({ page }) => {
     await openStructuredAnalysis(page);
 
-    // Process: structurer wants to confirm PAC tranche stayed on its sinking
-    // fund schedule under the run's prepay/loss assumptions ([RBC PAC]).
     await page.getByRole("button", { name: "Deal Risk" }).click();
-    await expect(page.getByText("Stress/decrement diagnostics")).toBeVisible();
+    await expect(page.getByText(/Stress\/decrement diagnostics/)).toBeVisible();
 
     await selectArtifact(page, "base_case_pac_tac_diagnostics");
 
-    // Result: schedule_miss_bps must be visible and non-zero in at least one row,
-    // proving that schedule misses are surfaced (and not silently dropped).
-    await expect(page.getByText("schedule_miss_bps")).toBeVisible();
-    await expect(page.getByText("21")).toBeVisible();
-    await expect(page.getByText("45")).toBeVisible();
+    // Result: schedule_miss_bps column must exist and non-zero misses must show.
+    await expect(page.getByRole("columnheader", { name: "schedule_miss_bps" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "21.0000", exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "45.0000", exact: true })).toBeVisible();
   });
 });
 
@@ -107,17 +113,18 @@ test.describe("Structurer journey: solver iteration audit [BMA][absbox]", () => 
   }) => {
     await openStructuredAnalysis(page);
 
-    // Process: structurer iterating on coupons opens the solver trajectory
-    // to confirm convergence and feasibility transition ([BMA solver_ux_design]).
     await page.getByRole("button", { name: "Solver Runs" }).click();
     await expect(page.getByText("Solver iteration trajectory")).toBeVisible();
 
     await selectArtifact(page, "base_case_solver_iterations");
 
-    // Result: solver_iterations table renders; gap-to-target column must be
-    // visible (solver UX must always show how far we are from target).
-    await expect(page.getByText("gap_to_target_bps")).toBeVisible();
-    await expect(page.getByText("feasible")).toBeVisible();
+    // Result: solver_iterations table renders with required columns. Any regression
+    // that drops the feasibility column would prevent the structurer from knowing
+    // when the solution became feasible.
+    await expect(page.getByRole("columnheader", { name: "iteration" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "objective_value_pct" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "gap_to_target_bps" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "feasible" })).toBeVisible();
   });
 });
 
@@ -128,15 +135,20 @@ test.describe("Structurer journey: compare two solver runs [Carta][absbox]", () 
     await page.getByRole("button", { name: "Solver Runs" }).click();
     await selectArtifact(page, "base_case_solver_selected_solution");
 
-    // Process: pick a compare run from the second selector that appears once
-    // the Solver Runs tab is active.
-    const compareSelect = page.getByRole("combobox").nth(1);
-    await compareSelect.selectOption({ label: /Stress 2x Loss/ });
+    // The compare combobox only renders on solver_runs tab. Look it up by
+    // the explicit "Compare:" label adjacent to the dropdown.
+    const compareLabel = page.getByText("Compare:", { exact: true });
+    await expect(compareLabel).toBeVisible();
+    const compareSelect = compareLabel.locator("xpath=following::select[1]");
+    const optionTexts = await compareSelect.locator("option").allTextContents();
+    const stressOption = optionTexts.find((t) => /Stress 2x Loss/.test(t));
+    expect(stressOption, "compare run dropdown must include the stress run").toBeTruthy();
+    await compareSelect.selectOption({ label: stressOption! });
 
     // Result: the compare panel must materialize with a metric/delta table.
-    // If the compare regresses to silent no-op, structurers cannot iterate.
     await expect(page.getByText("Compare Runs")).toBeVisible();
-    await expect(page.getByText("Delta")).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Metric", exact: true })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Delta", exact: true })).toBeVisible();
   });
 });
 
@@ -150,12 +162,18 @@ test.describe("Structurer journey: run history audit trail [RBA]", () => {
 
     await expect(page.getByRole("heading", { name: "Run History" })).toBeVisible();
 
-    // Process: structurer opens history, switches tabs to scope to structured-only.
+    // Process: structurer scopes the audit to structured runs only.
     await page.getByRole("button", { name: "Structured Deal", exact: true }).click();
+    await expect(page.getByText("2 runs")).toBeVisible();
 
-    // Result: both structured runs must appear in the audit trail.
-    await expect(page.getByText("Prime 2026-1")).toHaveCount(2);
-    await expect(page.getByText(/Stress 2x Loss/)).toBeVisible();
-    await expect(page.getByText(/Base Case/)).toBeVisible();
+    // Result: both structured deal rows must appear. Strict assertion on the
+    // dedicated scenarios cell (not the deal/run combined cell) so we test
+    // metadata visibility in the scenarios column specifically.
+    await expect(
+      page.getByRole("cell", { name: "Stress 2x Loss", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("cell", { name: "Base Case", exact: true }),
+    ).toBeVisible();
   });
 });

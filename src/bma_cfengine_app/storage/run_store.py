@@ -330,6 +330,57 @@ def save_artifact(run_id: str, name: str, df: pd.DataFrame) -> Path:
     return dest
 
 
+# ---------------------------------------------------------------------------
+# Artifact catalog (OA-B2)
+# ---------------------------------------------------------------------------
+
+
+def _artifact_path(run_id: str, name: str) -> Path:
+    """Resolve the on-disk path for a named artifact (outputs/ or legacy locations)."""
+    for subdir in (OUTPUTS_SUBDIR, "artifacts"):
+        d = run_dir(run_id) / subdir
+        for ext in (".parquet", ".json", ".csv"):
+            p = d / f"{name}{ext}"
+            if p.exists():
+                return p
+    raise FileNotFoundError(f"Artifact '{name}' not found for run {run_id}")
+
+
+def register_artifact_ref(run_id: str, artifact_name: str, ref_dict: dict[str, Any]) -> None:
+    """Atomically add an ArtifactRef entry to the run manifest.
+
+    The manifest is read, the ref is inserted or updated under
+    ``manifest["artifacts"][artifact_name]``, and the manifest is
+    written back.  Thread-safety note: this is a read-modify-write
+    with no file lock; acceptable because run manifests are written
+    sequentially during a single orchestrator run.
+    """
+    try:
+        manifest = load_manifest(run_id)
+    except FileNotFoundError:
+        manifest = {}
+    if "artifacts" not in manifest or not isinstance(manifest.get("artifacts"), dict):
+        manifest["artifacts"] = {}
+    manifest["artifacts"][artifact_name] = ref_dict
+    save_manifest(run_id, manifest)
+
+
+def get_artifact_ref(run_id: str, artifact_name: str) -> dict[str, Any] | None:
+    """Return the raw ArtifactRef dict for the named artifact, or None if absent.
+
+    Callers that want a typed ``ArtifactRef`` object should pass the result through
+    ``artifact_catalog.artifact_ref_from_dict()``.
+    """
+    try:
+        manifest = load_manifest(run_id)
+    except FileNotFoundError:
+        return None
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return None
+    return artifacts.get(artifact_name)
+
+
 def save_artifact_csv(run_id: str, name: str, df: pd.DataFrame) -> Path:
     d = _outputs_dir(run_id)
     dest = d / f"{name}.csv"

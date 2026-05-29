@@ -31,9 +31,12 @@ with an explicit ``per_loan_visibility=false`` metadata note when absent.
 """
 from __future__ import annotations
 
+import logging
 import re
 import warnings
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 from bma_standard_formulas.deals.adapters import (
     from_grouped_portfolio_cashflows,
@@ -144,16 +147,46 @@ def build_from_runsetup_ref(
     for scenario_name in selected:
         prefix = _safe_artifact_name(scenario_name)
 
-        # ── Preferred path: per-loan PAIRED artifact (RG2) ──────────────────
-        # Loads true per-loan BMAActualCashflow constituents directly via
-        # cashflow_persistence (lossless; no LDCMA conversion). This path
-        # gives the deal runtime genuine per-loan visibility.
-        # OA4: Check manifest per_loan_visibility metadata to surface recorded errors.
-        plv_manifest = manifest.get("per_loan_visibility") or {}
-        plv_for_scenario = plv_manifest.get(scenario_name, {})
-        plv_error = plv_for_scenario.get("per_loan_visibility_error")
+        # ── Preferred path: per-loan PAIRED artifact (RG2 / OA-B2) ─────────
+        # Primary: consult ArtifactRef catalog for the paired artifact.
+        # Fallback: path-convention lookup (pre-OA-B2 runs without catalog).
+        paired_artifact_name = f"{prefix}_portfolio_paired"
+        plv_error: str | None = None
 
-        constituents = _read_paired_artifact(run_id, f"{prefix}_portfolio_paired")
+        # OA-B2: Read per_loan_visibility error from ArtifactRef catalog first,
+        # then fall back to legacy per_loan_visibility manifest section.
+        from ...orchestrator.artifact_catalog import artifact_ref_from_dict
+        paired_ref_dict = run_store.get_artifact_ref(run_id, paired_artifact_name)
+        paired_ref = artifact_ref_from_dict(paired_ref_dict) if paired_ref_dict else None
+        # skip_paired: True when catalog says artifact is invalid (checksum mismatch /
+        # file missing). We do NOT fall back to _read_paired_artifact in that case
+        # because the catalog's integrity verdict is authoritative.
+        skip_paired = False
+        if paired_ref is not None:
+            # Artifact exists in catalog — verify checksum if available.
+            if paired_ref.checksum:
+                try:
+                    from ...storage.run_store import _artifact_path as _ap
+                    _apath = _ap(run_id, paired_artifact_name)
+                    from ...orchestrator.artifact_catalog import verify_checksum
+                    if not verify_checksum(_apath, paired_ref.checksum):
+                        _logger.warning(
+                            "Run %s: paired artifact %r checksum mismatch — "
+                            "artifact may be corrupt. Falling back to aggregate path.",
+                            run_id, paired_artifact_name,
+                        )
+                        paired_ref = None
+                        skip_paired = True
+                except FileNotFoundError:
+                    paired_ref = None
+                    skip_paired = True  # file missing per catalog; skip attempted read
+        else:
+            # Legacy run without ArtifactRef catalog — read error from old manifest key.
+            plv_manifest = manifest.get("per_loan_visibility") or {}
+            plv_for_scenario = plv_manifest.get(scenario_name, {})
+            plv_error = plv_for_scenario.get("per_loan_visibility_error")
+
+        constituents = [] if skip_paired else _read_paired_artifact(run_id, paired_artifact_name)
         if constituents:
             from bma_standard_formulas.engine import PortfolioCashflow
             from bma_standard_formulas.engine.portfolio import PortfolioMode
@@ -174,7 +207,9 @@ def build_from_runsetup_ref(
         # Produces one synthetic constituent per group (or one for the whole
         # pool). Per-loan visibility is NOT available on this path. Emits a
         # warning so operators can identify runs that need to be regenerated.
-        # Build an actionable warning that includes any recorded write error.
+        # OA-B2: Include ArtifactRef status in warning for actionable diagnostics.
+        if paired_ref is not None and paired_ref.per_loan_visibility is False:
+            plv_error = "ArtifactRef.per_loan_visibility=false (aggregate-only artifact)"
         plv_detail = f" Recorded error: {plv_error}" if plv_error else ""
         warnings.warn(
             f"Run {run_id!r} scenario {scenario_name!r}: per-loan PAIRED artifact "

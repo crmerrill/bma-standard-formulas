@@ -298,6 +298,26 @@ def _write_paired_artifact(run_id: str, artifact_name: str, constituents: list[A
         tmp_path.unlink(missing_ok=True)
         raise
 
+    # OA-B2: Register an ArtifactRef so consumers can locate the artifact without
+    # knowing the naming convention and can verify its integrity via checksum.
+    try:
+        from .artifact_catalog import build_artifact_ref
+        ref = build_artifact_ref(
+            run_id=run_id,
+            artifact_name=artifact_name,
+            artifact_type="paired_cashflows",
+            artifact_path=final_path,
+            format="parquet",
+            loan_count=len(seen_ids),
+            per_loan_visibility=True,
+        )
+        run_store.register_artifact_ref(run_id, artifact_name, ref.model_dump())
+    except Exception as _reg_exc:
+        _logger.warning(
+            "Run %s: failed to register ArtifactRef for %r (non-fatal): %s",
+            run_id, artifact_name, _reg_exc,
+        )
+
 
 def _read_paired_artifact(run_id: str, artifact_name: str) -> list[Any]:
     """Load per-loan BMAActualCashflow constituents from a paired Parquet artifact.
@@ -420,8 +440,28 @@ def _execute_single_scenario(
 
     # Whole-portfolio (aggregate) artifact — unchanged from pre-refactor
     actual_df = _dedup_cols(portfolio.to_dataframe())
-    run_store.save_artifact(run_id, f"{prefix}_portfolio_actual", actual_df)
-    run_store.save_artifact_csv(run_id, f"{prefix}_portfolio_actual", actual_df)
+    _agg_name = f"{prefix}_portfolio_actual"
+    run_store.save_artifact(run_id, _agg_name, actual_df)
+    run_store.save_artifact_csv(run_id, _agg_name, actual_df)
+
+    # OA-B2: Register aggregate artifact ref so bridge can find it via catalog.
+    try:
+        from .artifact_catalog import build_artifact_ref
+        from ..storage import run_store as _rs2
+        _agg_path = _rs2._outputs_dir(run_id) / f"{_agg_name}.parquet"
+        _agg_ref = build_artifact_ref(
+            run_id=run_id,
+            artifact_name=_agg_name,
+            artifact_type="paired_cashflows",
+            artifact_path=_agg_path if _agg_path.exists() else None,
+            format="parquet",
+            row_count=len(actual_df),
+            per_loan_visibility=False,  # aggregate-only path
+            semantic_tags={"scenario": scenario_name},
+        )
+        run_store.register_artifact_ref(run_id, _agg_name, _agg_ref.model_dump())
+    except Exception as _exc:
+        _logger.debug("ArtifactRef registration skipped for %s: %s", _agg_name, _exc)
 
 
     if run_mode in ("paired", "scheduled"):
