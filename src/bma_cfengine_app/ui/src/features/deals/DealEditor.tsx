@@ -114,7 +114,7 @@ export default function DealEditor({
   onDirtyStateChange,
 }: DealEditorProps) {
   const [studioTab, setStudioTab] = useState<StudioTab>("design");
-  const [designView, setDesignView] = useState<"canvas" | "properties">("canvas");
+  const [designView, setDesignView] = useState<"canvas" | "properties">("properties");
   const [irJson, setIrJson] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [workspace, setWorkspace] = useState<any>(null);
@@ -1200,7 +1200,12 @@ export default function DealEditor({
     if (isDirty && !window.confirm("Close deal session and discard unsaved changes?")) {
       return;
     }
+    // Clear the Blockly workspace first so blocks don't persist into the next deal.
+    if (workspace) {
+      try { workspace.clear(); } catch { /* ignore */ }
+    }
     setStudioTab("design");
+    setDesignView("properties");   // land on Deal Specifications for a clean slate
     setIrJson("");
     setErrors([]);
     setDealName("Deal");
@@ -1219,7 +1224,7 @@ export default function DealEditor({
     setVerificationState(null);
     setPendingCleanMark(true);
     sessionStorage.removeItem(STUDIO_DRAFT_STORAGE_KEY);
-  }, [isDirty, onCollateralRiskSettingsChange]);
+  }, [isDirty, workspace, onCollateralRiskSettingsChange]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -1475,11 +1480,11 @@ export default function DealEditor({
         ref={designSplitRef}
         className={studioTab === "design" ? "flex min-h-0 flex-1 flex-col gap-0" : "hidden min-h-0 flex-1 flex-col gap-0"}
       >
-        {/* Sub-tab bar: Canvas | Properties */}
+        {/* Sub-tab bar: Deal Specifications | Canvas */}
         <div className="shrink-0 flex items-center gap-0 px-2 pt-1 pb-0 border-b border-border/60">
           {([
-            { id: "canvas",     label: "Canvas",     icon: LayoutDashboard },
-            { id: "properties", label: "Properties", icon: Settings2 },
+            { id: "properties", label: "Deal Specifications", icon: Settings2 },
+            { id: "canvas",     label: "Canvas",              icon: LayoutDashboard },
           ] as const).map(({ id, label, icon: Icon }) => (
             <button
               key={id}
