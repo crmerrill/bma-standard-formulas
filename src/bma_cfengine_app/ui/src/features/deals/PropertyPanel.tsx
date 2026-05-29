@@ -5,7 +5,7 @@
  * canonical values in one place. Edits propagate to all matching blocks.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Info } from "lucide-react";
+import { Info, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { MONO } from "../../lib/format";
 import * as api from "../../services/api";
@@ -118,8 +118,13 @@ interface PropertyPanelProps {
   ) => void;
   psaScheduleStale?: { stale: boolean; reason: string };
   showPsaScheduleTools?: boolean;
+  showPsaStructuringBonds?: boolean;
   onRederivePsaSchedules?: () => void | Promise<void>;
   scheduleDeriveBusy?: boolean;
+  /** When true, hide the Collateral & Risk section (it lives in its own tab). */
+  hideRiskSettings?: boolean;
+  /** When true, render in compact mode for the canvas sidebar. */
+  compact?: boolean;
 }
 
 function scanWorkspace(workspace: any): {
@@ -374,8 +379,11 @@ export default function PropertyPanel({
   onPoolDerivationContextChange,
   psaScheduleStale,
   showPsaScheduleTools = false,
+  showPsaStructuringBonds = false,
   onRederivePsaSchedules,
   scheduleDeriveBusy = false,
+  hideRiskSettings = false,
+  compact = false,
 }: PropertyPanelProps) {
   const [bonds, setBonds] = useState<BondProps[]>([]);
   const [accounts, setAccounts] = useState<AccountProps[]>([]);
@@ -811,20 +819,22 @@ export default function PropertyPanel({
           </button>
         </div>
       )}
-      <SectionCard title="Collateral & Risk">
-        <CollateralRiskSettingsEditor
-          value={collateralRiskSettings}
-          onChange={onCollateralRiskSettingsChange}
-          availableRuns={availableRuns}
-          availableTapes={availableTapes}
-          poolSnapshots={poolSnapshots}
-          onOpenTape={onOpenTape}
-          onRunCashflow={onRunCashflow}
-          canRunCashflow={canRunCashflow}
-          runCashflowBusy={runCashflowBusy}
-          title="Mirrored risk settings"
-        />
-      </SectionCard>
+      {!hideRiskSettings && (
+        <SectionCard title="Collateral & Risk">
+          <CollateralRiskSettingsEditor
+            value={collateralRiskSettings}
+            onChange={onCollateralRiskSettingsChange}
+            availableRuns={availableRuns}
+            availableTapes={availableTapes}
+            poolSnapshots={poolSnapshots}
+            onOpenTape={onOpenTape}
+            onRunCashflow={onRunCashflow}
+            canRunCashflow={canRunCashflow}
+            runCashflowBusy={runCashflowBusy}
+            title="Mirrored risk settings"
+          />
+        </SectionCard>
+      )}
 
       {fees.length > 0 && (
         <SectionCard
@@ -934,7 +944,31 @@ export default function PropertyPanel({
       )}
 
       {bonds.length > 0 && (
-        <SectionCard title="Bonds">
+        <SectionCard title="Bonds"
+          headerAction={
+            <button
+              type="button"
+              title="Add a new bond block to the Blockly canvas"
+              onClick={() => {
+                if (!workspace) return;
+                try {
+                  const block = workspace.newBlock("bond_target");
+                  block.initSvg?.();
+                  block.render?.();
+                  // Place it at a visible offset from the current scroll position
+                  const metrics = workspace.getMetrics?.();
+                  const x = (metrics?.viewLeft ?? 100) + 60;
+                  const y = (metrics?.viewTop ?? 60) + 60;
+                  block.moveBy(x, y);
+                  workspace.scrollCenter?.();
+                } catch (e) { console.warn("add bond block failed", e); }
+              }}
+              className="flex items-center gap-1 rounded border border-primary/40 px-2 py-0.5 text-xs text-primary hover:bg-primary/10 transition-colors"
+            >
+              <Plus className="w-3 h-3" /> Bond
+            </button>
+          }
+        >
           <div className="mb-2 grid grid-cols-[1fr_auto] items-center gap-2">
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               Collateral $
@@ -1168,8 +1202,30 @@ export default function PropertyPanel({
         </SectionCard>
       )}
 
-      {accounts.length > 0 && (
-        <SectionCard title="Accounts">
+      <SectionCard title="Accounts"
+        headerAction={
+          <button
+            type="button"
+            title="Add a new account block to the Blockly canvas"
+            onClick={() => {
+              if (!workspace) return;
+              try {
+                const block = workspace.newBlock("account_target");
+                block.initSvg?.();
+                block.render?.();
+                const metrics = workspace.getMetrics?.();
+                const x = (metrics?.viewLeft ?? 100) + 60;
+                const y = (metrics?.viewTop ?? 60) + 120;
+                block.moveBy(x, y);
+              } catch (e) { console.warn("add account block failed", e); }
+            }}
+            className="flex items-center gap-1 rounded border border-primary/40 px-2 py-0.5 text-xs text-primary hover:bg-primary/10 transition-colors"
+          >
+            <Plus className="w-3 h-3" /> Account
+          </button>
+        }
+      >
+        {accounts.length > 0 && (
           <div className="overflow-x-auto">
             <div className="min-w-[420px]">
               <div className="grid grid-cols-[160px_120px_100px_32px] gap-2 px-2 py-1 text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
@@ -1211,8 +1267,13 @@ export default function PropertyPanel({
               ))}
             </div>
           </div>
-        </SectionCard>
-      )}
+        )}
+        {accounts.length === 0 && (
+          <p className="text-xs text-muted-foreground px-2 py-2">
+            No accounts yet. Click "+ Account" above or add an account block on the Canvas.
+          </p>
+        )}
+      </SectionCard>
 
       {triggers.length > 0 && (
         <SectionCard title="Triggers">
@@ -1336,17 +1397,20 @@ function EntityCounterSection({
 function SectionCard({
   title,
   tooltipText,
+  headerAction,
   children,
 }: {
   title: string;
   tooltipText?: string;
+  headerAction?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="rounded-md border border-border bg-background/30">
       <div className="px-3 py-2 border-b border-border">
         <div className="flex items-center gap-1.5">
-          <h3 className="text-xs font-medium tracking-wide uppercase text-muted-foreground">{title}</h3>
+          <h3 className="text-xs font-medium tracking-wide uppercase text-muted-foreground flex-1">{title}</h3>
+          {headerAction}
           {tooltipText && (
             <span className="relative inline-flex items-center group">
               <span

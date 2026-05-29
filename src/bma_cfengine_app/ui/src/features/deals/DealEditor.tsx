@@ -4,15 +4,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Code2,
+  GripVertical,
   LayoutDashboard,
   Save,
   Settings2,
   Sigma,
+  TrendingUp,
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import BlocklyCanvas from "./BlocklyCanvas";
 import PropertyPanel from "./PropertyPanel";
+import CollateralRiskSettingsEditor from "./shared/CollateralRiskSettingsEditor";
 import { generateDealIR } from "./irGenerator";
 import { applyDynamicColors } from "./blockColors";
 import { fmtNamedId, MONO } from "../../lib/format";
@@ -114,7 +117,9 @@ export default function DealEditor({
   onDirtyStateChange,
 }: DealEditorProps) {
   const [studioTab, setStudioTab] = useState<StudioTab>("design");
-  const [designView, setDesignView] = useState<"canvas" | "properties">("properties");
+  const [designView, setDesignView] = useState<"specs" | "canvas" | "risk">("specs");
+  const [canvasSidebarWidth, setCanvasSidebarWidth] = useState(300);
+  const canvasDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const [irJson, setIrJson] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [workspace, setWorkspace] = useState<any>(null);
@@ -1205,7 +1210,7 @@ export default function DealEditor({
       try { workspace.clear(); } catch { /* ignore */ }
     }
     setStudioTab("design");
-    setDesignView("properties");   // land on Deal Specifications for a clean slate
+    setDesignView("specs");   // land on Deal Specifications for a clean slate
     setIrJson("");
     setErrors([]);
     setDealName("Deal");
@@ -1475,20 +1480,21 @@ export default function DealEditor({
         </div>
       )}
 
-      {/* Design tab: Canvas + Properties as two full-screen sub-views */}
+      {/* Design tab: 3 sub-views */}
       <div
         ref={designSplitRef}
         className={studioTab === "design" ? "flex min-h-0 flex-1 flex-col gap-0" : "hidden min-h-0 flex-1 flex-col gap-0"}
       >
-        {/* Sub-tab bar: Deal Specifications | Canvas */}
+        {/* Sub-tab bar: Deal Specifications | Canvas | Risk */}
         <div className="shrink-0 flex items-center gap-0 px-2 pt-1 pb-0 border-b border-border/60">
           {([
-            { id: "properties", label: "Deal Specifications", icon: Settings2 },
-            { id: "canvas",     label: "Canvas",              icon: LayoutDashboard },
+            { id: "specs",  label: "Deal Specifications", icon: Settings2 },
+            { id: "canvas", label: "Canvas",              icon: LayoutDashboard },
+            { id: "risk",   label: "Risk Settings",       icon: TrendingUp },
           ] as const).map(({ id, label, icon: Icon }) => (
             <button
               key={id}
-              onClick={() => setDesignView(id)}
+              onClick={() => setDesignView(id as "specs" | "canvas" | "risk")}
               className={[
                 "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-t border-b-2 transition-colors",
                 designView === id
@@ -1502,13 +1508,8 @@ export default function DealEditor({
           ))}
         </div>
 
-        {/* Canvas view — always mounted, toggled via CSS so Blockly state is preserved */}
-        <div className={designView === "canvas" ? "flex min-h-0 flex-1" : "hidden"}>
-          <BlocklyCanvas onChange={handleWorkspaceChange} />
-        </div>
-
-        {/* Properties view — full width, no sidebar split */}
-        <div className={designView === "properties" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>
+        {/* Deal Specifications — full-width bond/account/fee editing (no risk settings) */}
+        <div className={designView === "specs" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>
           <div className="flex-1 min-h-0 overflow-auto p-3">
             <PropertyPanel
               workspace={workspace}
@@ -1528,6 +1529,85 @@ export default function DealEditor({
               showPsaScheduleTools={hasPsaStructuringBonds && !!poolDerivationCtx}
               onRederivePsaSchedules={() => void runPsaScheduleDerivation()}
               scheduleDeriveBusy={scheduleDeriveBusy}
+              hideRiskSettings
+            />
+          </div>
+        </div>
+
+        {/* Canvas — Blockly + resizable properties sidebar */}
+        <div className={designView === "canvas" ? "flex min-h-0 flex-1 gap-0" : "hidden"}>
+          <BlocklyCanvas onChange={handleWorkspaceChange} />
+          {/* Drag handle */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              canvasDragRef.current = { startX: e.clientX, startW: canvasSidebarWidth };
+              document.body.style.cursor = "col-resize";
+              document.body.style.userSelect = "none";
+              const onMove = (ev: MouseEvent) => {
+                const d = canvasDragRef.current;
+                if (!d) return;
+                const newW = Math.max(220, Math.min(640, d.startW - (ev.clientX - d.startX)));
+                setCanvasSidebarWidth(newW);
+              };
+              const onUp = () => {
+                canvasDragRef.current = null;
+                document.body.style.removeProperty("cursor");
+                document.body.style.removeProperty("user-select");
+                window.removeEventListener("mousemove", onMove);
+                window.removeEventListener("mouseup", onUp);
+              };
+              window.addEventListener("mousemove", onMove);
+              window.addEventListener("mouseup", onUp);
+            }}
+            className="group relative w-2 shrink-0 cursor-col-resize flex items-center justify-center hover:bg-primary/15"
+          >
+            <div className="absolute inset-y-2 w-px bg-border group-hover:bg-primary/50" />
+            <GripVertical className="w-3 h-3 text-muted-foreground/60 group-hover:text-muted-foreground relative z-[1]" />
+          </div>
+          <div style={{ width: canvasSidebarWidth }} className="shrink-0 flex h-full min-h-0 min-w-0 flex-col border-l border-border">
+            <div className="flex-1 min-h-0 overflow-auto p-2">
+              <PropertyPanel
+                workspace={workspace}
+                collateralRiskSettings={collateralRiskSettings}
+                onCollateralRiskSettingsChange={onCollateralRiskSettingsChange}
+                onOpenTape={onOpenTape}
+                onRunCashflow={handleRunDeal}
+                canRunCashflow={!!savedDealId}
+                runCashflowBusy={runBusy}
+                availableRuns={availableRuns}
+                availableTapes={uploadLibrary}
+                poolSnapshots={poolSnapshots}
+                onCarryTieOutStatusChange={handleCarryStatusChange}
+                onPoolDerivationContextChange={handlePoolDerivationContextChange}
+                psaScheduleStale={psaScheduleStaleInfo}
+                showPsaStructuringBonds={hasPsaStructuringBonds}
+                showPsaScheduleTools={hasPsaStructuringBonds && !!poolDerivationCtx}
+                onRederivePsaSchedules={() => void runPsaScheduleDerivation()}
+                scheduleDeriveBusy={scheduleDeriveBusy}
+                hideRiskSettings
+                compact
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Risk Settings — full-width collateral risk editor */}
+        <div className={designView === "risk" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>
+          <div className="flex-1 min-h-0 overflow-auto p-4">
+            <CollateralRiskSettingsEditor
+              value={collateralRiskSettings}
+              onChange={onCollateralRiskSettingsChange}
+              availableRuns={availableRuns}
+              availableTapes={uploadLibrary}
+              poolSnapshots={poolSnapshots}
+              onOpenTape={onOpenTape}
+              onRunCashflow={handleRunDeal}
+              canRunCashflow={!!savedDealId}
+              runCashflowBusy={runBusy}
             />
           </div>
         </div>
