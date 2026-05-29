@@ -76,5 +76,5 @@ None. Both pass-1 and pass-2 reviewers were gpt-5.5-extra-high (GPT family); the
 
 The plan file itself lives in the user's Cursor config directory (`~/.cursor/plans/structuring_studio_redesign_ec1d8b3d.plan.md`) and is NOT in this git repository; plan revisions are recorded by Cursor's plan history, not by git. The in-repo Phase 0 artifacts (this closure, the pass-1 and pass-2 reviews, and the fold-back verification) are committed together; their SHAs are recorded in this section once the commit lands.
 
-- Phase 0 review + closure commit: _(filled in after `git commit`)_
-- Phase 1 first-todo decomposition commit: _(filled in after `git commit`)_
+- Phase 0 review + closure commit: `1b20c51` ("Structuring Studio Redesign: Phase 0 architectural review closure")
+- Phase 1 first-todo decomposition commit: `ac4695c` ("Phase 1 decomposition: ir-version-control-foundation")
