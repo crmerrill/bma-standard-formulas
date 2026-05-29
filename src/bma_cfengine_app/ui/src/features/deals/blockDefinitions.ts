@@ -259,23 +259,22 @@ export const DEAL_BLOCKS = [
     ],
     previousStatement: "target_item",
     nextStatement: "target_item",
-    colour: "#e89090",  // pastel red L≈68% → black Blockly text, readable in white fields
+    colour: "#FF7676",  // Bloomberg salmon — matches palette index 3 (default before dynamic color)
     extensions: ["bond_target_dynamic_fields"],
     tooltip:
       "Bond target. Face in dollars. Red/orange hues vary by tranche name (property panel syncs names).",
   },
 
   // Account target — initial balance as % of bond stack or fixed $
-  // OA5 NOTE: The ACCOUNT_TYPE field uses ACCOUNT_SOURCE_OPTIONS (source vocabulary)
-  // as the account NAME, not the account category. irGenerator._canonicalAccountCategory()
-  // maps any value to a valid AccountCategory enum before emitting IR, so invalid enum
-  // values are never generated. A future UX improvement should use a separate
-  // ACCOUNT_CATEGORY_OPTIONS dropdown restricted to the 5 valid schema values.
+  // The ACCOUNT_TYPE field is a free-text account NAME (e.g. "RESERVE", "PFA",
+  // "SPREAD_ACCT"). irGenerator._canonicalAccountCategory() maps it to a valid
+  // AccountCategory enum. Accounts are declared in the Properties panel first;
+  // this block references them by name.
   {
     type: "account_target",
     message0: "→ %1 init %2 %3",
     args0: [
-      { type: "field_dropdown", name: "ACCOUNT_TYPE", options: ACCOUNT_SOURCE_OPTIONS },
+      { type: "field_input", name: "ACCOUNT_TYPE", text: "RESERVE" },
       { type: "field_dropdown", name: "INITIAL_MODE", options: ACCOUNT_INITIAL_MODE },
       { type: "field_number", name: "INITIAL_AMT", value: 0, min: 0, precision: 0.01 },
     ],

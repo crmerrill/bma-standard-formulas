@@ -319,7 +319,11 @@ export default function App() {
         />
       )}
       {page === "results" && run && (
-        <ResultsPage run={run} onSwitchRun={handleViewRun} />
+        <ResultsPage
+          run={run}
+          onSwitchRun={handleViewRun}
+          onBackToHistory={() => setPage("history")}
+        />
       )}
       {page === "history" && (
         <RunHistoryPage

@@ -99,16 +99,21 @@ export const BLOCKLY_CSS_OVERRIDES = `
   font-weight: 500 !important;
 }
 
-/* --- Dropdown fields (also white background) --- */
+/* --- Dropdown fields (white background, dark text, dark arrow) --- */
 .blocklyDropdownText {
   fill: #111827 !important;
   font-family: 'Inter', system-ui, sans-serif !important;
   font-size: 11px !important;
 }
+/* The dropdown field background rect */
+.blocklyEditableText.blocklyDropDown > .blocklyFieldRect,
 .blocklyDropdownRect {
   fill: #ffffff !important;
   stroke: rgba(0,0,0,0.18) !important;
-  rx: 3 !important;
+}
+/* Dropdown arrow/chevron — dark so it's visible on white */
+.blocklyDropDownArrow {
+  fill: #374151 !important;
 }
 
 /* --- HTML input when editing a field (click to type) ---

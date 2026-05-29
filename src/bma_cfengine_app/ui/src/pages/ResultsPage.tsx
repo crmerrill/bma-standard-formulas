@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   BarChart3, Download, Table2, TrendingUp,
   Hash, DollarSign, Clock, Percent, Layers, Timer,
-  FileInput, ArrowRight, Settings2,
+  FileInput, ArrowRight, Settings2, ArrowLeft,
 } from "lucide-react";
 import type {
   RunResponse, CashflowPreview, RiskResponse, RunListItem,
@@ -27,6 +27,7 @@ type Tab = "summary" | "inputs" | "portfolio" | "groups" | "risk";
 interface Props {
   run: RunResponse;
   onSwitchRun?: (runId: string) => void;
+  onBackToHistory?: () => void;
 }
 
 type CfView = "actual" | "scheduled";
@@ -39,7 +40,7 @@ const TABS = [
   { id: "risk", label: "Risk", icon: TrendingUp },
 ] as const;
 
-export default function ResultsPage({ run, onSwitchRun }: Props) {
+export default function ResultsPage({ run, onSwitchRun, onBackToHistory }: Props) {
   const [tab, setTab] = useState<Tab>("summary");
   const [cfPreview, setCfPreview] = useState<CashflowPreview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -163,21 +164,32 @@ export default function ResultsPage({ run, onSwitchRun }: Props) {
           This run belongs to the waterfall engine. Open it in Structured Deal Analysis.
         </div>
       )}
-      {/* Run selector */}
-      {allRuns.length > 1 && onSwitchRun && (
-        <div className="flex items-center gap-2 text-xs">
-          <Clock className="w-3.5 h-3.5 text-muted-foreground" />
-          <span className="text-muted-foreground">Run:</span>
-          <FormSelect value={run.run_id} onChange={(e) => onSwitchRun(e.target.value)}
-            className="w-auto" style={MONO}>
-            {allRuns.map((r) => (
-              <option key={r.run_id} value={r.run_id}>
-                {r.run_id.replace("run_", "").slice(0, 8)} — {r.scenario_names.join(", ") || "Base"} — {r.loan_count} loans — {new Date(r.created_at).toLocaleString()}
-              </option>
-            ))}
-          </FormSelect>
-        </div>
-      )}
+      {/* Navigation bar: back button + run selector */}
+      <div className="flex items-center gap-3 text-xs">
+        {onBackToHistory && (
+          <button
+            onClick={onBackToHistory}
+            className="flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 text-muted-foreground hover:border-primary/50 hover:text-foreground transition-colors"
+          >
+            <ArrowLeft className="w-3 h-3" />
+            All Runs
+          </button>
+        )}
+        {allRuns.length > 1 && onSwitchRun && (
+          <div className="flex items-center gap-2">
+            <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+            <span className="text-muted-foreground">Switch run:</span>
+            <FormSelect value={run.run_id} onChange={(e) => onSwitchRun(e.target.value)}
+              className="w-auto" style={MONO}>
+              {allRuns.map((r) => (
+                <option key={r.run_id} value={r.run_id}>
+                  {r.run_id.replace("run_", "").slice(0, 8)} — {r.scenario_names.join(", ") || "Base"} — {r.loan_count} loans — {new Date(r.created_at).toLocaleString()}
+                </option>
+              ))}
+            </FormSelect>
+          </div>
+        )}
+      </div>
 
       {summary && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
