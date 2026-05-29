@@ -4,7 +4,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Code2,
-  GripVertical,
   LayoutDashboard,
   Save,
   Settings2,
@@ -47,9 +46,6 @@ import {
   type OpaqueIrFields,
   type ScheduleOverlay,
 } from "./scheduleOverlayMerge";
-
-const SIDEBAR_MIN = 200;
-const SIDEBAR_MAX = 640;
 
 type StudioTab = "design" | "solver" | "ir";
 const STUDIO_DRAFT_STORAGE_KEY = "bma_structuring_studio_draft_v1";
@@ -118,10 +114,10 @@ export default function DealEditor({
   onDirtyStateChange,
 }: DealEditorProps) {
   const [studioTab, setStudioTab] = useState<StudioTab>("design");
+  const [designView, setDesignView] = useState<"canvas" | "properties">("canvas");
   const [irJson, setIrJson] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [workspace, setWorkspace] = useState<any>(null);
-  const [sidebarWidth, setSidebarWidth] = useState(288);
   const [dealName, setDealName] = useState("Deal");
   const [savedDealId, setSavedDealId] = useState<string | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
@@ -180,11 +176,8 @@ export default function DealEditor({
     getDefaultSensitivitySweepConfig(),
   );
 
-  const rightColRef = useRef<HTMLDivElement>(null);
   const designSplitRef = useRef<HTMLDivElement>(null);
-  const colDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const progressPollRef = useRef<number | null>(null);
-  const userResizedSidebarRef = useRef(false);
   const scenarioNames = useMemo(
     () => parseScenarioSet(solverSpecDraft.scenarioSetText),
     [solverSpecDraft.scenarioSetText],
@@ -1091,25 +1084,6 @@ export default function DealEditor({
   }, [pendingWorkspaceState, restoreWorkspaceState, workspace]);
 
   useEffect(() => {
-    const onColMove = (e: MouseEvent) => {
-      const d = colDragRef.current;
-      if (!d) return;
-      const dx = e.clientX - d.startX;
-      setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, d.startW - dx)));
-      userResizedSidebarRef.current = true;
-    };
-    const onColUp = () => {
-      colDragRef.current = null;
-      document.body.style.removeProperty("cursor");
-      document.body.style.removeProperty("user-select");
-    };
-
-    window.addEventListener("mousemove", onColMove);
-    window.addEventListener("mouseup", onColUp);
-    return () => {
-      window.removeEventListener("mousemove", onColMove);
-      window.removeEventListener("mouseup", onColUp);
-    };
   }, []);
 
   useEffect(() => {
@@ -1221,23 +1195,6 @@ export default function DealEditor({
     onDirtyStateChange?.(isDirty);
   }, [isDirty, onDirtyStateChange]);
 
-  const onColumnResizeStart = (e: React.MouseEvent) => {
-    e.preventDefault();
-    colDragRef.current = { startX: e.clientX, startW: sidebarWidth };
-    userResizedSidebarRef.current = true;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  };
-
-  useEffect(() => {
-    if (studioTab !== "design") return;
-    if (userResizedSidebarRef.current) return;
-    const totalWidth = designSplitRef.current?.getBoundingClientRect().width ?? 0;
-    if (totalWidth <= 0) return;
-    // Keep default shell balanced: Blockly and Properties at roughly 50/50.
-    const equalSplit = (totalWidth - 2) / 2;
-    setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, equalSplit)));
-  }, [studioTab]);
 
   const handleCloseDealSession = useCallback(() => {
     if (isDirty && !window.confirm("Close deal session and discard unsaved changes?")) {
@@ -1513,53 +1470,62 @@ export default function DealEditor({
         </div>
       )}
 
+      {/* Design tab: Canvas + Properties as two full-screen sub-views */}
       <div
         ref={designSplitRef}
-        className={studioTab === "design" ? "flex min-h-0 flex-1 gap-0" : "hidden min-h-0 flex-1 gap-0"}
+        className={studioTab === "design" ? "flex min-h-0 flex-1 flex-col gap-0" : "hidden min-h-0 flex-1 flex-col gap-0"}
       >
+        {/* Sub-tab bar: Canvas | Properties */}
+        <div className="shrink-0 flex items-center gap-0 px-2 pt-1 pb-0 border-b border-border/60">
+          {([
+            { id: "canvas",     label: "Canvas",     icon: LayoutDashboard },
+            { id: "properties", label: "Properties", icon: Settings2 },
+          ] as const).map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => setDesignView(id)}
+              className={[
+                "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-t border-b-2 transition-colors",
+                designView === id
+                  ? "border-primary text-foreground bg-card/40"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30",
+              ].join(" ")}
+            >
+              <Icon className="w-3 h-3" />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Canvas view — always mounted, toggled via CSS so Blockly state is preserved */}
+        <div className={designView === "canvas" ? "flex min-h-0 flex-1" : "hidden"}>
           <BlocklyCanvas onChange={handleWorkspaceChange} />
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            onMouseDown={onColumnResizeStart}
-            className="group relative w-2 shrink-0 cursor-col-resize flex items-center justify-center hover:bg-primary/15"
-          >
-            <div className="absolute inset-y-2 w-px bg-border group-hover:bg-primary/50" />
-            <GripVertical className="w-3 h-3 text-muted-foreground/60 group-hover:text-muted-foreground relative z-[1]" />
+        </div>
+
+        {/* Properties view — full width, no sidebar split */}
+        <div className={designView === "properties" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>
+          <div className="flex-1 min-h-0 overflow-auto p-3">
+            <PropertyPanel
+              workspace={workspace}
+              collateralRiskSettings={collateralRiskSettings}
+              onCollateralRiskSettingsChange={onCollateralRiskSettingsChange}
+              onOpenTape={onOpenTape}
+              onRunCashflow={handleRunDeal}
+              canRunCashflow={!!savedDealId}
+              runCashflowBusy={runBusy}
+              availableRuns={availableRuns}
+              availableTapes={uploadLibrary}
+              poolSnapshots={poolSnapshots}
+              onCarryTieOutStatusChange={handleCarryStatusChange}
+              onPoolDerivationContextChange={handlePoolDerivationContextChange}
+              psaScheduleStale={psaScheduleStaleInfo}
+              showPsaStructuringBonds={hasPsaStructuringBonds}
+              showPsaScheduleTools={hasPsaStructuringBonds && !!poolDerivationCtx}
+              onRederivePsaSchedules={() => void runPsaScheduleDerivation()}
+              scheduleDeriveBusy={scheduleDeriveBusy}
+            />
           </div>
-          <div
-            ref={rightColRef}
-            style={{ width: sidebarWidth }}
-            className="flex h-full min-h-0 min-w-0 shrink-0 flex-col"
-          >
-            <div className="flex flex-1 flex-col min-h-0 overflow-hidden rounded-md border border-border bg-[#0d1220]">
-              <div className="shrink-0 flex items-center gap-1.5 px-3 pt-3 pb-2 border-b border-border/60">
-                <Settings2 className="w-3.5 h-3.5 text-muted-foreground" />
-                <span className="text-xs font-medium text-foreground">Properties</span>
-              </div>
-              <div className="flex-1 min-h-0 overflow-auto p-3 pt-2">
-                <PropertyPanel
-                  workspace={workspace}
-                  collateralRiskSettings={collateralRiskSettings}
-                  onCollateralRiskSettingsChange={onCollateralRiskSettingsChange}
-                  onOpenTape={onOpenTape}
-                  onRunCashflow={handleRunDeal}
-                  canRunCashflow={!!savedDealId}
-                  runCashflowBusy={runBusy}
-                  availableRuns={availableRuns}
-                  availableTapes={uploadLibrary}
-                  poolSnapshots={poolSnapshots}
-                  onCarryTieOutStatusChange={handleCarryStatusChange}
-                  onPoolDerivationContextChange={handlePoolDerivationContextChange}
-                  psaScheduleStale={psaScheduleStaleInfo}
-                  showPsaScheduleTools={hasPsaStructuringBonds && !!poolDerivationCtx}
-                  onRederivePsaSchedules={() => void runPsaScheduleDerivation()}
-                  scheduleDeriveBusy={scheduleDeriveBusy}
-                />
-              </div>
-            </div>
-          </div>
+        </div>
       </div>
     </div>
   );
