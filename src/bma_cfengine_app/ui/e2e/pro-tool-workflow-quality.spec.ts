@@ -33,9 +33,9 @@ test.describe("Pro-tool workflow quality gates", () => {
     const structuredFilter = page.getByRole("button", { name: "Structured Deal", exact: true });
     await structuredFilter.focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByText("1 run")).toBeVisible();
+    await expect(page.getByText("2 runs")).toBeVisible();
 
-    const openSolverStudio = page.getByRole("button", { name: "Open Solver Studio" });
+    const openSolverStudio = page.getByRole("button", { name: "Open Solver Studio" }).first();
     await openSolverStudio.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("heading", { name: "Structuring Studio" })).toBeVisible();

@@ -170,11 +170,17 @@ def build_from_runsetup_ref(
                     _apath = _ap(run_id, paired_artifact_name)
                     from ...orchestrator.artifact_catalog import verify_checksum
                     if not verify_checksum(_apath, paired_ref.checksum):
-                        _logger.warning(
-                            "Run %s: paired artifact %r checksum mismatch — "
-                            "artifact may be corrupt. Falling back to aggregate path.",
-                            run_id, paired_artifact_name,
+                        # Emit both a structured log and a UserWarning so the
+                        # mismatch is visible in both server logs and client-facing
+                        # warning streams (e.g., test captures with catch_warnings).
+                        _checksum_msg = (
+                            f"Run {run_id!r} scenario {scenario_name!r}: "
+                            f"paired artifact {paired_artifact_name!r} checksum mismatch "
+                            f"— expected {paired_ref.checksum!r}, artifact may be corrupt. "
+                            f"Falling back to aggregate path. [per_loan_visibility=false]"
                         )
+                        _logger.warning(_checksum_msg)
+                        warnings.warn(_checksum_msg, UserWarning, stacklevel=2)
                         paired_ref = None
                         skip_paired = True
                 except FileNotFoundError:

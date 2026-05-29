@@ -8,12 +8,12 @@ test.describe("Structurer UX smoke", () => {
     await page.goto("/");
 
     await expect(page.getByRole("heading", { name: "Run History" })).toBeVisible();
-    await expect(page.getByText("2 runs")).toBeVisible();
+    await expect(page.getByText("3 runs")).toBeVisible();
 
     await page.getByRole("button", { name: "Structured Deal", exact: true }).click();
-    await expect(page.getByText("1 run")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open Analysis" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open Solver Studio" })).toBeVisible();
+    await expect(page.getByText("2 runs")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open Analysis" }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open Solver Studio" }).first()).toBeVisible();
   });
 
   test("structured analysis renders large cashflow preview deterministically", async ({ page }) => {

@@ -300,23 +300,19 @@ def _write_paired_artifact(run_id: str, artifact_name: str, constituents: list[A
 
     # OA-B2: Register an ArtifactRef so consumers can locate the artifact without
     # knowing the naming convention and can verify its integrity via checksum.
-    try:
-        from .artifact_catalog import build_artifact_ref
-        ref = build_artifact_ref(
-            run_id=run_id,
-            artifact_name=artifact_name,
-            artifact_type="paired_cashflows",
-            artifact_path=final_path,
-            format="parquet",
-            loan_count=len(seen_ids),
-            per_loan_visibility=True,
-        )
-        run_store.register_artifact_ref(run_id, artifact_name, ref.model_dump())
-    except Exception as _reg_exc:
-        _logger.warning(
-            "Run %s: failed to register ArtifactRef for %r (non-fatal): %s",
-            run_id, artifact_name, _reg_exc,
-        )
+    # Errors are re-raised so _execute_single_scenario can record them in the
+    # per_loan_visibility_meta and the run manifest — not silently swallowed.
+    from .artifact_catalog import build_artifact_ref
+    ref = build_artifact_ref(
+        run_id=run_id,
+        artifact_name=artifact_name,
+        artifact_type="paired_cashflows",
+        artifact_path=final_path,
+        format="parquet",
+        loan_count=len(seen_ids),
+        per_loan_visibility=True,
+    )
+    run_store.register_artifact_ref(run_id, artifact_name, ref.model_dump())
 
 
 def _read_paired_artifact(run_id: str, artifact_name: str) -> list[Any]:
@@ -675,6 +671,17 @@ def execute_run(
             "include_period_zero": include_period_zero,
         }
 
+        # OA-B2 blocker fix: read the ArtifactRef catalog that was accumulated during
+        # _execute_single_scenario() calls before composing the final manifest.
+        # Without this merge, the final save_manifest() call would overwrite the
+        # "artifacts" key registered by _write_paired_artifact().
+        _prior_artifacts: dict = {}
+        try:
+            _prior_manifest = run_store.load_manifest(run_id)
+            _prior_artifacts = _prior_manifest.get("artifacts") or {}
+        except Exception:
+            pass
+
         run_store.save_manifest(run_id, {
             "status": "completed",
             "run_type": "portfolio",
@@ -704,6 +711,8 @@ def execute_run(
                 "rates": "inputs/rates.csv" if rates_df is not None else None,
                 "dq_mapping": "inputs/dq_mapping.json" if dq_mapping_data is not None else None,
             },
+            # OA-B2: Carry forward ArtifactRef catalog entries written during scenario runs.
+            "artifacts": _prior_artifacts,
         })
 
         return RunResponse(

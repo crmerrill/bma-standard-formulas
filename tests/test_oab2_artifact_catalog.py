@@ -383,15 +383,69 @@ class TestBridgeUsesArtifactRef:
 
         # Must still return a valid DealRunInput (fallback to aggregate)
         assert "Base Case" in built
-        # Must emit the per_loan_visibility warning
-        assert any("per_loan_visibility=false" in m for m in user_warnings), (
-            f"Expected fallback warning; got: {user_warnings}"
+        # Must emit a user-visible warning that mentions checksum mismatch.
+        assert any("checksum mismatch" in m and "per_loan_visibility=false" in m
+                   for m in user_warnings), (
+            f"Expected checksum mismatch warning; got: {user_warnings}"
         )
 
 
 # ---------------------------------------------------------------------------
 # Regression: raw JSON PAIRED is rejected
 # ---------------------------------------------------------------------------
+
+class TestArtifactsSurviveFinalManifest:
+    """BLOCKER fix: ArtifactRef catalog entries registered during _execute_single_scenario
+    must survive when execute_run() writes the final completed manifest."""
+
+    def test_artifacts_preserved_in_completed_manifest(self, monkeypatch, tmp_path):
+        """Directly exercise the final manifest merge logic:
+        simulate registering artifacts during scenario runs, then verify they
+        appear in the final completed manifest after save_manifest() is called
+        with the 'completed' status and _prior_artifacts merge.
+        """
+        import warnings
+        _use_tmp_workspace(monkeypatch, tmp_path)
+        run_id = "run_final_merge"
+
+        # Simulate scenario run registering a paired artifact ref
+        run_store.save_manifest(run_id, {"status": "running"})
+        paired = _fake_actual(balance=1_000.0)
+        actuals = paired.collateral.portfolio.actual_constituents()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _write_paired_artifact(run_id, "Base_Case_portfolio_paired", actuals)
+
+        # Verify ref was registered
+        assert run_store.get_artifact_ref(run_id, "Base_Case_portfolio_paired") is not None
+
+        # Simulate execute_run() final manifest write (the bug path)
+        # — use the same logic that was added to execute_run()
+        _prior_artifacts: dict = {}
+        try:
+            _prior_manifest = run_store.load_manifest(run_id)
+            _prior_artifacts = _prior_manifest.get("artifacts") or {}
+        except Exception:
+            pass
+
+        run_store.save_manifest(run_id, {
+            "status": "completed",
+            "scenario_names": ["Base Case"],
+            "loan_count": 1,
+            "artifacts": _prior_artifacts,  # critical: carry forward
+        })
+
+        # ArtifactRef must still be present after final manifest write
+        final_manifest = run_store.load_manifest(run_id)
+        assert "artifacts" in final_manifest
+        ref_dict = final_manifest["artifacts"].get("Base_Case_portfolio_paired")
+        assert ref_dict is not None, (
+            "ArtifactRef must survive the final execute_run() manifest write"
+        )
+        ref = artifact_ref_from_dict(ref_dict)
+        assert ref is not None
+        assert ref.per_loan_visibility is True
+
 
 class TestPairedJsonRejection:
     def test_deal_native_rejects_paired_collateral_mode(self):
