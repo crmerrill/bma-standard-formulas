@@ -85,46 +85,23 @@ export const BLOCKLY_CSS_OVERRIDES = `
   font-weight: 500 !important;
 }
 
-/* --- Editable field backgrounds — white for contrast against block color ---
-   .blocklyFieldRect is the named body rect for text / number / dropdown fields.
-   Target by class only, not positional combinators. */
+/* --- Editable field backgrounds ---
+   Dark semi-transparent overlay so all fields read the same regardless of
+   which block color is behind them. White text (Blockly auto-computed for
+   dark blocks) reads clearly on this dark overlay.
+   NOTE: Do NOT use white fields + CSS text overrides — Blockly applies text
+   color via SVG inline styles that vary by field type and renderer version,
+   making CSS overrides unreliable. Dark fields + auto-white-text = reliable. */
 .blocklyFieldRect {
-  fill: #ffffff !important;
-  fill-opacity: 1 !important;
-  stroke: rgba(0,0,0,0.18) !important;
+  fill: rgba(0, 0, 0, 0.45) !important;
+  stroke: rgba(255, 255, 255, 0.12) !important;
+  rx: 3 !important;
 }
 
-/* --- Field value text — dark on white field background ---
-   Blockly v10 Zelos places the value <text> element as a sibling of
-   .blocklyFieldRect within the same <g>.  Using the CSS general sibling
-   combinator (~) reliably matches it regardless of which wrapper classes
-   Blockly applies (field_input, field_number, field_dropdown differ). */
-.blocklyFieldRect ~ text {
-  fill: #111827 !important;
-  font-family: 'Inter', system-ui, sans-serif !important;
-  font-size: 11px !important;
-  font-weight: 500 !important;
-}
-
-/* Belt-and-suspenders: also target via editableText descendant in case the
-   DOM nesting differs between Blockly versions. */
-.blocklyEditableText text,
-.blocklyEditableText .blocklyText {
-  fill: #111827 !important;
-  font-weight: 500 !important;
-}
-
-/* Dropdown field text class (Blockly may apply this to value text) */
-.blocklyDropdownText {
-  fill: #111827 !important;
-  font-size: 11px !important;
-}
-
-/* Dropdown arrow chevron — dark so it's visible on white field background */
+/* Dropdown arrow — lighter so visible against the dark field overlay */
 .blocklyDropDownArrow polygon,
-.blocklyDropDownArrow path,
-.blocklyDropDownArrow {
-  fill: #374151 !important;
+.blocklyDropDownArrow path {
+  fill: rgba(255, 255, 255, 0.7) !important;
 }
 
 /* --- HTML input when editing a field (click to type) ---
@@ -133,16 +110,16 @@ export const BLOCKLY_CSS_OVERRIDES = `
    Goal: identical appearance to the SVG display mode (white bg, dark text,
    same font, same size — no visual change when you click). */
 .blocklyHtmlInput {
-  background: #ffffff !important;
-  color: #111827 !important;
-  border: 1px solid rgba(0,0,0,0.25) !important;
+  /* Match the dark SVG field overlay so there's no visual jump on click */
+  background: rgba(0, 0, 20, 0.75) !important;
+  color: #f1f5f9 !important;
+  border: 1px solid rgba(255,255,255,0.2) !important;
   border-radius: 3px !important;
-  /* Match the SVG font exactly so the text doesn't jump size/family */
   font-family: 'Inter', system-ui, sans-serif !important;
   font-size: 11px !important;
   font-weight: 500 !important;
   padding: 1px 4px !important;
-  outline: 2px solid rgba(245,158,11,0.5) !important;
+  outline: 2px solid rgba(245,158,11,0.6) !important;
   outline-offset: 0 !important;
   box-shadow: none !important;
   min-width: 40px !important;

@@ -1,62 +1,53 @@
 /**
- * Bloomberg-inspired block color palettes for the Structuring Studio.
+ * Block color palette — Bloomberg Terminal inspired, dark/saturated.
  *
- * Design principles:
- *   1. Curated fixed palette — deliberate, professional, not random-looking.
- *      Inspired by Bloomberg Terminal's saturated chart-series colors.
- *   2. All colors have perceived brightness ≥ 150 so Blockly always picks
- *      BLACK text. Black text is readable on both colored block backgrounds
- *      AND inside the white field_input boxes.
- *   3. Bond colors: 16 maximally distinct hues, each hand-selected to look
- *      intentional and distinguishable at a glance.
- *   4. Accounts: green family. Residuals: gold family.
- *      Pay rules keep their dark static colors (structure layer).
+ * All colors have perceived brightness < 128 so Blockly uses WHITE text.
+ * White text works on BOTH:
+ *   (a) the colored block background
+ *   (b) the dark field overlay (rgba black on the block color)
+ * This is the only reliable approach — CSS overrides of Blockly's SVG
+ * inline text fill are not portable across field types and renderers.
+ *
+ * Colors chosen to be visually distinct, rich, and professional —
+ * inspired by Bloomberg's data-viz palette but adapted for dark canvas.
  */
 
-// ---------------------------------------------------------------------------
-// Bloomberg-inspired bond color palette — 16 curated colors
-// Each verified: perceived brightness = (R*299 + G*587 + B*114)/1000 >= 150
-// ---------------------------------------------------------------------------
+// 16 dark, saturated, Bloomberg-inspired hues. All brightness < 128.
+// brightness = (R*299 + G*587 + B*114) / 1000
 const BOND_PALETTE = [
-  "#F5A623",  //  0: Bloomberg amber (signature orange)
-  "#4DB6FF",  //  1: sky blue
-  "#57D68D",  //  2: mint green
-  "#FF7676",  //  3: salmon / coral red
-  "#B39DFF",  //  4: lavender / soft purple
-  "#26D8F8",  //  5: cyan / electric blue
-  "#FFE14D",  //  6: golden yellow
-  "#FF9A56",  //  7: peach / warm orange
-  "#7B9FFF",  //  8: periwinkle
-  "#A8E063",  //  9: lime green
-  "#FF8AC4",  // 10: hot pink
-  "#4ECDC4",  // 11: teal / seafoam
-  "#C8A87E",  // 12: warm tan / gold
-  "#73C7E4",  // 13: steel blue
-  "#FF6CAB",  // 14: deep pink
-  "#A3E635",  // 15: chartreuse
+  "#B45309",  //  0: amber-700         brightness=103  warm gold
+  "#1D4ED8",  //  1: blue-700          brightness=79   royal blue
+  "#166534",  //  2: green-800         brightness=72   deep green
+  "#9F1239",  //  3: rose-800          brightness=65   crimson
+  "#5B21B6",  //  4: violet-800        brightness=67   deep purple
+  "#0E7490",  //  5: cyan-700          brightness=73   teal/ocean
+  "#854D0E",  //  6: yellow-800        brightness=85   dark gold
+  "#9A3412",  //  7: orange-800        brightness=82   burnt orange
+  "#1E40AF",  //  8: blue-800          brightness=70   navy
+  "#3D6A16",  //  9: lime-800          brightness=82   olive green
+  "#9D174D",  // 10: pink-800          brightness=72   magenta-rose
+  "#115E59",  // 11: teal-800          brightness=56   dark seafoam
+  "#78350F",  // 12: amber-900         brightness=74   dark bronze
+  "#1E3A8A",  // 13: blue-900          brightness=57   deep navy
+  "#831843",  // 14: pink-900          brightness=59   deep rose
+  "#3B0764",  // 15: purple-950        brightness=23   ultra-deep purple
 ];
 
-// Account palette: greens family
 const ACCOUNT_PALETTE = [
-  "#6EE7B7",  //  0: emerald
-  "#34D399",  //  1: green-teal
-  "#A7F3D0",  //  2: light mint
-  "#86EFAC",  //  3: sage
-  "#4ADE80",  //  4: bright green
-  "#BBF7D0",  //  5: pale green
+  "#14532D",  // dark emerald
+  "#166534",  // deep green
+  "#15803D",  // green-700
+  "#065F46",  // emerald-800
+  "#064E3B",  // emerald-900
+  "#134E4A",  // teal-900
 ];
 
-// Residual palette: gold / purple family (equity / remainder feel)
 const RESIDUAL_PALETTE = [
-  "#FDE68A",  //  0: golden yellow
-  "#FCD34D",  //  1: amber
-  "#DDD6FE",  //  2: lavender
-  "#C4B5FD",  //  3: purple
+  "#78350F",  // amber-900 (gold)
+  "#92400E",  // amber-800
+  "#4C1D95",  // violet-900
+  "#3B0764",  // purple-950
 ];
-
-// ---------------------------------------------------------------------------
-// Color functions
-// ---------------------------------------------------------------------------
 
 function hashName(name: string): number {
   let h = 0;
@@ -66,43 +57,21 @@ function hashName(name: string): number {
   return Math.abs(h);
 }
 
-/**
- * Bond colors — indexed from the curated Bloomberg palette.
- * Same bond name always gets the same color (index → color).
- * Hash provides tie-breaking within the same index slot (minor hue shift
- * for names that alias to the same index mod palette-size).
- */
-export function bondColor(name: string, index: number): string {
-  // Primary: rotate through the curated palette by index.
-  const paletteIdx = index % BOND_PALETTE.length;
-  return BOND_PALETTE[paletteIdx];
+export function bondColor(_name: string, index: number): string {
+  return BOND_PALETTE[index % BOND_PALETTE.length];
 }
 
-/**
- * Account colors — greens family, index-driven.
- */
-export function accountColor(name: string, index: number): string {
+export function accountColor(_name: string, index: number): string {
   return ACCOUNT_PALETTE[index % ACCOUNT_PALETTE.length];
 }
 
-/**
- * Residual colors — gold / purple family.
- */
 export function residualColor(name: string, _index: number): string {
-  // Most deals have one residual; use hash to pick from the residual palette.
-  const h = hashName(name);
-  return RESIDUAL_PALETTE[h % RESIDUAL_PALETTE.length];
+  return RESIDUAL_PALETTE[hashName(name) % RESIDUAL_PALETTE.length];
 }
 
-/**
- * Apply dynamic colors to all target blocks in the workspace.
- * Pay rules, fees, and splits keep their static colors from block definitions.
- */
 export function applyDynamicColors(workspace: any): void {
   if (!workspace) return;
-
   const allBlocks = workspace.getAllBlocks(false);
-
   const bondNames: string[] = [];
   const accountNames: string[] = [];
   const residualNames: string[] = [];
@@ -140,8 +109,6 @@ export function applyDynamicColors(workspace: any): void {
         if (idx >= 0) block.setColour(residualColor(name, idx));
         break;
       }
-      default:
-        break;
     }
   }
 }

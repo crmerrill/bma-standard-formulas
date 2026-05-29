@@ -259,7 +259,7 @@ export const DEAL_BLOCKS = [
     ],
     previousStatement: "target_item",
     nextStatement: "target_item",
-    colour: "#FF7676",  // Bloomberg salmon — matches palette index 3 (default before dynamic color)
+    colour: "#9F1239",  // rose-800 — matches palette[3]; dark enough for white auto-text
     extensions: ["bond_target_dynamic_fields"],
     tooltip:
       "Bond target. Face in dollars. Red/orange hues vary by tranche name (property panel syncs names).",
