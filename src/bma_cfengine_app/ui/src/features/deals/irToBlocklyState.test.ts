@@ -36,7 +36,7 @@ describe("synthesizeWorkspaceState", () => {
     expect(state!.blocks.languageVersion).toBe(0);
     expect(state!.blocks.blocks).toHaveLength(1);
     expect(state!.blocks.blocks[0].x).toBe(80);
-    expect(state!.blocks.blocks[0].y).toBe(60);
+    expect(state!.blocks.blocks[0].y).toBe(80); // Y_BASE pushed down to 80 for group label comment
   });
 
   it("synthesizes a pay_fee block from a PAY_FEE rule", () => {
@@ -191,35 +191,77 @@ describe("synthesizeWorkspaceState", () => {
     expect(innerSecond?.fields?.PAY_TYPE).toBe("PRINCIPAL");
   });
 
-  it("skips unsupported rule types (PAC/TAC/Z) without crashing", () => {
+  it("synthesizes PAY_PRINCIPAL_PAC_SCHEDULE as a pay_pac_schedule block", () => {
+    // Legacy explicit PAC schedule rule type from pre-2.0 deals should now
+    // synthesize as a pay_pac_schedule block (not be silently dropped).
     const dealWithPAC: IRForSynthesis = {
-      bonds: [{ name: "A", coupon: 5, notional: 80_000_000 }],
-      waterfall_rules: [
+      bonds: [
         {
-          rule_id: "fee0",
-          rule_type: "PAY_FEE",
-          order: 0,
-          from_sources: ["CASH"],
-          to_targets: ["TRUSTEE"],
-          payment_style: "SEQUENTIAL",
+          name: "PA",
+          kind: "PAC",
+          coupon: 5,
+          notional: 80_000_000,
+          schedule_contract: [{ period: 1, target_balance: 79_000_000 }],
+          relations: [{ relation_type: "SUPPORTED_BY", targets: ["WA"] }],
         },
+        { name: "WA", kind: "CASH_PAY", coupon: 5, notional: 10_000_000 },
+      ],
+      waterfall_rules: [
         {
           rule_id: "pac1",
           rule_type: "PAY_PRINCIPAL_PAC_SCHEDULE",
-          order: 1,
-          from_sources: ["CASH"],
-          to_targets: ["A"],
+          order: 0,
+          from_sources: ["ACT_PRIN"],
+          to_targets: ["PA"],
         },
-      ],
-      fees: [
-        { name: "TRUSTEE", basis_type: "COLLATERAL_BALANCE", rate: 0.001, frequency: "MONTHLY" },
       ],
     };
     const state = synthesizeWorkspaceState(dealWithPAC);
     expect(state).not.toBeNull();
-    // Only the fee rule synthesizes; the PAC rule is skipped.
-    expect(state!.blocks.blocks[0].type).toBe("pay_fee");
-    expect(state!.blocks.blocks[0].next).toBeUndefined();
+    // PAC schedule rules should now synthesize as pay_pac_schedule blocks.
+    expect(state!.blocks.blocks[0].type).toBe("pay_pac_schedule");
+  });
+
+  it("synthesizes PAY_PRINCIPAL with PAC-kind targets as a pay_pac_schedule block", () => {
+    // Schema 2.0 deals use PAY_PRINCIPAL + bond.kind=PAC instead of a dedicated
+    // rule type. The synthesizer must detect this and render a PAC block.
+    const dealWithPAC: IRForSynthesis = {
+      bonds: [
+        {
+          name: "PA",
+          kind: "PAC",
+          coupon: 5,
+          notional: 80_000_000,
+          schedule_contract: [{ period: 1, target_balance: 79_000_000 }],
+          relations: [{ relation_type: "SUPPORTED_BY", targets: ["WA"] }],
+        },
+        { name: "WA", kind: "CASH_PAY", coupon: 5, notional: 10_000_000 },
+        { name: "R", kind: "RESIDUAL", is_bond: false, is_pseudo: true },
+      ],
+      waterfall_rules: [
+        {
+          rule_id: "r_prin_pac",
+          rule_type: "PAY_PRINCIPAL",
+          order: 0,
+          from_sources: ["ACT_PRIN"],
+          to_targets: ["PA"],
+          payment_style: "SEQUENTIAL",
+        },
+        {
+          rule_id: "r_resid",
+          rule_type: "PAY_RESIDUAL",
+          order: 1,
+          from_sources: ["CASH"],
+          to_targets: ["R"],
+        },
+      ],
+    };
+    const state = synthesizeWorkspaceState(dealWithPAC);
+    expect(state).not.toBeNull();
+    const head = state!.blocks.blocks[0];
+    expect(head.type).toBe("pay_pac_schedule");
+    // Support bonds from SUPPORTED_BY relation should appear in SUPPORT_BONDS slot.
+    expect(head.inputs?.SUPPORT_BONDS?.block?.fields?.NAME).toBe("WA");
   });
 
   it("emits a split_account block for SPLIT_CASH rules", () => {

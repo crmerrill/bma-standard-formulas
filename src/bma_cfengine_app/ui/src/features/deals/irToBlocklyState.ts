@@ -109,9 +109,21 @@ interface IRRule {
 interface IRGroup {
   group_id: string;
   label?: string;
+  description?: string;
+}
+
+/** Blockly v10 workspace-level comment (floating sticky note). */
+interface BlocklyWorkspaceComment {
+  text: string;
+  pinned: boolean;
+  height: number;
+  width: number;
+  x: number;
+  y: number;
 }
 
 export interface IRForSynthesis {
+  deal_name?: string;
   bonds?: IRBond[];
   fees?: IRFee[];
   triggers?: IRTrigger[];
@@ -201,6 +213,8 @@ interface BlocklyWorkspaceState {
     languageVersion: 0;
     blocks: BlocklyBlock[];
   };
+  /** Workspace-level floating comments (Blockly v10 serialization). */
+  comments?: BlocklyWorkspaceComment[];
 }
 
 // ---------------------------------------------------------------------------
@@ -242,10 +256,20 @@ export function synthesizeWorkspaceState(
     .slice()
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
+  const groupByGroupId = new Map<string, IRGroup>();
+  for (const g of groups) {
+    if (g?.group_id) groupByGroupId.set(g.group_id, g);
+  }
+
   const topLevelBlocks: BlocklyBlock[] = [];
+  const workspaceComments: BlocklyWorkspaceComment[] = [];
   const X_STEP = 540;
-  const Y_BASE = 60;
+  const Y_BASE = 80;  // pushed down to make room for the group label comment
+  const COMMENT_Y = 12;
+  const COMMENT_HEIGHT = 46;
+  const COMMENT_WIDTH = 480;
   let xOffset = 80;
+  const isMultiGroup = groups.length > 1;
 
   for (const groupId of groupIds) {
     const groupRules = allRules.filter((r) =>
@@ -288,17 +312,49 @@ export function synthesizeWorkspaceState(
     head.x = xOffset;
     head.y = Y_BASE;
     if (groupId !== null) {
-      // Stash group_id on the top of each chain so a future round-trip
-      // (or visual hint) can find it. The blocks below in the chain
-      // each carry their own `group_id` data too.
       _attachData(head, { group_id: groupId });
     }
     topLevelBlocks.push(head);
+
+    // Add a floating label comment above each group column so the analyst
+    // knows which collateral pool the waterfall applies to.
+    if (isMultiGroup && groupId !== null) {
+      const groupMeta = groupByGroupId.get(groupId);
+      // Prefer the explicit label, fall back to the group_id, strip "GROUP_" prefix
+      // for readability ("GROUP_1" → "Group 1").
+      const displayId = (groupMeta?.label || groupId)
+        .replace(/^GROUP_/i, "Group ");
+      const desc = groupMeta?.description ? `\n${groupMeta.description}` : "";
+      workspaceComments.push({
+        text: `📦 ${displayId} — Collateral Pool Waterfall${desc}`,
+        pinned: false,
+        height: COMMENT_HEIGHT + (desc ? 16 : 0),
+        width: COMMENT_WIDTH,
+        x: xOffset,
+        y: COMMENT_Y,
+      });
+    } else if (!isMultiGroup) {
+      // Single-pool deal: show a compact identifier above the single column.
+      const dealName = (ir as Record<string, unknown>).deal_name as string | undefined;
+      if (dealName) {
+        workspaceComments.push({
+          text: `📦 ${dealName} — Priority of Payments`,
+          pinned: false,
+          height: COMMENT_HEIGHT - 8,
+          width: COMMENT_WIDTH,
+          x: xOffset,
+          y: COMMENT_Y,
+        });
+      }
+    }
+
     xOffset += X_STEP;
   }
 
   if (topLevelBlocks.length === 0) return null;
-  return { blocks: { languageVersion: 0, blocks: topLevelBlocks } };
+  const state: BlocklyWorkspaceState = { blocks: { languageVersion: 0, blocks: topLevelBlocks } };
+  if (workspaceComments.length > 0) state.comments = workspaceComments;
+  return state;
 }
 
 // ---------------------------------------------------------------------------
@@ -387,13 +443,13 @@ function ruleToBlock(
       return waterfallRuleToBlock(rule, bondByName);
     case "SPLIT_CASH":
       return splitCashRuleToBlock(rule);
+    case "PAY_PRINCIPAL_PAC_SCHEDULE":
+      // Legacy explicit PAC schedule rule type — synthesize as pay_pac_schedule block.
+      return _pacTacRuleToBlock(rule, bondByName, "PAC");
+    case "PAY_PRINCIPAL_TAC_SCHEDULE":
+      // Legacy explicit TAC schedule rule type.
+      return _pacTacRuleToBlock(rule, bondByName, "TAC");
     default:
-      // Unsupported rule types (PAY_PRINCIPAL_PAC_SCHEDULE,
-      // PAY_PRINCIPAL_TAC_SCHEDULE, PAY_ACCRETION_REDIRECT) need
-      // dedicated block types that carry their schedule metadata.
-      // Synthesizing a placeholder pay_sequential block would lose
-      // information; better to skip and let the user see the IR
-      // tab for the missing rules until block coverage extends.
       return null;
   }
 }
@@ -433,10 +489,48 @@ function feeRuleToBlock(
   return block;
 }
 
+/**
+ * Detect whether a PAY_PRINCIPAL rule should be synthesized as a PAC or TAC
+ * schedule block instead of a plain pay_sequential block.
+ *
+ * A rule is "pac-like" when:
+ *   - rule_type = PAY_PRINCIPAL
+ *   - cap_mode is null / "PLANNED" / "SCHEDULED" / "TARGETED" (not NONE — NONE
+ *     is the cleanup pattern which should stay as pay_sequential)
+ *   - ALL non-residual targets are PAC bonds (kind=PAC) with a schedule_contract
+ *
+ * Same check for TAC (kind=TAC).
+ */
+function _detectPacTacRule(
+  rule: IRRule,
+  bondByName: Map<string, IRBond>,
+): "PAC" | "TAC" | null {
+  if (rule.rule_type !== "PAY_PRINCIPAL") return null;
+  // NONE cap_mode = cleanup rule, keep as pay_sequential.
+  if (rule.cap_mode === "NONE") return null;
+
+  const targets = (rule.to_targets ?? []).filter((n) => bondByName.has(n));
+  if (targets.length === 0) return null;
+
+  const kinds = new Set(targets.map((n) => bondByName.get(n)?.kind ?? "CASH_PAY"));
+  const hasContract = targets.every((n) => (bondByName.get(n)?.schedule_contract ?? []).length > 0);
+
+  if (!hasContract) return null;
+  if (kinds.size === 1 && kinds.has("PAC")) return "PAC";
+  if (kinds.size === 1 && kinds.has("TAC")) return "TAC";
+  return null;
+}
+
 function waterfallRuleToBlock(
   rule: IRRule,
   bondByName: Map<string, IRBond>,
 ): BlocklyBlock | null {
+  // Attempt PAC/TAC schedule block synthesis before falling through to generic.
+  const pacKind = _detectPacTacRule(rule, bondByName);
+  if (pacKind) {
+    return _pacTacRuleToBlock(rule, bondByName, pacKind);
+  }
+
   const payType = PAY_TYPE_INVERSE[rule.rule_type] ?? "PRINCIPAL";
   const source = ruleSourceForUI((rule.from_sources ?? ["CASH"])[0]);
   const targets = (rule.to_targets ?? []).map((name) =>
@@ -466,16 +560,92 @@ function waterfallRuleToBlock(
       fields: {
         PAY_TYPE: payType,
         SOURCE: source,
-        // cap_mode=NONE rules ("cleanup" rules in FNR) don't have a
-        // visible UI counterpart on the pay_sequential block, but we
-        // can hint at their semantics via LIMIT="UNTIL_ZERO" (which
-        // is the natural reading of "without regard to schedule").
+        // cap_mode=NONE rules ("cleanup" rules) are the "without regard to
+        // schedule" cleanup pattern.
         LIMIT: "UNTIL_ZERO",
         MAX_PAY: rule.max_amount_fixed ?? 0,
       },
       inputs: { TARGETS: { block: targetChain } },
     };
   }
+  _attachData(block, {
+    rule_id: rule.rule_id,
+    group_id: rule.group_id,
+    cap_mode: rule.cap_mode,
+    coverage_mode: rule.coverage_mode,
+  });
+  return block;
+}
+
+/**
+ * Synthesize a pay_pac_schedule or pay_tac_schedule block from a PAY_PRINCIPAL
+ * rule whose targets are all PAC or TAC bonds.
+ *
+ * Model parameters (speed_low, speed_high, model_type) are read from the FIRST
+ * target bond.  When not set (schedule derived from prospectus tables), we use
+ * model_type=CUSTOM_VECTOR so the block accurately signals the derivation method.
+ *
+ * Support bonds come from the first target bond's SUPPORTED_BY relations and are
+ * chained into the SUPPORT_BONDS statement slot.
+ */
+function _pacTacRuleToBlock(
+  rule: IRRule,
+  bondByName: Map<string, IRBond>,
+  pacKind: "PAC" | "TAC",
+): BlocklyBlock | null {
+  const source = ruleSourceForUI((rule.from_sources ?? ["ACT_PRIN"])[0]);
+
+  // Representative bond for model parameters.
+  const firstTarget = (rule.to_targets ?? [])[0];
+  const repBond = firstTarget ? bondByName.get(firstTarget) : undefined;
+  const modelType = (repBond?.schedule_model_type as string | null | undefined)
+    ?? "CUSTOM_VECTOR";
+  const speedLow = repBond?.schedule_speed_low ?? 0;
+  const speedHigh = repBond?.schedule_speed_high ?? 0;
+  const priorityTier = repBond?.schedule_priority_tier ?? 1;
+  const dependsOn = repBond?.schedule_depends_on ?? "";
+
+  // Target bond blocks.
+  const targetChain = chainBlocks(
+    (rule.to_targets ?? [])
+      .map((n) => targetToBlock(n, bondByName))
+      .filter((b): b is BlocklyBlock => b !== null),
+  );
+  if (!targetChain) return null;
+
+  // Support bonds come from SUPPORTED_BY relations on the first target bond.
+  const supportNames: string[] = [];
+  if (repBond?.relations) {
+    for (const rel of repBond.relations) {
+      if ((rel as Record<string, unknown>).relation_type === "SUPPORTED_BY") {
+        const relTargets = (rel as Record<string, unknown>).targets as string[] | undefined;
+        if (Array.isArray(relTargets)) supportNames.push(...relTargets);
+      }
+    }
+  }
+  const supportChain = chainBlocks(
+    supportNames
+      .map((n) => targetToBlock(n, bondByName))
+      .filter((b): b is BlocklyBlock => b !== null),
+  );
+
+  const blockType = pacKind === "PAC" ? "pay_pac_schedule" : "pay_tac_schedule";
+  const block: BlocklyBlock = {
+    type: blockType,
+    fields: {
+      MODEL_TYPE: modelType,
+      SPEED_LOW: speedLow,
+      SPEED_HIGH: speedHigh,
+      CUSTOM_VECTOR: "",     // contract lives in bond block.data, not here
+      SOURCE: source,
+      PRIORITY_TIER: priorityTier,
+      DEPENDS_ON: dependsOn,
+    },
+    inputs: {
+      TARGETS: { block: targetChain },
+      ...(supportChain ? { SUPPORT_BONDS: { block: supportChain } } : {}),
+    },
+  };
   _attachData(block, {
     rule_id: rule.rule_id,
     group_id: rule.group_id,
