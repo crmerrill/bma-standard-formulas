@@ -13,6 +13,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
+        extras: ["", "git"]
+
+    name: test (${{ matrix.python-version }}, ${{ matrix.extras == '' && 'no-pygit2' || 'pygit2' }})
 
     steps:
       - uses: actions/checkout@v4
@@ -22,8 +25,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Verify git CLI available
+        run: git --version
+
       - name: Install package with dev dependencies
+        if: matrix.extras == ''
         run: pip install -e ".[dev]"
+
+      - name: Install package with dev + git dependencies
+        if: matrix.extras == 'git'
+        run: pip install -e ".[dev,git]"
 
       - name: Run tests
         run: python -m pytest tests/ -v

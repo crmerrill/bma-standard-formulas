@@ -39,8 +39,10 @@ dependencies = [
 numba = ["numba>=0.59"]
 # FRED rate data access via RateIndex.from_fred()
 fred = ["pandas-datareader>=0.10"]
+# libgit2 bindings for fast in-process git operations (CLI fallback used when absent)
+git = ["pygit2>=1.15"]
 # All optional runtime extras
-all = ["numba>=0.59", "pandas-datareader>=0.10"]
+all = ["numba>=0.59", "pandas-datareader>=0.10", "pygit2>=1.15"]
 # Web app (FastAPI + UI)
 app = ["fastapi>=0.115", "uvicorn[standard]>=0.34", "python-multipart>=0.0.20"]
 # Development / testing
