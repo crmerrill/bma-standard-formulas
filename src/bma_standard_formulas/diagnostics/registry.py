@@ -1,4 +1,13 @@
-"""Module-level registry for diagnostic descriptors — lookup, iteration, and error types."""
+"""Module-level registry for diagnostic descriptors — lookup, iteration, and error types.
+
+Concurrency contract: ``_REGISTRY`` is a module-level mutable dict populated at
+import time by ``@diagnostic_code`` decorations and intentionally NOT designed
+for runtime concurrent mutation. Validators register once when their defining
+module is first imported; lookups (`get_diagnostic`, `iter_diagnostics`) are
+read-only and safe to call from any thread thereafter. Tests that need to
+isolate state mutate ``_REGISTRY`` directly via the ``_clean_registry``
+fixture; production code MUST NOT mutate it after process startup.
+"""
 
 from __future__ import annotations
 
