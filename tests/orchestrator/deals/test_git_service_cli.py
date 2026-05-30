@@ -170,3 +170,57 @@ def test_cli_log_first_parent_for_merge_commit(tmp_path: Path, monkeypatch: pyte
 
     merge_entry = next(e for e in log_entries if e["sha"] == merge_sha)
     assert merge_entry["parent_sha"] == main_before_merge
+
+
+def test_cli_log_handles_subjects_with_unusual_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M1 (pass-2 follow-up): subject containing the previously-collidable SOH byte
+    parses cleanly under the NUL-delimited format.
+
+    Observed git behavior (verified experimentally): git accepts and preserves
+    the SOH byte (\\x01) in commit subjects without normalisation or rejection.
+    `git log --format=%s` returns the subject with the byte intact (shown as ^A
+    by cat -v).  Under the old SOH-delimited parser this would have caused a
+    record split mid-field.  The new -z / NUL-delimited parser is immune because
+    git forbids NUL in commit messages by construction, so the NUL delimiter
+    cannot appear in any field value.
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git CLI not available on PATH")
+
+    from bma_cfengine_app.orchestrator.deals import git_service as git_service_module
+
+    monkeypatch.setattr(git_service_module, "pygit2", None, raising=False)
+
+    repo_path = tmp_path / "soh_repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
+    _run_git(repo_path, "init", "-b", "main")
+
+    commit_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "SOH Tester",
+        "GIT_AUTHOR_EMAIL": "soh@test.local",
+        "GIT_COMMITTER_NAME": "SOH Tester",
+        "GIT_COMMITTER_EMAIL": "soh@test.local",
+    }
+    # Use --allow-empty so we do not need a staged file.
+    # The subject contains a raw SOH byte (\x01) — this is the previously
+    # collidable character that would have broken the old record-delimiter.
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "\x01weird subject"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+        env=commit_env,
+    )
+
+    service = git_service_module.GitService(repo_path=repo_path)
+    entries = service.log("main", limit=5)
+
+    # The parser must return exactly one entry — no split, no silent loss.
+    assert len(entries) == 1
+    # The SOH byte is preserved by git and must round-trip through the parser.
+    assert "\x01" in entries[0]["message"]
+    # Root commit has no parent.
+    assert entries[0]["parent_sha"] is None

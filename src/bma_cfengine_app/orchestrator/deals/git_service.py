@@ -368,9 +368,10 @@ class GitService:
         else:
             try:
                 proc = self._git_cli(
-                    "log", branch,
+                    "log", "-z",
                     f"--max-count={limit}",
-                    "--format=%H%x00%an <%ae>%x00%s%x00%P%x01",
+                    "--format=%H%x00%an <%ae>%x00%s%x00%P",
+                    branch,
                 )
             except GitServiceError as exc:
                 if "does not have any commits yet" in str(exc) or "unknown revision" in str(exc):
@@ -379,19 +380,30 @@ class GitService:
             raw = proc.stdout
             if not raw:
                 return []
-            records = raw.split("\x01")
+            # With -z, git uses NUL as the inter-record terminator and we use
+            # %x00 as the intra-record field separator.  Splitting the entire
+            # output on NUL gives a flat list: [sha, author, subject, parents,
+            # sha, author, subject, parents, ...] with a trailing empty string
+            # from the final terminator.  NUL bytes are forbidden in git commit
+            # messages by git itself, so this delimiter cannot collide.
+            fields = raw.split("\x00")
+            # Drop trailing empty entry produced by the NUL terminator.
+            if fields and fields[-1] == "":
+                fields = fields[:-1]
+            if not fields:
+                return []
+            if len(fields) % 4 != 0:
+                raise GitServiceError(
+                    f"CLI log output has {len(fields)} NUL-delimited fields; "
+                    "expected a multiple of 4 (sha, author, subject, parents). "
+                    "Possible git version incompatibility."
+                )
             entries = []
-            for record in records:
-                record = record.strip()
-                if not record:
-                    continue
-                fields = record.split("\x00")
-                if len(fields) < 3:
-                    continue
-                sha = fields[0]
-                author_line = fields[1]
-                msg = fields[2]
-                parents_raw = fields[3] if len(fields) > 3 else ""
+            for i in range(0, len(fields), 4):
+                sha = fields[i]
+                author_line = fields[i + 1]
+                msg = fields[i + 2]
+                parents_raw = fields[i + 3]
                 # First parent = integration target for merge commits.
                 parent = parents_raw.split()[0] if parents_raw.strip() else None
                 entries.append(CommitMeta(
