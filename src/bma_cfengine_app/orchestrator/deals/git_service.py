@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import functools
 import json
 import logging
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -79,6 +81,27 @@ class CommitMeta:
 # GitService
 # ---------------------------------------------------------------------------
 
+def _wrap_pygit2(func):  # type: ignore[no-untyped-def]
+    """Re-raise pygit2/lookup errors as GitServiceError; let GitServiceError subclasses through."""
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return func(*args, **kwargs)
+        except GitServiceError:
+            raise
+        except Exception as exc:
+            if pygit2 is not None and isinstance(exc, pygit2.GitError):
+                raise GitServiceError(
+                    f"{func.__name__}: {exc}"
+                ) from exc
+            if isinstance(exc, (KeyError, ValueError)):
+                raise GitServiceError(
+                    f"{func.__name__}: {exc}"
+                ) from exc
+            raise
+    return wrapper
+
+
 class GitService:
     def __init__(
         self,
@@ -88,7 +111,6 @@ class GitService:
     ) -> None:
         self._repo_path = Path(repo_path)
         self._lock_timeout_s = lock_timeout_s
-        self._lock_fd: int | None = None
         self._local = threading.local()
 
     @property
@@ -109,18 +131,16 @@ class GitService:
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
             deadline = time.monotonic() + self._lock_timeout_s
-            acquired = False
             while True:
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    acquired = True
                     break
                 except (OSError, BlockingIOError):
                     if time.monotonic() >= deadline:
                         os.close(fd)
                         raise LockTimeoutError(lock_path, self._lock_timeout_s)
                     time.sleep(0.05)
-            self._lock_fd = fd
+            self._local.lock_fd = fd
 
         self._local.lock_depth = counter + 1
         try:
@@ -128,11 +148,11 @@ class GitService:
         finally:
             self._local.lock_depth -= 1
             if self._local.lock_depth == 0:
-                fd = self._lock_fd
+                fd = getattr(self._local, "lock_fd", None)
                 if fd is not None:
                     fcntl.flock(fd, fcntl.LOCK_UN)
                     os.close(fd)
-                    self._lock_fd = None
+                    self._local.lock_fd = None
 
     # -------------------------------------------------------------------
     # Branch validation
@@ -194,6 +214,7 @@ class GitService:
                 return self._commit_deal_pygit2(deal_payload, author=author, message=message, parent_sha=parent_sha)
             return self._commit_deal_cli(deal_payload, author=author, message=message, parent_sha=parent_sha)
 
+    @_wrap_pygit2
     def _commit_deal_pygit2(
         self,
         deal_payload: dict[str, Any] | bytes,
@@ -223,6 +244,16 @@ class GitService:
             tree_id,
             parents,
         )
+
+        deal_path = self._repo_path / "deal.json"
+        fd, tmp = tempfile.mkstemp(dir=str(self._repo_path), suffix=".tmp")
+        try:
+            os.write(fd, data)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, str(deal_path))
+
         return str(commit_oid)
 
     def _commit_deal_cli(
@@ -260,6 +291,7 @@ class GitService:
     # branch_create / branch_delete / branch_list
     # -------------------------------------------------------------------
 
+    @_wrap_pygit2
     def branch_create(self, name: str, *, from_sha: str) -> None:
         self._validate_branch_name(name)
         with self._write_lock():
@@ -269,6 +301,7 @@ class GitService:
             else:
                 self._git_cli("branch", name, from_sha)
 
+    @_wrap_pygit2
     def branch_delete(self, name: str) -> None:
         self._validate_branch_name(name)
         with self._write_lock():
@@ -282,6 +315,7 @@ class GitService:
             else:
                 self._git_cli("branch", "-D", name)
 
+    @_wrap_pygit2
     def branch_list(self) -> list[BranchInfo]:
         if self._use_pygit2:
             repo = pygit2.Repository(str(self._repo_path / ".git"))
@@ -307,6 +341,7 @@ class GitService:
     # log
     # -------------------------------------------------------------------
 
+    @_wrap_pygit2
     def log(self, branch: str = "main", *, limit: int = 50) -> list[CommitMeta]:
         if self._use_pygit2:
             repo = pygit2.Repository(str(self._repo_path / ".git"))
@@ -331,26 +366,34 @@ class GitService:
                     break
             return entries
         else:
-            proc = self._git_cli(
-                "log", branch,
-                f"--max-count={limit}",
-                "--format=%H%n%an <%ae>%n%s%n%P%n---",
-            )
+            try:
+                proc = self._git_cli(
+                    "log", branch,
+                    f"--max-count={limit}",
+                    "--format=%H%x00%an <%ae>%x00%s%x00%P%x01",
+                )
+            except GitServiceError as exc:
+                if "does not have any commits yet" in str(exc) or "unknown revision" in str(exc):
+                    return []
+                raise
+            raw = proc.stdout
+            if not raw:
+                return []
+            records = raw.split("\x01")
             entries = []
-            raw_entries = proc.stdout.strip().split("---\n")
-            for entry in raw_entries:
-                entry = entry.strip()
-                if not entry:
+            for record in records:
+                record = record.strip()
+                if not record:
                     continue
-                lines = entry.split("\n")
-                if len(lines) < 3:
+                fields = record.split("\x00")
+                if len(fields) < 3:
                     continue
-                sha = lines[0].strip()
-                author_line = lines[1].strip()
-                msg = lines[2].strip()
-                parent = lines[3].strip() if len(lines) > 3 and lines[3].strip() else None
-                if parent and " " in parent:
-                    parent = parent.split()[0]
+                sha = fields[0]
+                author_line = fields[1]
+                msg = fields[2]
+                parents_raw = fields[3] if len(fields) > 3 else ""
+                # First parent = integration target for merge commits.
+                parent = parents_raw.split()[0] if parents_raw.strip() else None
                 entries.append(CommitMeta(
                     sha=sha,
                     author=author_line,
@@ -363,6 +406,7 @@ class GitService:
     # show
     # -------------------------------------------------------------------
 
+    @_wrap_pygit2
     def show(self, sha: str, path: str) -> bytes:
         if self._use_pygit2:
             repo = pygit2.Repository(str(self._repo_path / ".git"))
@@ -378,6 +422,7 @@ class GitService:
     # diff
     # -------------------------------------------------------------------
 
+    @_wrap_pygit2
     def diff(self, sha_a: str, sha_b: str) -> str:
         if self._use_pygit2:
             repo = pygit2.Repository(str(self._repo_path / ".git"))
@@ -393,6 +438,7 @@ class GitService:
     # merge_base
     # -------------------------------------------------------------------
 
+    @_wrap_pygit2
     def merge_base(self, branch_a: str, branch_b: str) -> str:
         if self._use_pygit2:
             repo = pygit2.Repository(str(self._repo_path / ".git"))

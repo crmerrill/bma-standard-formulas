@@ -166,3 +166,49 @@ def test_same_process_reentrant_acquire_and_release(tmp_path: Path) -> None:
     assert child.exitcode == 0
     assert child_result["ok"], child_result
     assert re.fullmatch(r"[0-9a-f]{40}", child_result["sha"])
+
+
+def test_two_threads_sharing_one_service_do_not_corrupt_lock_fd(tmp_path: Path) -> None:
+    """M3: _lock_fd is thread-local so two threads cannot race on the file descriptor."""
+    import threading
+
+    from bma_cfengine_app.orchestrator.deals.git_service import GitService
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
+    seed_sha = _seed_repo_with_initial_commit(repo_path)
+
+    service = GitService(repo_path=repo_path, lock_timeout_s=10.0)
+    fds_observed: dict[str, int | None] = {}
+    errors: list[Exception] = []
+    lock = threading.Lock()
+
+    def thread_work(name: str) -> None:
+        try:
+            with service._write_lock():
+                fd = getattr(service._local, "lock_fd", None)
+                with lock:
+                    fds_observed[name] = fd
+                time.sleep(0.1)
+
+            post_fd = getattr(service._local, "lock_fd", None)
+            with lock:
+                fds_observed[f"{name}_after"] = post_fd
+        except Exception as exc:
+            with lock:
+                errors.append(exc)
+
+    t1 = threading.Thread(target=thread_work, args=("thread-a",))
+    t2 = threading.Thread(target=thread_work, args=("thread-b",))
+    t1.start()
+    t2.start()
+    t1.join(timeout=20)
+    t2.join(timeout=20)
+
+    assert not errors, f"Threads raised errors: {errors}"
+    assert "thread-a" in fds_observed
+    assert "thread-b" in fds_observed
+    assert fds_observed["thread-a"] is not None
+    assert fds_observed["thread-b"] is not None
+    assert fds_observed["thread-a_after"] is None
+    assert fds_observed["thread-b_after"] is None
