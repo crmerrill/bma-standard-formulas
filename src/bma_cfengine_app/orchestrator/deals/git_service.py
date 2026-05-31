@@ -228,7 +228,10 @@ class GitService:
         repo = pygit2.Repository(str(self._repo_path / ".git"))
 
         blob_id = repo.create_blob(data)
-        tb = repo.TreeBuilder(repo.revparse_single(parent_sha).tree if parent_sha else None)
+        if parent_sha:
+            tb = repo.TreeBuilder(repo.revparse_single(parent_sha).tree)
+        else:
+            tb = repo.TreeBuilder()
         tb.insert("deal.json", blob_id, pygit2.GIT_FILEMODE_BLOB)
         tree_id = tb.write()
 
@@ -236,14 +239,33 @@ class GitService:
         sig = pygit2.Signature(author_name, author_email)
         parents = [pygit2.Oid(hex=parent_sha)] if parent_sha else []
 
-        commit_oid = repo.create_commit(
-            "refs/heads/main",
-            sig,
-            sig,
-            message,
-            tree_id,
-            parents,
+        main_ref = repo.references.get("refs/heads/main")
+        is_fast_forward = (
+            main_ref is None
+            or not parent_sha
+            or str(main_ref.peel().id) == parent_sha
         )
+
+        if is_fast_forward:
+            commit_oid = repo.create_commit(
+                "refs/heads/main",
+                sig,
+                sig,
+                message,
+                tree_id,
+                parents,
+            )
+        else:
+            commit_oid = repo.create_commit(
+                None,
+                sig,
+                sig,
+                message,
+                tree_id,
+                parents,
+            )
+
+        repo.set_head(commit_oid)
 
         deal_path = self._repo_path / "deal.json"
         fd, tmp = tempfile.mkstemp(dir=str(self._repo_path), suffix=".tmp")
@@ -253,6 +275,11 @@ class GitService:
         finally:
             os.close(fd)
         os.replace(tmp, str(deal_path))
+
+        index = repo.index
+        index.read()
+        index.add("deal.json")
+        index.write()
 
         return str(commit_oid)
 
@@ -463,6 +490,147 @@ class GitService:
         else:
             proc = self._git_cli("merge-base", branch_a, branch_b)
             return proc.stdout.strip()
+
+    # -------------------------------------------------------------------
+    # merge
+    # -------------------------------------------------------------------
+
+    def merge(self, branch: str, *, into: str = "main") -> str | Any:
+        """Three-way merge of *branch* into *into*.
+
+        Returns the merge-commit SHA (str) on success, or a
+        ``DiagnosticPayload`` with ``code='MERGE_CONFLICT'`` on conflict.
+        """
+        self._validate_branch_name(branch)
+        self._validate_branch_name(into)
+        with self._write_lock():
+            if self._use_pygit2:
+                return self._merge_pygit2(branch, into=into)
+            return self._merge_cli(branch, into=into)
+
+    @_wrap_pygit2
+    def _merge_pygit2(self, branch: str, *, into: str) -> str | Any:
+        from bma_cfengine_app.orchestrator.deals.merge import merge_deal_definitions
+        from bma_standard_formulas.deals.schemas.ir import DealDefinition
+        from bma_standard_formulas.diagnostics import DiagnosticPayload
+
+        repo = pygit2.Repository(str(self._repo_path / ".git"))
+
+        ours_ref = repo.branches.get(into)
+        theirs_ref = repo.branches.get(branch)
+        if ours_ref is None:
+            raise GitServiceError(f"Branch {into!r} not found")
+        if theirs_ref is None:
+            raise GitServiceError(f"Branch {branch!r} not found")
+
+        ours_commit = ours_ref.peel()
+        theirs_commit = theirs_ref.peel()
+
+        base_oid = repo.merge_base(ours_commit.id, theirs_commit.id)
+        if base_oid is None:
+            raise GitServiceError(
+                f"No merge base between {into!r} and {branch!r}"
+            )
+        ancestor_commit = repo[base_oid]
+
+        ancestor_deal = DealDefinition.model_validate_json(
+            bytes(repo[ancestor_commit.tree["deal.json"].id].data)
+        )
+        ours_deal = DealDefinition.model_validate_json(
+            bytes(repo[ours_commit.tree["deal.json"].id].data)
+        )
+        theirs_deal = DealDefinition.model_validate_json(
+            bytes(repo[theirs_commit.tree["deal.json"].id].data)
+        )
+
+        result = merge_deal_definitions(ancestor_deal, ours_deal, theirs_deal)
+        if isinstance(result, DiagnosticPayload):
+            return result
+
+        merged_json = json.dumps(
+            result.model_dump(mode="json"), indent=2,
+        ).encode("utf-8")
+        blob_id = repo.create_blob(merged_json)
+
+        tb = repo.TreeBuilder(ours_commit.tree)
+        tb.insert("deal.json", blob_id, pygit2.GIT_FILEMODE_BLOB)
+        tree_id = tb.write()
+
+        sig = pygit2.Signature("system", "merge@bma")
+        commit_oid = repo.create_commit(
+            f"refs/heads/{into}",
+            sig,
+            sig,
+            f"Merge branch '{branch}' into '{into}'",
+            tree_id,
+            [ours_commit.id, theirs_commit.id],
+        )
+
+        deal_path = self._repo_path / "deal.json"
+        fd, tmp = tempfile.mkstemp(
+            dir=str(self._repo_path), suffix=".tmp",
+        )
+        try:
+            os.write(fd, merged_json)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, str(deal_path))
+
+        return str(commit_oid)
+
+    def _merge_cli(self, branch: str, *, into: str) -> str | Any:
+        from bma_cfengine_app.orchestrator.deals.merge import merge_deal_definitions
+        from bma_standard_formulas.deals.schemas.ir import DealDefinition
+        from bma_standard_formulas.diagnostics import DiagnosticPayload
+
+        base_sha = self._git_cli("merge-base", into, branch).stdout.strip()
+
+        ours_sha = self._git_cli("rev-parse", into).stdout.strip()
+        theirs_sha = self._git_cli("rev-parse", branch).stdout.strip()
+
+        ancestor_deal = DealDefinition.model_validate_json(
+            self._git_cli("show", f"{base_sha}:deal.json").stdout.encode("utf-8")
+        )
+        ours_deal = DealDefinition.model_validate_json(
+            self._git_cli("show", f"{ours_sha}:deal.json").stdout.encode("utf-8")
+        )
+        theirs_deal = DealDefinition.model_validate_json(
+            self._git_cli("show", f"{theirs_sha}:deal.json").stdout.encode("utf-8")
+        )
+
+        result = merge_deal_definitions(ancestor_deal, ours_deal, theirs_deal)
+        if isinstance(result, DiagnosticPayload):
+            return result
+
+        merged_json = json.dumps(
+            result.model_dump(mode="json"), indent=2,
+        ).encode("utf-8")
+
+        deal_path = self._repo_path / "deal.json"
+        deal_path.write_bytes(merged_json)
+
+        self._git_cli("add", "deal.json")
+        tree_sha = self._git_cli("write-tree").stdout.strip()
+
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "system",
+            "GIT_AUTHOR_EMAIL": "merge@bma",
+            "GIT_COMMITTER_NAME": "system",
+            "GIT_COMMITTER_EMAIL": "merge@bma",
+        }
+        commit_sha = self._git_cli(
+            "commit-tree", tree_sha,
+            "-p", ours_sha,
+            "-p", theirs_sha,
+            "-m", f"Merge branch '{branch}' into '{into}'",
+            env=env,
+        ).stdout.strip()
+
+        self._git_cli("update-ref", f"refs/heads/{into}", commit_sha)
+
+        return commit_sha
 
 
 # ---------------------------------------------------------------------------
