@@ -202,3 +202,124 @@ def test_overlapping_field_merge_yields_conflict(tmp_path: Path) -> None:
     assert payload["theirs_value"] == 7.0
     assert payload["ancestor_value"] == 5.0
     assert _run_git(tmp_path, "rev-parse", "main") == main_before_merge
+
+
+# ---------------------------------------------------------------------------
+# R1 fix-pass regression tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("backend", ["pygit2", "cli"])
+def test_top_level_field_conflict_does_not_emit_merge_conflict_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str,
+) -> None:
+    """B1 regression: top-level DealDefinition field conflicts must NOT produce
+    a MERGE_CONFLICT diagnostic with entity_kind='deal'.  Instead, the merge
+    target's value wins (last-writer-wins-on-target)."""
+    from bma_cfengine_app.orchestrator.deals import git_service as gs_mod
+
+    if backend == "cli":
+        monkeypatch.setattr(gs_mod, "pygit2", None, raising=False)
+    else:
+        pytest.importorskip("pygit2")
+
+    _init_repo(tmp_path)
+    service = GitService(repo_path=tmp_path)
+    author = "system:test <test@example.com>"
+
+    base_sha = service.commit_deal(
+        deal_payload=_deal_payload(coupon=5.0, notional=1_000_000.0),
+        author=author,
+        message="initial",
+    )
+
+    service.branch_create("what-if/branch-a", from_sha=base_sha)
+    _run_git(tmp_path, "checkout", "what-if/branch-a")
+    payload_a = _deal_payload(coupon=5.0, notional=1_000_000.0)
+    payload_a["deal_name"] = "name-from-branch-a"
+    branch_a_sha = service.commit_deal(
+        deal_payload=payload_a,
+        author=author,
+        message="branch-a edits deal_name",
+        parent_sha=base_sha,
+    )
+    _run_git(tmp_path, "update-ref", "refs/heads/what-if/branch-a", branch_a_sha)
+
+    _run_git(tmp_path, "checkout", "main")
+    service.branch_create("what-if/branch-b", from_sha=base_sha)
+    _run_git(tmp_path, "checkout", "what-if/branch-b")
+    payload_b = _deal_payload(coupon=5.0, notional=1_000_000.0)
+    payload_b["deal_name"] = "name-from-branch-b"
+    branch_b_sha = service.commit_deal(
+        deal_payload=payload_b,
+        author=author,
+        message="branch-b edits deal_name differently",
+        parent_sha=base_sha,
+    )
+    _run_git(tmp_path, "update-ref", "refs/heads/what-if/branch-b", branch_b_sha)
+
+    _run_git(tmp_path, "checkout", "main")
+    _run_git(tmp_path, "reset", "--hard", branch_a_sha)
+
+    result = service.merge(branch="what-if/branch-b", into="main")
+
+    assert not isinstance(result, DiagnosticPayload), (
+        f"Top-level field conflict must not emit MERGE_CONFLICT; got: {result}"
+    )
+    merge_sha = _extract_merge_sha(result)
+    merged_deal = DealDefinition.model_validate_json(
+        service.show(merge_sha, "deal.json"),
+    )
+    assert merged_deal.deal_name == "name-from-branch-a"
+
+
+@pytest.mark.parametrize("backend", ["pygit2", "cli"])
+def test_merge_works_when_into_is_not_currently_checked_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str,
+) -> None:
+    """M2 regression: merge must produce a correct commit on ``into`` even when
+    a different branch is currently checked out."""
+    from bma_cfengine_app.orchestrator.deals import git_service as gs_mod
+
+    if backend == "cli":
+        monkeypatch.setattr(gs_mod, "pygit2", None, raising=False)
+    else:
+        pytest.importorskip("pygit2")
+
+    _init_repo(tmp_path)
+    service = GitService(repo_path=tmp_path)
+    author = "system:test <test@example.com>"
+
+    base_sha = service.commit_deal(
+        deal_payload=_deal_payload(coupon=5.0, notional=1_000_000.0),
+        author=author,
+        message="initial",
+    )
+
+    service.branch_create("what-if/feature", from_sha=base_sha)
+    _run_git(tmp_path, "checkout", "what-if/feature")
+    feature_sha = service.commit_deal(
+        deal_payload=_deal_payload(coupon=5.0, notional=2_000_000.0),
+        author=author,
+        message="feature edits notional",
+        parent_sha=base_sha,
+    )
+    _run_git(tmp_path, "update-ref", "refs/heads/what-if/feature", feature_sha)
+
+    _run_git(tmp_path, "checkout", "main")
+
+    service.branch_create("what-if/throwaway", from_sha=base_sha)
+    _run_git(tmp_path, "checkout", "what-if/throwaway")
+    throwaway_sha_before = _run_git(tmp_path, "rev-parse", "what-if/throwaway")
+
+    result = service.merge(branch="what-if/feature", into="main")
+
+    merge_sha = _extract_merge_sha(result)
+    merged_bytes = _run_git(tmp_path, "show", f"main:deal.json")
+    merged_deal = DealDefinition.model_validate_json(merged_bytes.encode("utf-8"))
+    assert merged_deal.bonds[0].notional == pytest.approx(2_000_000.0)
+
+    assert _run_git(tmp_path, "rev-parse", "main") == merge_sha
+
+    assert _run_git(tmp_path, "rev-parse", "what-if/throwaway") == throwaway_sha_before
+    current_branch = _run_git(tmp_path, "symbolic-ref", "--short", "HEAD")
+    assert current_branch == "what-if/throwaway"

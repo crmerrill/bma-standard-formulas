@@ -64,7 +64,12 @@ def merge_deal_definitions(
         t_val = getattr(theirs, field_name)
         merged = _three_way_value(a_val, o_val, t_val)
         if merged is _CONFLICT:
-            return _build_conflict("deal", "", field_name, a_val, o_val, t_val)
+            # Top-level metadata fields use last-writer-wins-on-target (prefer
+            # ours / the merge target) as a deliberate v1 choice.  AC 5 pins
+            # MERGE_CONFLICT payloads to the seven entity collections; a future
+            # ticket may introduce a separate DEAL_METADATA_CONFLICT diagnostic
+            # if structured top-level conflict reporting becomes a requirement.
+            merged = o_val
         merged_data[field_name] = merged
 
     for coll_name, (entity_kind, key_field) in _ENTITY_COLLECTIONS.items():

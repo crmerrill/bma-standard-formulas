@@ -181,7 +181,12 @@ class GitService:
     # CLI subprocess helper
     # -------------------------------------------------------------------
 
-    def _git_cli(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    def _git_cli(
+        self,
+        *args: str,
+        env: dict[str, str] | None = None,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(
                 ["git", *args],
@@ -190,6 +195,7 @@ class GitService:
                 capture_output=True,
                 text=True,
                 env=env,
+                input=input,
             )
         except subprocess.CalledProcessError as exc:
             raise GitServiceError(
@@ -566,16 +572,14 @@ class GitService:
             [ours_commit.id, theirs_commit.id],
         )
 
-        deal_path = self._repo_path / "deal.json"
-        fd, tmp = tempfile.mkstemp(
-            dir=str(self._repo_path), suffix=".tmp",
+        merge_commit = repo[commit_oid]
+        head_is_into = (
+            not repo.head_is_detached
+            and repo.head.shorthand == into
         )
-        try:
-            os.write(fd, merged_json)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.replace(tmp, str(deal_path))
+        if head_is_into:
+            repo.checkout_tree(merge_commit.tree)
+            repo.state_cleanup()
 
         return str(commit_oid)
 
@@ -607,13 +611,26 @@ class GitService:
             result.model_dump(mode="json"), indent=2,
         ).encode("utf-8")
 
-        deal_path = self._repo_path / "deal.json"
-        deal_path.write_bytes(merged_json)
+        merged_blob_sha = self._git_cli(
+            "hash-object", "-w", "--stdin",
+            input=merged_json.decode("utf-8"),
+        ).stdout.strip()
 
-        self._git_cli("add", "deal.json")
-        tree_sha = self._git_cli("write-tree").stdout.strip()
+        fd, tmp_idx_path = tempfile.mkstemp(prefix="bma_merge_")
+        os.close(fd)
+        try:
+            idx_env = {**os.environ, "GIT_INDEX_FILE": tmp_idx_path}
+            self._git_cli("read-tree", ours_sha, env=idx_env)
+            self._git_cli(
+                "update-index", "--add", "--cacheinfo",
+                f"100644,{merged_blob_sha},deal.json",
+                env=idx_env,
+            )
+            tree_sha = self._git_cli("write-tree", env=idx_env).stdout.strip()
+        finally:
+            Path(tmp_idx_path).unlink(missing_ok=True)
 
-        env = {
+        author_env = {
             **os.environ,
             "GIT_AUTHOR_NAME": "system",
             "GIT_AUTHOR_EMAIL": "merge@bma",
@@ -625,10 +642,20 @@ class GitService:
             "-p", ours_sha,
             "-p", theirs_sha,
             "-m", f"Merge branch '{branch}' into '{into}'",
-            env=env,
+            env=author_env,
         ).stdout.strip()
 
-        self._git_cli("update-ref", f"refs/heads/{into}", commit_sha)
+        self._git_cli("update-ref", f"refs/heads/{into}", commit_sha, ours_sha)
+
+        try:
+            current_branch = self._git_cli(
+                "symbolic-ref", "--short", "HEAD",
+            ).stdout.strip()
+        except GitServiceError:
+            current_branch = None
+        if current_branch == into:
+            self._git_cli("read-tree", "-m", tree_sha)
+            self._git_cli("checkout-index", "--all", "--force")
 
         return commit_sha
 
