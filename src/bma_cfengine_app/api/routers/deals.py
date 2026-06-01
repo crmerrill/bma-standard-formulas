@@ -48,7 +48,11 @@ from ...orchestrator.deals.deal_store import (
     save_studio_ir,
 )
 from ...orchestrator.deals.git_service import GitService, GitServiceError, InvalidBranchNameError
-from ...orchestrator.deals.operational import export_deal
+from ...orchestrator.deals.operational import (
+    export_deal,
+    gc_branch_after_apply,
+    gc_branch_after_discard,
+)
 from ...orchestrator.deals.solver_catalog import build_solver_catalog
 from ...orchestrator.deals.solver_templates import (
     all_templates,
@@ -1075,6 +1079,8 @@ def delete_branch(deal_id: str, name: str) -> Response:
                 detail={"code": "PROTECTED_BRANCH", "message": str(exc)},
             ) from exc
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if name.startswith(("ai/turn-", "solver/run-")):
+        gc_branch_after_discard(deal_id, name)
     return Response(status_code=204)
 
 
@@ -1088,6 +1094,8 @@ def merge_endpoint(deal_id: str, body: GitMergeRequest) -> GitMergeResult:
     except GitServiceError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     if isinstance(result, str):
+        if body.branch.startswith(("ai/turn-", "solver/run-")):
+            gc_branch_after_apply(deal_id, body.branch)
         return GitMergeResult(status="success", sha=result)
     return GitMergeResult(
         status="conflict",

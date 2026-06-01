@@ -1,17 +1,19 @@
-"""Operational hardening — export, fsck, restore, and audit log.
+"""Operational hardening — export, fsck, restore, audit log, GC, and telemetry.
 
-Houses the export_deal, _run_fsck (memoized), restore_deal, and audit-log
-writer functions backing the REPO_CORRUPT diagnostic action.  Registered
-via the vpc-1 catalog mechanism at module import time.
+Houses the export_deal, _run_fsck (memoized), restore_deal, audit-log
+writer, branch GC hooks, PII redaction, and git-directory-size telemetry
+functions.  Registered via the vpc-1 catalog mechanism at module import time.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +24,20 @@ from bma_standard_formulas.diagnostics import (
     diagnostic_code,
 )
 
+from . import deal_store
 from .deal_store import deal_dir
 from .git_service import GitService, GitServiceError
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Telemetry thresholds (monkeypatchable in tests)
+# ---------------------------------------------------------------------------
+
+DEFAULT_GIT_SIZE_ALERT_THRESHOLD_BYTES: int = 100 * 1024 * 1024  # 100 MB
+GIT_SIZE_ALERT_THRESHOLD_BYTES: int = DEFAULT_GIT_SIZE_ALERT_THRESHOLD_BYTES
+DEFAULT_GIT_SIZE_ALERT_THRESHOLD_MB: float = 100.0
+GIT_SIZE_ALERT_THRESHOLD_MB: float = DEFAULT_GIT_SIZE_ALERT_THRESHOLD_MB
 
 _FSCK_VERIFIED_REPOS: set[str] = set()
 
@@ -250,3 +264,384 @@ def _write_audit_record(
     }
     with audit_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Branch GC hooks (AC 1)
+# ---------------------------------------------------------------------------
+
+
+def gc_branch_after_apply(deal_id: str, branch: str) -> None:
+    """Immediately delete an ephemeral branch after a successful Apply.
+
+    Per AC 1: ai/turn-* and solver/run-* are deleted immediately on successful
+    merge.  what-if/* branches are NOT touched here.
+    """
+    if not branch.startswith(("ai/turn-", "solver/run-")):
+        return
+    service = GitService(repo_path=deal_dir(deal_id))
+    try:
+        service.branch_delete(branch)
+    except GitServiceError:
+        pass
+
+
+def gc_branch_after_discard(deal_id: str, branch: str) -> None:
+    """Hook called after a branch-delete endpoint succeeds on an ephemeral branch.
+
+    The actual deletion was already performed by the API endpoint.  This hook
+    writes an audit record so the discard event is traceable.
+    """
+    if not branch.startswith(("ai/turn-", "solver/run-")):
+        return
+    _write_audit_record(deal_id, deal_dir(deal_id), "branch_discarded", {
+        "outcome": "deleted",
+        "branch": branch,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Stale-branch GC (AC 2)
+# ---------------------------------------------------------------------------
+
+
+def gc_stale_ephemeral_branches(
+    deal_id: str | None = None,
+    retention_days: int = 7,
+) -> None:
+    """Delete ai/turn-* and solver/run-* branches whose tip commit is older
+    than ``retention_days``.  NEVER touches what-if/* (per AC 4).
+
+    When ``deal_id`` is None the function discovers all deals under
+    ``deal_store._DEALS_DIR`` that contain a ``.git`` directory.
+    """
+    if deal_id is not None:
+        deal_ids: list[str] = [deal_id]
+    else:
+        deals_dir: Path = deal_store._DEALS_DIR
+        deal_ids = [
+            p.name
+            for p in deals_dir.iterdir()
+            if p.is_dir() and (p / ".git").exists()
+        ]
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+
+    for did in deal_ids:
+        d = deal_dir(did)
+        service = GitService(repo_path=d)
+        try:
+            branches = service.branch_list()
+        except GitServiceError:
+            continue
+
+        for branch_info in branches:
+            name = branch_info.name
+            if not name.startswith(("ai/turn-", "solver/run-")):
+                continue
+
+            try:
+                commits = service.log(branch=name, limit=1)
+            except GitServiceError:
+                continue
+
+            if not commits:
+                continue
+
+            tip_time = commits[0].committed_at
+            if tip_time.tzinfo is None:
+                tip_time = tip_time.replace(tzinfo=timezone.utc)
+
+            if tip_time >= cutoff:
+                continue
+
+            redact_pii_in_commit_messages(d, branch=name)
+            try:
+                service.branch_delete(name)
+            except GitServiceError:
+                pass
+
+            _write_audit_record(did, d, "branch_gc_stale", {
+                "outcome": "deleted",
+                "branch": name,
+                "tip_age_days": (datetime.now(timezone.utc) - tip_time).days,
+            })
+
+
+# ---------------------------------------------------------------------------
+# PII redaction (AC 3)
+# ---------------------------------------------------------------------------
+
+
+def redact_pii_in_commit_messages(
+    repo_path: Path,
+    branch: str | None = None,
+) -> None:
+    """Redact verbatim string values in commit messages and rewrite branch history.
+
+    For every ai/turn-* or solver/run-* branch (or the specified ``branch``):
+    1. Rewrites each branch-unique commit with string-typed JSON values replaced
+       by ``<str>`` placeholders so verbatim user prompts and tool-call argument
+       values are removed from reachable git history.
+    2. Archives a copy of the redacted messages to
+       ``<repo_path>/discarded_branches/<branch_safe>/redacted_messages.txt``
+       for auditability.
+
+    what-if/* branches are never processed.
+    """
+    repo_path = Path(repo_path)
+
+    if branch is not None:
+        branches_to_process: list[str] = [branch]
+    else:
+        try:
+            proc = subprocess.run(
+                ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            all_branches = [b.strip() for b in proc.stdout.splitlines() if b.strip()]
+        except subprocess.CalledProcessError:
+            all_branches = []
+        branches_to_process = [
+            b for b in all_branches
+            if b != "main" and b.startswith(("ai/turn-", "solver/run-"))
+        ]
+
+    for br_name in branches_to_process:
+        _redact_branch_commits_and_archive(repo_path, br_name)
+
+
+def _redact_branch_commits_and_archive(repo_path: Path, branch: str) -> None:
+    """Rewrite commits unique to ``branch`` with PII-scrubbed messages.
+
+    1. Collects commits reachable from *branch* but not from *main*.
+    2. Creates new commit objects with redacted messages (same tree/parents).
+    3. Updates the branch ref to the new tip.
+    4. Archives the redacted message summaries under
+       ``discarded_branches/<branch_safe>/redacted_messages.txt``.
+    """
+    try:
+        log_proc = subprocess.run(
+            ["git", "log", "--format=%H", f"main..{branch}"],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        return
+
+    commit_shas = [s.strip() for s in log_proc.stdout.splitlines() if s.strip()]
+    if not commit_shas:
+        return
+
+    # git log returns newest → oldest; reverse to rewrite oldest → newest
+    commit_shas_oldest_first = list(reversed(commit_shas))
+    old_to_new: dict[str, str] = {}
+    redacted_lines: list[str] = []
+
+    for sha in commit_shas_oldest_first:
+        try:
+            msg_proc = subprocess.run(
+                ["git", "log", "-1", "--format=%B", sha],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            tree_proc = subprocess.run(
+                ["git", "log", "-1", "--format=%T", sha],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            parent_proc = subprocess.run(
+                ["git", "log", "-1", "--format=%P", sha],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            meta_proc = subprocess.run(
+                ["git", "log", "-1",
+                 "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI", sha],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            continue
+
+        original_message = msg_proc.stdout
+        redacted_message = _apply_redaction_patterns(original_message)
+        tree_sha = tree_proc.stdout.strip()
+        parent_shas = parent_proc.stdout.strip().split() if parent_proc.stdout.strip() else []
+        new_parents = [old_to_new.get(p, p) for p in parent_shas]
+
+        fields = meta_proc.stdout.strip().split("\x00")
+        author_name = fields[0] if len(fields) > 0 else "System"
+        author_email = fields[1] if len(fields) > 1 else "system@bma"
+        author_date = fields[2] if len(fields) > 2 else ""
+        committer_name = fields[3] if len(fields) > 3 else "System"
+        committer_email = fields[4] if len(fields) > 4 else "system@bma"
+        committer_date = fields[5] if len(fields) > 5 else ""
+
+        cmd = ["git", "commit-tree", tree_sha]
+        for p in new_parents:
+            cmd.extend(["-p", p])
+        cmd.extend(["-m", redacted_message])
+
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": author_name,
+            "GIT_AUTHOR_EMAIL": author_email,
+            "GIT_COMMITTER_NAME": committer_name,
+            "GIT_COMMITTER_EMAIL": committer_email,
+        }
+        if author_date:
+            env["GIT_AUTHOR_DATE"] = author_date
+        if committer_date:
+            env["GIT_COMMITTER_DATE"] = committer_date
+
+        try:
+            new_sha_proc = subprocess.run(
+                cmd,
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+            new_sha = new_sha_proc.stdout.strip()
+            old_to_new[sha] = new_sha
+            redacted_lines.append(f"{sha[:8]}: {redacted_message.strip()}")
+        except subprocess.CalledProcessError:
+            continue
+
+    # Archive redacted messages
+    safe_branch = branch.replace("/", "_")
+    archive_dir = repo_path / "discarded_branches" / safe_branch
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = archive_dir / "redacted_messages.txt"
+    archive_path.write_text("\n".join(redacted_lines) + "\n", encoding="utf-8")
+
+    # Update branch ref to the rewritten tip
+    if commit_shas_oldest_first and old_to_new:
+        original_tip = commit_shas_oldest_first[-1]
+        new_tip = old_to_new.get(original_tip)
+        if new_tip:
+            try:
+                subprocess.run(
+                    ["git", "update-ref", f"refs/heads/{branch}", new_tip],
+                    cwd=str(repo_path),
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+            except subprocess.CalledProcessError:
+                pass
+
+
+def _apply_redaction_patterns(text: str) -> str:
+    """Replace string-typed JSON values with ``<str>`` placeholders.
+
+    Preserves keys and structural metadata so argument shapes are recoverable,
+    but verbatim PII (user prompts, phone numbers, deal names, etc.) is removed.
+    """
+    pattern = r'"([^"]+)":\s*"([^"]*)"'
+    return re.sub(pattern, r'"\1": "<str>"', text)
+
+
+# ---------------------------------------------------------------------------
+# Git-directory size telemetry (AC 5)
+# ---------------------------------------------------------------------------
+
+
+def measure_git_directory_size(
+    deal_ids: list[str] | None = None,
+    threshold_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Measure ``.git/`` size per deal via ``git count-objects -v``.
+
+    Aggregates a tenant p95, emits a structured WARNING log when p95 exceeds
+    the threshold.  Returns a dict with ``per_deal_sizes``, ``p95_bytes``,
+    ``threshold_bytes``, and ``alert``.
+
+    ``threshold_bytes`` defaults to the module-level
+    ``GIT_SIZE_ALERT_THRESHOLD_BYTES`` constant (monkeypatchable in tests).
+    """
+    effective_threshold = (
+        threshold_bytes
+        if threshold_bytes is not None
+        else GIT_SIZE_ALERT_THRESHOLD_BYTES
+    )
+
+    if deal_ids is None:
+        deals_dir: Path = deal_store._DEALS_DIR
+        deal_ids = [
+            p.name
+            for p in deals_dir.iterdir()
+            if p.is_dir() and (p / ".git").exists()
+        ]
+
+    sizes: dict[str, int] = {}
+    for did in deal_ids:
+        d = deal_dir(did)
+        if not (d / ".git").exists():
+            continue
+        try:
+            proc = subprocess.run(
+                ["git", "count-objects", "-v"],
+                cwd=str(d),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            continue
+
+        size_kb = 0
+        for line in proc.stdout.splitlines():
+            if line.startswith("size:") or line.startswith("size-pack:"):
+                try:
+                    size_kb += int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+        sizes[did] = size_kb * 1024
+
+    if not sizes:
+        return {
+            "per_deal_sizes": {},
+            "p95_bytes": 0,
+            "threshold_bytes": effective_threshold,
+            "alert": False,
+        }
+
+    sorted_sizes = sorted(sizes.values())
+    p95_idx = min(int(len(sorted_sizes) * 0.95), len(sorted_sizes) - 1)
+    p95_bytes = sorted_sizes[p95_idx]
+    alert = p95_bytes > effective_threshold
+
+    if alert:
+        logger.warning(
+            "git directory size p95 exceeds threshold",
+            extra={
+                "p95_bytes": p95_bytes,
+                "threshold_bytes": effective_threshold,
+                "deal_count": len(sizes),
+                "per_deal_max_bytes": max(sizes.values()),
+                "alert": True,
+            },
+        )
+
+    return {
+        "per_deal_sizes": sizes,
+        "p95_bytes": p95_bytes,
+        "threshold_bytes": effective_threshold,
+        "alert": alert,
+    }
