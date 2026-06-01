@@ -288,6 +288,16 @@ def _update_manifest_on_save(deal_id: str, deal: DealDefinition) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _fsck_guard(d: Path) -> None:
+    """Run operational._run_fsck at most once per absolute repo path per process."""
+    from . import operational
+
+    abs_path = str(d.resolve())
+    if abs_path not in operational._FSCK_VERIFIED_REPOS:
+        operational._run_fsck(d)
+        operational._FSCK_VERIFIED_REPOS.add(abs_path)
+
+
 def save_deal(
     deal_id: str,
     deal: DealDefinition,
@@ -298,6 +308,9 @@ def save_deal(
     Returns a dict with the commit SHA and version count.
     """
     d = deal_dir(deal_id)
+
+    if (d / ".git").exists():
+        _fsck_guard(d)
 
     if not (d / ".git").exists() and _has_legacy_snapshots(d):
         _migrate_legacy_to_git(deal_id)
@@ -333,6 +346,7 @@ def load_deal(deal_id: str, version: int | None = None) -> DealDefinition | None
         _migrate_legacy_to_git(deal_id)
 
     if (d / ".git").exists():
+        _fsck_guard(d)
         return _load_from_git(deal_id, version=version)
 
     return _load_legacy(deal_id, version=version)
@@ -448,6 +462,8 @@ def save_studio_ir(
 
 def load_studio_snapshot(deal_id: str, version: int | None = None) -> dict[str, Any]:
     d = deal_dir(deal_id)
+    if (d / ".git").exists():
+        _fsck_guard(d)
     manifest_path = d / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No deal {deal_id!r}")

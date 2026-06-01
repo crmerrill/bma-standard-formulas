@@ -48,6 +48,7 @@ from ...orchestrator.deals.deal_store import (
     save_studio_ir,
 )
 from ...orchestrator.deals.git_service import GitService, GitServiceError, InvalidBranchNameError
+from ...orchestrator.deals.operational import export_deal
 from ...orchestrator.deals.solver_catalog import build_solver_catalog
 from ...orchestrator.deals.solver_templates import (
     all_templates,
@@ -379,6 +380,16 @@ async def save_deal(body: StudioDealSaveBody):
     except OSError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     return meta
+
+
+@router.get("/deals/{deal_id}/export")
+def export_endpoint(deal_id: str, sha: str = Query(...)) -> Response:
+    """Export the canonical deal.json at a specific commit SHA."""
+    try:
+        payload = export_deal(deal_id, sha)
+    except GitServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(content=payload, media_type="application/json")
 
 
 def _ensure_canonical_deal(deal_id: str, version: int | None = None):
