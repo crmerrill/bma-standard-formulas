@@ -287,17 +287,32 @@ def gc_branch_after_apply(deal_id: str, branch: str) -> None:
 
 
 def gc_branch_after_discard(deal_id: str, branch: str) -> None:
-    """Hook called after a branch-delete endpoint succeeds on an ephemeral branch.
+    """For ephemeral branches: under the GitService write lock, redact PII in
+    commit messages, write a redacted summary archive, then delete the branch
+    and audit.
 
-    The actual deletion was already performed by the API endpoint.  This hook
-    writes an audit record so the discard event is traceable.
+    For non-ephemeral branches: no-op (caller deletes directly).
     """
     if not branch.startswith(("ai/turn-", "solver/run-")):
         return
-    _write_audit_record(deal_id, deal_dir(deal_id), "branch_discarded", {
-        "outcome": "deleted",
-        "branch": branch,
-    })
+    d = deal_dir(deal_id)
+    service = GitService(repo_path=d)
+    with service._write_lock():
+        try:
+            redact_pii_in_commit_messages(d, branch=branch)
+        except Exception:
+            logger.warning(
+                "PII redaction failed for branch %s in deal %s; proceeding with delete",
+                branch, deal_id,
+            )
+        try:
+            service.branch_delete(branch)
+        except GitServiceError:
+            pass
+        _write_audit_record(deal_id, d, "branch_discarded", {
+            "outcome": "deleted",
+            "branch": branch,
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -355,11 +370,12 @@ def gc_stale_ephemeral_branches(
             if tip_time >= cutoff:
                 continue
 
-            redact_pii_in_commit_messages(d, branch=name)
-            try:
-                service.branch_delete(name)
-            except GitServiceError:
-                pass
+            with service._write_lock():
+                redact_pii_in_commit_messages(d, branch=name)
+                try:
+                    service.branch_delete(name)
+                except GitServiceError:
+                    pass
 
             _write_audit_record(did, d, "branch_gc_stale", {
                 "outcome": "deleted",
@@ -548,13 +564,29 @@ def _redact_branch_commits_and_archive(repo_path: Path, branch: str) -> None:
 
 
 def _apply_redaction_patterns(text: str) -> str:
-    """Replace string-typed JSON values with ``<str>`` placeholders.
+    """Replace verbatim PII with redacted placeholders.
 
-    Preserves keys and structural metadata so argument shapes are recoverable,
-    but verbatim PII (user prompts, phone numbers, deal names, etc.) is removed.
+    Patterns covered:
+    1. JSON-style "key": "value" -> "key": "<str>"
+    2. Free-text ``User said: '<...>'`` and ``User: <...>`` lines -> <prompt>
+    3. Tool-call argument blocks ``arguments: { ... }`` / ``args={...}`` -> <args>
+    4. Single-quoted prompts wrapped in any context -> '<prompt>'
     """
-    pattern = r'"([^"]+)":\s*"([^"]*)"'
-    return re.sub(pattern, r'"\1": "<str>"', text)
+    out = text
+    out = re.sub(r'"([^"]+)":\s*"([^"]*)"', r'"\1": "<str>"', out)
+    out = re.sub(
+        r"(User\s*(?:said)?\s*:\s*)(['\"])(.+?)\2",
+        r"\1<prompt>",
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"(arguments?\s*[:=]\s*)\{[^}]*\}",
+        r"\1<args>",
+        out,
+        flags=re.IGNORECASE,
+    )
+    return out
 
 
 # ---------------------------------------------------------------------------

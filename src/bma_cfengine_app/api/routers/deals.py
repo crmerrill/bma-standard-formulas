@@ -1067,34 +1067,38 @@ def create_branch(deal_id: str, body: BranchCreateRequest) -> GitBranchInfo:
 
 @router.delete("/deals/{deal_id}/branches/{name:path}", status_code=204)
 def delete_branch(deal_id: str, name: str) -> Response:
-    service = GitService(repo_path=deal_dir(deal_id))
-    try:
-        service.branch_delete(name)
-    except InvalidBranchNameError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except GitServiceError as exc:
-        if "PROTECTED_BRANCH" in str(exc):
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "PROTECTED_BRANCH", "message": str(exc)},
-            ) from exc
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     if name.startswith(("ai/turn-", "solver/run-")):
         gc_branch_after_discard(deal_id, name)
+    else:
+        service = GitService(repo_path=deal_dir(deal_id))
+        try:
+            service.branch_delete(name)
+        except InvalidBranchNameError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except GitServiceError as exc:
+            if "PROTECTED_BRANCH" in str(exc):
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "PROTECTED_BRANCH", "message": str(exc)},
+                ) from exc
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     return Response(status_code=204)
 
 
 @router.post("/deals/{deal_id}/merge", response_model=GitMergeResult)
 def merge_endpoint(deal_id: str, body: GitMergeRequest) -> GitMergeResult:
     service = GitService(repo_path=deal_dir(deal_id))
+    # Phase 0 C11: ephemeral branches use squash-on-Apply so per-call commits
+    # become unreachable after the branch is deleted.
+    is_ephemeral = body.branch.startswith(("ai/turn-", "solver/run-"))
     try:
-        result = service.merge(body.branch, into=body.into)
+        result = service.merge(body.branch, into=body.into, squash=is_ephemeral)
     except InvalidBranchNameError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except GitServiceError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     if isinstance(result, str):
-        if body.branch.startswith(("ai/turn-", "solver/run-")):
+        if is_ephemeral:
             gc_branch_after_apply(deal_id, body.branch)
         return GitMergeResult(status="success", sha=result)
     return GitMergeResult(

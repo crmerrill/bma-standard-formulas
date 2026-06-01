@@ -273,6 +273,121 @@ def test_top_level_field_conflict_does_not_emit_merge_conflict_diagnostic(
 
 
 @pytest.mark.parametrize("backend", ["pygit2", "cli"])
+def test_squash_apply_drops_ephemeral_branch_commits_from_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str,
+) -> None:
+    """C1 (R1 fix): apply (squash=True) on an ai/turn-* branch produces a
+    single-parent merge commit on main; after branch deletion, the
+    ephemeral branch's commits are unreachable via git log --all."""
+    import os
+
+    from bma_cfengine_app.orchestrator.deals import git_service as gs_mod
+
+    if backend == "cli":
+        monkeypatch.setattr(gs_mod, "pygit2", None, raising=False)
+    else:
+        pytest.importorskip("pygit2")
+
+    _init_repo(tmp_path)
+    service = GitService(repo_path=tmp_path)
+    author = "system:test <test@example.com>"
+
+    base_sha = service.commit_deal(
+        deal_payload=_deal_payload(coupon=5.0, notional=1_000_000.0),
+        author=author,
+        message="initial",
+    )
+
+    service.branch_create("ai/turn-secret", from_sha=base_sha)
+    _run_git(tmp_path, "checkout", "ai/turn-secret")
+    sensitive_message = "User said: 'Please add a 5% reserve for my deal ABC-PRIVATE-123'"
+    import json
+    deal_path = tmp_path / "deal.json"
+    deal_path.write_text(json.dumps(_deal_payload(coupon=6.0, notional=1_000_000.0), indent=2))
+    commit_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "system",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "system",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+    }
+    _run_git(tmp_path, "add", "deal.json")
+    subprocess.run(
+        ["git", "commit", "-m", sensitive_message],
+        cwd=tmp_path, check=True, capture_output=True, text=True, env=commit_env,
+    )
+    _run_git(tmp_path, "checkout", "main")
+    _run_git(tmp_path, "reset", "--hard", base_sha)
+
+    result = service.merge("ai/turn-secret", into="main", squash=True)
+    merge_sha = _extract_merge_sha(result)
+
+    # Verify single-parent commit
+    parent_count = _run_git(tmp_path, "rev-list", "--parents", "-1", merge_sha)
+    parents = parent_count.strip().split()
+    assert len(parents) == 2, f"Expected single parent (squash), got {len(parents) - 1} parents"
+
+    # Delete the ephemeral branch
+    service.branch_delete("ai/turn-secret")
+
+    # Expire reflogs so unreachable commits are truly invisible
+    subprocess.run(
+        ["git", "reflog", "expire", "--expire=now", "--all"],
+        cwd=tmp_path, check=True, capture_output=True, text=True,
+    )
+
+    # After deletion, the sensitive message must NOT appear in git log --all
+    all_messages = _run_git(tmp_path, "log", "--all", "--format=%B")
+    assert "ABC-PRIVATE-123" not in all_messages
+    assert sensitive_message not in all_messages
+
+    # The squash commit message should indicate Apply semantics
+    merge_msg = _run_git(tmp_path, "log", "-1", "--format=%B", merge_sha)
+    assert "Apply" in merge_msg
+
+
+@pytest.mark.parametrize("backend", ["pygit2", "cli"])
+def test_squash_false_preserves_two_parent_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str,
+) -> None:
+    """C1 backward-compat: squash=False (default) still produces two-parent merges."""
+    from bma_cfengine_app.orchestrator.deals import git_service as gs_mod
+
+    if backend == "cli":
+        monkeypatch.setattr(gs_mod, "pygit2", None, raising=False)
+    else:
+        pytest.importorskip("pygit2")
+
+    _init_repo(tmp_path)
+    service = GitService(repo_path=tmp_path)
+    author = "system:test <test@example.com>"
+
+    base_sha = service.commit_deal(
+        deal_payload=_deal_payload(coupon=5.0, notional=1_000_000.0),
+        author=author,
+        message="initial",
+    )
+
+    service.branch_create("what-if/two-parent", from_sha=base_sha)
+    _run_git(tmp_path, "checkout", "what-if/two-parent")
+    branch_sha = service.commit_deal(
+        deal_payload=_deal_payload(coupon=7.0, notional=1_000_000.0),
+        author=author,
+        message="what-if edit",
+        parent_sha=base_sha,
+    )
+    _run_git(tmp_path, "update-ref", "refs/heads/what-if/two-parent", branch_sha)
+    _run_git(tmp_path, "checkout", "main")
+
+    result = service.merge("what-if/two-parent", into="main", squash=False)
+    merge_sha = _extract_merge_sha(result)
+
+    parent_count = _run_git(tmp_path, "rev-list", "--parents", "-1", merge_sha)
+    parents = parent_count.strip().split()
+    assert len(parents) == 3, f"Expected two parents (standard merge), got {len(parents) - 1} parents"
+
+
+@pytest.mark.parametrize("backend", ["pygit2", "cli"])
 def test_merge_works_when_into_is_not_currently_checked_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str,
 ) -> None:

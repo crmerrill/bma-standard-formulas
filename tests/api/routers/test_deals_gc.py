@@ -171,3 +171,101 @@ def test_discard_endpoint_triggers_gc_branch_after_discard(
 
     assert gc_spy.called, "delete endpoint should invoke gc_branch_after_discard(...)"
     assert branch_name not in _branch_names(deal_id)
+
+
+# ---------------------------------------------------------------------------
+# R1 fix-pass regression tests (irvc-5c C1/C2/C3)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_via_router_squashes_ephemeral_branch_history(
+    client: TestClient,
+    deal_id: str,
+) -> None:
+    """C1 (R1 fix): POST /deals/{id}/merge with branch=ai/turn-* squashes;
+    git log --all on the deal repo does not contain the ephemeral commit
+    messages after Apply + branch delete."""
+    branch_name = "ai/turn-squash"
+    service = _service_for(deal_id)
+    head_sha = _main_head_sha(deal_id)
+    service.branch_create(branch_name, from_sha=head_sha)
+
+    repo_path = deal_store.deal_dir(deal_id)
+    sensitive_msg = "User said: 'Add a 5% reserve for PRIVATE-DEAL-XYZ'"
+    _commit_branch_edit(
+        repo_path,
+        branch_name=branch_name,
+        updated_deal_name="squash-test-edit",
+        message=sensitive_msg,
+    )
+
+    response = client.post(
+        f"/api/deals/{deal_id}/merge",
+        json={"branch": branch_name, "into": "main"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "success"
+    merge_sha = body["sha"]
+
+    # Verify single-parent (squash) commit
+    parent_line = _run_git(["rev-list", "--parents", "-1", merge_sha], cwd=repo_path)
+    parents = parent_line.strip().split()
+    assert len(parents) == 2, f"Expected single parent (squash), got {len(parents) - 1}"
+
+    # Branch should be GC'd by gc_branch_after_apply
+    assert branch_name not in _branch_names(deal_id)
+
+    # Sensitive message unreachable from any ref
+    all_messages = _run_git(["log", "--all", "--format=%B"], cwd=repo_path)
+    assert "PRIVATE-DEAL-XYZ" not in all_messages
+
+
+def test_discard_ephemeral_branch_redacts_pii_and_archives(
+    client: TestClient,
+    deal_id: str,
+) -> None:
+    """C2+C3 (R1 fix): DELETE /branches/{name} for ephemeral branches redacts
+    PII into discarded_branches archive and audits the event."""
+    branch_name = "ai/turn-redact-discard"
+    service = _service_for(deal_id)
+    head_sha = _main_head_sha(deal_id)
+    service.branch_create(branch_name, from_sha=head_sha)
+
+    repo_path = deal_store.deal_dir(deal_id)
+    sensitive_msg = (
+        "User said: 'Please structure my deal ABC-SECRET-789'\n"
+        "tool_call model=gpt-5 tool_name=update_waterfall "
+        "args={\"user_prompt\": \"structure deal ABC-SECRET-789\", \"reserve_pct\": \"5%\"}"
+    )
+    _commit_branch_edit(
+        repo_path,
+        branch_name=branch_name,
+        updated_deal_name="discard-redact-edit",
+        message=sensitive_msg,
+    )
+
+    response = client.delete(f"/api/deals/{deal_id}/branches/{branch_name}")
+    assert response.status_code == 204
+
+    # (a) branch is gone
+    assert branch_name not in _branch_names(deal_id)
+
+    # (b) redacted archive exists
+    safe_branch = branch_name.replace("/", "_")
+    archive_path = repo_path / "discarded_branches" / safe_branch / "redacted_messages.txt"
+    assert archive_path.exists(), "Expected redacted_messages.txt archive"
+
+    # (c) verbatim PII NOT in archive
+    archive_text = archive_path.read_text(encoding="utf-8")
+    assert "ABC-SECRET-789" not in archive_text
+
+    # (d) audit log records the event
+    audit_path = repo_path / "audit.log"
+    assert audit_path.exists()
+    audit_lines = audit_path.read_text(encoding="utf-8").splitlines()
+    discard_records = [
+        json.loads(line) for line in audit_lines
+        if "branch_discarded" in line
+    ]
+    assert any(r.get("branch") == branch_name for r in discard_records)

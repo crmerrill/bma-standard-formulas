@@ -192,6 +192,43 @@ def test_pii_redaction_replaces_verbatim_args_with_arg_shape_summary(
     ), "Expected redaction output to preserve argument shape metadata"
 
 
+@pytest.mark.parametrize(
+    "text,should_not_contain",
+    [
+        pytest.param(
+            '"user_prompt": "Please add a 5% reserve account"',
+            "Please add a 5% reserve account",
+            id="json_string_value",
+        ),
+        pytest.param(
+            "User said: 'Please add a 5% reserve account funded from waterfall residual cash'",
+            "Please add a 5% reserve account funded from waterfall residual cash",
+            id="user_said_single_quote",
+        ),
+        pytest.param(
+            'User: "structure my deal with 3 tranches"',
+            "structure my deal with 3 tranches",
+            id="user_colon_double_quote",
+        ),
+        pytest.param(
+            'args={"user_prompt": "sensitive data", "reserve_pct": "5%"}',
+            "sensitive data",
+            id="args_block",
+        ),
+        pytest.param(
+            'arguments: {"deal_name": "ABC123-Private", "phone": "+1-555-0000"}',
+            "ABC123-Private",
+            id="arguments_block",
+        ),
+    ],
+)
+def test_apply_redaction_patterns_scrubs_pii(text: str, should_not_contain: str) -> None:
+    """C3 (R1 fix): _apply_redaction_patterns covers JSON values, free-text
+    prompts, and tool-call argument blocks."""
+    result = operational._apply_redaction_patterns(text)
+    assert should_not_contain not in result
+
+
 def test_what_if_branches_never_auto_gcd(
     redirected_deals_dir: Path,
 ) -> None:

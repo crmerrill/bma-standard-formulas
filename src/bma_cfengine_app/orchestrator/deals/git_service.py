@@ -569,21 +569,30 @@ class GitService:
     # merge
     # -------------------------------------------------------------------
 
-    def merge(self, branch: str, *, into: str = "main") -> str | Any:
+    def merge(self, branch: str, *, into: str = "main", squash: bool = False) -> str | Any:
         """Three-way merge of *branch* into *into*.
 
         Returns the merge-commit SHA (str) on success, or a
         ``DiagnosticPayload`` with ``code='MERGE_CONFLICT'`` on conflict.
+
+        When ``squash=True``, the merge commit on *into* has ONLY *into*'s HEAD
+        as parent (single-parent), so the source branch's commits become
+        unreachable after the source branch ref is deleted.  Used for ephemeral
+        branches (ai/turn-*, solver/run-*) per the Phase 0 C11 "squash on
+        Apply" contract.
+
+        When ``squash=False`` (default), the merge commit has two parents
+        (the standard git merge primitive).
         """
         self._validate_branch_name(branch)
         self._validate_branch_name(into)
         with self._write_lock():
             if self._use_pygit2:
-                return self._merge_pygit2(branch, into=into)
-            return self._merge_cli(branch, into=into)
+                return self._merge_pygit2(branch, into=into, squash=squash)
+            return self._merge_cli(branch, into=into, squash=squash)
 
     @_wrap_pygit2
-    def _merge_pygit2(self, branch: str, *, into: str) -> str | Any:
+    def _merge_pygit2(self, branch: str, *, into: str, squash: bool) -> str | Any:
         from bma_cfengine_app.orchestrator.deals.merge import merge_deal_definitions
         from bma_standard_formulas.deals.schemas.ir import DealDefinition
         from bma_standard_formulas.diagnostics import DiagnosticPayload
@@ -631,13 +640,19 @@ class GitService:
         tree_id = tb.write()
 
         sig = pygit2.Signature("system", "merge@bma")
+        parents = [ours_commit.id] if squash else [ours_commit.id, theirs_commit.id]
+        message = (
+            f"Apply '{branch}' onto '{into}'"
+            if squash
+            else f"Merge branch '{branch}' into '{into}'"
+        )
         commit_oid = repo.create_commit(
             f"refs/heads/{into}",
             sig,
             sig,
-            f"Merge branch '{branch}' into '{into}'",
+            message,
             tree_id,
-            [ours_commit.id, theirs_commit.id],
+            parents,
         )
 
         merge_commit = repo[commit_oid]
@@ -651,7 +666,7 @@ class GitService:
 
         return str(commit_oid)
 
-    def _merge_cli(self, branch: str, *, into: str) -> str | Any:
+    def _merge_cli(self, branch: str, *, into: str, squash: bool) -> str | Any:
         from bma_cfengine_app.orchestrator.deals.merge import merge_deal_definitions
         from bma_standard_formulas.deals.schemas.ir import DealDefinition
         from bma_standard_formulas.diagnostics import DiagnosticPayload
@@ -705,11 +720,17 @@ class GitService:
             "GIT_COMMITTER_NAME": "system",
             "GIT_COMMITTER_EMAIL": "merge@bma",
         }
+        message = (
+            f"Apply '{branch}' onto '{into}'"
+            if squash
+            else f"Merge branch '{branch}' into '{into}'"
+        )
+        commit_tree_args = ["commit-tree", tree_sha, "-p", ours_sha]
+        if not squash:
+            commit_tree_args.extend(["-p", theirs_sha])
+        commit_tree_args.extend(["-m", message])
         commit_sha = self._git_cli(
-            "commit-tree", tree_sha,
-            "-p", ours_sha,
-            "-p", theirs_sha,
-            "-m", f"Merge branch '{branch}' into '{into}'",
+            *commit_tree_args,
             env=author_env,
         ).stdout.strip()
 
