@@ -5,6 +5,20 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _clear_fsck_memoization() -> None:
+    """Reset the per-process fsck memoization between tests.
+
+    Production uses once-per-process semantics, but tests create and corrupt
+    repos within a single process. Clearing ensures each test starts fresh.
+    """
+    from bma_cfengine_app.orchestrator.deals.git_service import _INIT_FSCK_CHECKED
+    from bma_cfengine_app.orchestrator.deals.operational import _FSCK_VERIFIED_REPOS
+
+    _FSCK_VERIFIED_REPOS.clear()
+    _INIT_FSCK_CHECKED.clear()
+
+
+@pytest.fixture(autouse=True)
 def _ensure_merge_diagnostic_registered() -> None:
     """Re-register MERGE_CONFLICT if the diagnostics registry was externally cleared.
 

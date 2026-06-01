@@ -172,7 +172,7 @@ def _migrate_legacy_to_git(deal_id: str) -> None:
             return
 
         _git_init_main(d)
-        service = GitService(repo_path=d)
+        service = GitService(repo_path=d, _verified_clean=True)
         parent_sha: str | None = None
 
         for v in legacy_versions:
@@ -315,10 +315,12 @@ def save_deal(
     if not (d / ".git").exists() and _has_legacy_snapshots(d):
         _migrate_legacy_to_git(deal_id)
 
+    freshly_created = False
     if not (d / ".git").exists():
         _git_init_main(d)
+        freshly_created = True
 
-    service = GitService(repo_path=d)
+    service = GitService(repo_path=d, _verified_clean=freshly_created)
     head_commits = service.log(branch="main", limit=1)
     parent_sha: str | None = head_commits[0].sha if head_commits else None
 

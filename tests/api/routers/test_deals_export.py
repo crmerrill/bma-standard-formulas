@@ -65,3 +65,39 @@ def test_export_endpoint_returns_deal_json(client: TestClient) -> None:
     response_payload = json.loads(response.content.decode("utf-8"))
     expected_payload = json.loads(service.show(sha, "deal.json").decode("utf-8"))
     assert response_payload == expected_payload
+
+
+def test_router_endpoint_surfaces_repo_corrupt_through_gitservice(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B1 regression: an HTTP endpoint that constructs GitService directly must
+    surface REPO_CORRUPT via the app-level exception handler (503)."""
+    from bma_cfengine_app.orchestrator.deals import operational
+
+    deal_id = "deal_api_corrupt_branch"
+    deal_store.save_deal(
+        deal_id,
+        _build_minimal_deal(deal_name="corrupt-branch", coupon=5.0),
+    )
+
+    repo_path = deal_store.deal_dir(deal_id)
+    operational._FSCK_VERIFIED_REPOS.discard(str(repo_path.resolve()))
+
+    objects_root = repo_path / ".git" / "objects"
+    for prefix_dir in objects_root.iterdir():
+        if not prefix_dir.is_dir() or len(prefix_dir.name) != 2:
+            continue
+        for object_file in prefix_dir.iterdir():
+            if object_file.is_file():
+                object_file.chmod(0o644)
+                object_file.write_bytes(b"corrupt")
+                break
+        else:
+            continue
+        break
+
+    response = client.get(f"/api/deals/{deal_id}/branches")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["code"] == "REPO_CORRUPT"
+    assert "diagnostic" in body

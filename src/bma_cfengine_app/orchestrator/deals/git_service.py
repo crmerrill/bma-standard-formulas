@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _NAMESPACES = ("ai/turn-", "solver/run-", "what-if/")
 
+_INIT_FSCK_CHECKED: set[str] = set()
+
 
 # ---------------------------------------------------------------------------
 # Exception hierarchy
@@ -110,10 +112,62 @@ class GitService:
         repo_path: Path,
         *,
         lock_timeout_s: float = 5.0,
+        _verified_clean: bool = False,
     ) -> None:
         self._repo_path = Path(repo_path)
         self._lock_timeout_s = lock_timeout_s
         self._local = threading.local()
+        if not _verified_clean and (self._repo_path / ".git").exists():
+            self._fsck_on_init()
+
+    def _fsck_on_init(self) -> None:
+        """Run git fsck if this repo hasn't been verified by any path yet."""
+        try:
+            from .operational import _FSCK_VERIFIED_REPOS
+        except ImportError:
+            return
+        abs_path = str(self._repo_path.resolve())
+        if abs_path in _FSCK_VERIFIED_REPOS or abs_path in _INIT_FSCK_CHECKED:
+            return
+        proc = subprocess.run(
+            ["git", "fsck", "--no-progress"],
+            cwd=str(self._repo_path),
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            try:
+                from .operational import RepoCorruptError, _write_audit_record
+                from bma_standard_formulas.diagnostics import (
+                    DiagnosticPayload,
+                    Severity,
+                )
+            except ImportError:
+                raise GitServiceError(
+                    f"git fsck failed: {proc.stderr.strip()[:200]}"
+                )
+            deal_id = self._repo_path.name
+            _write_audit_record(deal_id, self._repo_path, "corruption_detected", {
+                "outcome": "detected",
+                "stderr": proc.stderr.strip()[:500],
+            })
+            diagnostic = DiagnosticPayload(
+                code="REPO_CORRUPT",
+                severity=Severity.error,
+                path=f"deal:{deal_id}",
+                message=(
+                    f"git fsck failed for {deal_id}: "
+                    f"{proc.stderr.strip()[:200]}"
+                ),
+                payload={
+                    "deal_id": deal_id,
+                    "repo_path": abs_path,
+                    "stderr": proc.stderr.strip(),
+                    "restore_action": "Restore from latest backup",
+                },
+            )
+            raise RepoCorruptError(diagnostic)
+        _INIT_FSCK_CHECKED.add(abs_path)
 
     @property
     def _use_pygit2(self) -> bool:

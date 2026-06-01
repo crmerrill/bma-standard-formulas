@@ -183,3 +183,24 @@ def test_fsck_runs_once_per_process_per_deal(
     deal_store.load_deal(deal_id)
 
     assert call_counter["count"] == 1
+
+
+def test_fsck_runs_when_gitservice_constructed_directly(
+    redirected_deals_dir: Path,
+) -> None:
+    """B1 regression: direct GitService construction against a corrupt repo
+    must raise RepoCorruptError — the fsck guard in __init__ cannot be bypassed."""
+    from bma_cfengine_app.orchestrator.deals import operational
+    from bma_cfengine_app.orchestrator.deals.git_service import GitService
+    from bma_cfengine_app.orchestrator.deals.operational import RepoCorruptError
+
+    deal_id = "deal_fsck_direct_gitservice"
+    repo_dir = _seed_git_backed_deal(deal_id=deal_id)
+
+    operational._FSCK_VERIFIED_REPOS.discard(str(repo_dir.resolve()))
+
+    _corrupt_first_loose_object(repo_dir)
+
+    with pytest.raises(RepoCorruptError) as exc_info:
+        GitService(repo_path=repo_dir)
+    _assert_repo_corrupt_diagnostic(exc_info.value)

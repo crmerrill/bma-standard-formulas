@@ -160,3 +160,39 @@ def test_repo_corrupt_diagnostic_invokes_restore_from_bundle_end_to_end(
         event.get("event_type") == "restore_result" and event.get("outcome") == "success"
         for event in events
     )
+
+
+def test_restore_deal_failure_preserves_original_git_dir(
+    redirected_deals_dir: Path,
+) -> None:
+    """B2 regression: a failed restore (invalid bundle) MUST leave the original
+    .git/ intact so the deal can be retried."""
+    from bma_cfengine_app.orchestrator.deals import operational
+    from bma_cfengine_app.orchestrator.deals.operational import restore_deal
+
+    deal_id = "deal_restore_fail_safe"
+    repo_dir = _seed_git_backed_deal(deal_id=deal_id)
+
+    operational._FSCK_VERIFIED_REPOS.discard(str(repo_dir.resolve()))
+
+    git_dir = repo_dir / ".git"
+    assert git_dir.exists()
+    original_git_files = sorted(p.name for p in git_dir.iterdir())
+    assert len(original_git_files) > 0
+
+    bad_bundle = redirected_deals_dir / "bad.bundle"
+    bad_bundle.write_bytes(b"not a real git bundle")
+
+    with pytest.raises(Exception):
+        restore_deal(deal_id, bad_bundle)
+
+    assert git_dir.exists(), ".git/ must survive a failed restore"
+    final_git_files = sorted(p.name for p in git_dir.iterdir())
+    assert final_git_files == original_git_files
+
+    events = _read_audit_log_events(deal_id)
+    failure_records = [
+        r for r in events
+        if r.get("event_type") == "restore_result" and r.get("outcome") == "failure"
+    ]
+    assert len(failure_records) >= 1

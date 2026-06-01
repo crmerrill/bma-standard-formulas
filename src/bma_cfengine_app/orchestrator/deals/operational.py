@@ -7,6 +7,7 @@ via the vpc-1 catalog mechanism at module import time.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -125,11 +126,12 @@ def _run_fsck(repo_path: Path) -> None:
 def restore_deal(deal_id: str, bundle_path: Path) -> None:
     """Restore a corrupted deal repo from a git bundle.
 
-    1. Atomically replace the corrupted ``.git/`` with a fresh repo
-       unbundled from *bundle_path*.
-    2. Preserve ``manifest.json`` studio transitional fields
+    1. Clone/unbundle into a temp dir and validate the result.
+    2. Atomically swap ``.git/`` using a ``.git.old`` backup so a failed
+       restore never leaves the deal without a recoverable repo.
+    3. Preserve ``manifest.json`` studio transitional fields
        (``studio_current_version``, ``studio_versions`` per irvc-3).
-    3. Invalidate the fsck memoization for this repo so the next load
+    4. Invalidate the fsck memoization for this repo so the next load
        re-runs fsck on the freshly-restored repo.
     """
     bundle_path = Path(bundle_path)
@@ -159,23 +161,52 @@ def restore_deal(deal_id: str, bundle_path: Path) -> None:
         )
 
         git_dir = d / ".git"
-        if git_dir.exists():
-            shutil.rmtree(git_dir)
+        git_old = d / ".git.old"
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(
+            prefix=f"bma_restore_{deal_id}_"
+        ) as tmp:
             tmp_path = Path(tmp) / "restored"
             subprocess.run(
                 ["git", "clone", str(bundle_path), str(tmp_path)],
                 check=True,
                 capture_output=True,
+                text=True,
             )
-            shutil.move(str(tmp_path / ".git"), str(d / ".git"))
-            for item in tmp_path.iterdir():
-                target = d / item.name
-                if item.name == "deal.json":
-                    shutil.copy2(str(item), str(target))
-                elif not target.exists():
-                    shutil.move(str(item), str(target))
+            verify = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(tmp_path),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            if not verify.stdout.strip():
+                raise GitServiceError(
+                    "RESTORE_VALIDATION_FAILED: cloned repo has no HEAD"
+                )
+
+            had_existing = git_dir.exists()
+            if had_existing:
+                if git_old.exists():
+                    shutil.rmtree(git_old)
+                os.rename(git_dir, git_old)
+            try:
+                shutil.move(str(tmp_path / ".git"), str(git_dir))
+                for item in tmp_path.iterdir():
+                    target = d / item.name
+                    if item.name == "deal.json":
+                        shutil.copy2(str(item), str(target))
+                    elif not target.exists():
+                        shutil.move(str(item), str(target))
+            except Exception:
+                if git_dir.exists():
+                    shutil.rmtree(git_dir)
+                if had_existing and git_old.exists():
+                    os.rename(git_old, git_dir)
+                raise
+            else:
+                if git_old.exists():
+                    shutil.rmtree(git_old)
 
         for name, content in studio_state.items():
             (d / name).write_bytes(content)
@@ -189,9 +220,10 @@ def restore_deal(deal_id: str, bundle_path: Path) -> None:
             "outcome": "success",
             "bundle_path": str(bundle_path),
         })
-    except Exception:
+    except Exception as exc:
         _write_audit_record(deal_id, d, "restore_result", {
             "outcome": "failure",
+            "reason": str(exc)[:500],
             "bundle_path": str(bundle_path),
         })
         raise

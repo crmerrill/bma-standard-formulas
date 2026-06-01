@@ -17,6 +17,7 @@ from pathlib import Path
 from ..storage.run_store import init_workspace, workspace_path
 from .routers import uploads, mappings, runs, risk, curves, deals
 from ..orchestrator.deals.deal_store import init_deals_workspace
+from ..orchestrator.deals.operational import RepoCorruptError
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,19 @@ async def health():
         # If false, the running process is not loading this repo's models (stale install / wrong PYTHONPATH).
         "group_id_in_allowlist": "group_id" in api_models.ALL_CANONICAL_FIELDS,
     }
+
+
+@app.exception_handler(RepoCorruptError)
+async def repo_corrupt_exception_handler(request: Request, exc: RepoCorruptError):
+    """Return 503 with structured REPO_CORRUPT diagnostic for corrupt deal repos."""
+    return JSONResponse(
+        status_code=503,
+        content={
+            "code": "REPO_CORRUPT",
+            "message": str(exc),
+            "diagnostic": exc.diagnostic.model_dump(mode="json"),
+        },
+    )
 
 
 @app.exception_handler(Exception)
