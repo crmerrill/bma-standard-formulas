@@ -269,3 +269,58 @@ def test_discard_ephemeral_branch_redacts_pii_and_archives(
         if "branch_discarded" in line
     ]
     assert any(r.get("branch") == branch_name for r in discard_records)
+
+
+def test_merge_stream_squashes_ephemeral_branch_and_runs_gc(
+    client: TestClient,
+    deal_id: str,
+) -> None:
+    """R1 pass-2 follow-up to C1: GET /merge/stream with branch=ai/turn-* must
+    apply the same squash-on-Apply + gc_branch_after_apply logic as the
+    POST /merge endpoint. Otherwise the SSE route is a PII back-door."""
+    branch_name = "ai/turn-stream-apply"
+    service = _service_for(deal_id)
+    head_sha = _main_head_sha(deal_id)
+    service.branch_create(branch_name, from_sha=head_sha)
+
+    repo_path = deal_store.deal_dir(deal_id)
+    sensitive_msg = "User said: 'Stream-apply for PRIVATE-STREAMED-DEAL-555'"
+    _commit_branch_edit(
+        repo_path,
+        branch_name=branch_name,
+        updated_deal_name="stream-apply-edit",
+        message=sensitive_msg,
+    )
+
+    with client.stream(
+        "GET",
+        f"/api/deals/{deal_id}/merge/stream",
+        params={"branch": branch_name},
+    ) as response:
+        assert response.status_code == 200
+        events = []
+        for line in response.iter_lines():
+            if not line:
+                continue
+            text = line if isinstance(line, str) else line.decode("utf-8")
+            if text.startswith("data: "):
+                events.append(json.loads(text[len("data: "):]))
+
+    # Stream should terminate with merge_complete carrying a SHA
+    assert events[-1]["event_type"] == "merge_complete"
+    merge_sha = events[-1]["sha"]
+    assert merge_sha is not None
+
+    # Single-parent (squash) on the merge commit
+    parent_line = _run_git(["rev-list", "--parents", "-1", merge_sha], cwd=repo_path)
+    parents = parent_line.strip().split()
+    assert len(parents) == 2, (
+        f"Expected single-parent squash via SSE; got {len(parents) - 1} parents."
+    )
+
+    # GC ran: the ephemeral branch is gone
+    assert branch_name not in _branch_names(deal_id)
+
+    # PII unreachable from any ref
+    all_messages = _run_git(["log", "--all", "--format=%B"], cwd=repo_path)
+    assert "PRIVATE-STREAMED-DEAL-555" not in all_messages

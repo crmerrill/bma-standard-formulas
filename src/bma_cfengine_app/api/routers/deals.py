@@ -1166,6 +1166,10 @@ def show_endpoint(deal_id: str, sha: str, path: str) -> Response:
 def merge_stream_endpoint(deal_id: str, branch: str) -> StreamingResponse:
     """SSE endpoint streaming merge progress events terminating in merge_complete or merge_failed."""
     service = GitService(repo_path=deal_dir(deal_id))
+    # Phase 0 C11: ephemeral branches use squash-on-Apply so per-call commits
+    # become unreachable from `main` after the branch is deleted. Mirrors the
+    # POST /merge endpoint's behavior so neither merge route is a PII back-door.
+    is_ephemeral = branch.startswith(("ai/turn-", "solver/run-"))
 
     def event_stream():  # type: ignore[return]
         start_event = MergeProgressEvent(
@@ -1175,7 +1179,7 @@ def merge_stream_endpoint(deal_id: str, branch: str) -> StreamingResponse:
         )
         yield f"data: {start_event.model_dump_json()}\n\n"
         try:
-            result = service.merge(branch, into="main")
+            result = service.merge(branch, into="main", squash=is_ephemeral)
             if isinstance(result, str):
                 terminal = MergeProgressEvent(
                     event_type="merge_complete",
@@ -1183,6 +1187,14 @@ def merge_stream_endpoint(deal_id: str, branch: str) -> StreamingResponse:
                     total_entities=1,
                     sha=result,
                 )
+                if is_ephemeral:
+                    from ...orchestrator.deals.operational import gc_branch_after_apply
+                    try:
+                        gc_branch_after_apply(deal_id, branch)
+                    except Exception:
+                        # GC failure must not corrupt the SSE stream; the merge
+                        # already succeeded. Logged inside the helper.
+                        pass
             else:
                 terminal = MergeProgressEvent(
                     event_type="merge_failed",
