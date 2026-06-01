@@ -17,7 +17,8 @@ import subprocess
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Generator
 
@@ -72,6 +73,7 @@ class CommitMeta:
     author: str
     message: str
     parent_sha: str | None
+    committed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __getitem__(self, key: str) -> Any:
         return getattr(self, key)
@@ -386,11 +388,13 @@ class GitService:
             count = 0
             while commit and count < limit:
                 parent = str(commit.parent_ids[0]) if commit.parent_ids else None
+                committed_at = datetime.fromtimestamp(commit.commit_time, tz=timezone.utc)
                 entries.append(CommitMeta(
                     sha=str(commit.id),
                     author=f"{commit.author.name} <{commit.author.email}>",
                     message=commit.message.strip(),
                     parent_sha=parent,
+                    committed_at=committed_at,
                 ))
                 count += 1
                 if commit.parent_ids:
@@ -403,7 +407,7 @@ class GitService:
                 proc = self._git_cli(
                     "log", "-z",
                     f"--max-count={limit}",
-                    "--format=%H%x00%an <%ae>%x00%s%x00%P",
+                    "--format=%H%x00%an <%ae>%x00%s%x00%P%x00%cI",
                     branch,
                 )
             except GitServiceError as exc:
@@ -416,34 +420,40 @@ class GitService:
             # With -z, git uses NUL as the inter-record terminator and we use
             # %x00 as the intra-record field separator.  Splitting the entire
             # output on NUL gives a flat list: [sha, author, subject, parents,
-            # sha, author, subject, parents, ...] with a trailing empty string
-            # from the final terminator.  NUL bytes are forbidden in git commit
-            # messages by git itself, so this delimiter cannot collide.
+            # date, sha, ...] with a trailing empty string from the final
+            # terminator.  NUL bytes are forbidden in git commit messages by
+            # git itself, so this delimiter cannot collide.
             fields = raw.split("\x00")
             # Drop trailing empty entry produced by the NUL terminator.
             if fields and fields[-1] == "":
                 fields = fields[:-1]
             if not fields:
                 return []
-            if len(fields) % 4 != 0:
+            if len(fields) % 5 != 0:
                 raise GitServiceError(
                     f"CLI log output has {len(fields)} NUL-delimited fields; "
-                    "expected a multiple of 4 (sha, author, subject, parents). "
+                    "expected a multiple of 5 (sha, author, subject, parents, date). "
                     "Possible git version incompatibility."
                 )
             entries = []
-            for i in range(0, len(fields), 4):
+            for i in range(0, len(fields), 5):
                 sha = fields[i]
                 author_line = fields[i + 1]
                 msg = fields[i + 2]
                 parents_raw = fields[i + 3]
+                date_str = fields[i + 4]
                 # First parent = integration target for merge commits.
                 parent = parents_raw.split()[0] if parents_raw.strip() else None
+                try:
+                    committed_at = datetime.fromisoformat(date_str)
+                except ValueError:
+                    committed_at = datetime.now(timezone.utc)
                 entries.append(CommitMeta(
                     sha=sha,
                     author=author_line,
                     message=msg,
                     parent_sha=parent,
+                    committed_at=committed_at,
                 ))
             return entries
 

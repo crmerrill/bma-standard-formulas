@@ -1,10 +1,13 @@
 """HTTP API for Structuring Studio + structured deal run/solve workflows."""
 from __future__ import annotations
 
+import json
 import threading
+from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from bma_standard_formulas.deals.schemas.input import DealRunInput
@@ -32,6 +35,7 @@ from ...orchestrator.deals.deal_solver_service import (
     request_solver_cancel,
 )
 from ...orchestrator.deals.deal_store import (
+    deal_dir,
     list_pool_snapshots,
     list_studio_deals,
     load_deal,
@@ -43,6 +47,7 @@ from ...orchestrator.deals.deal_store import (
     save_solver_preset,
     save_studio_ir,
 )
+from ...orchestrator.deals.git_service import GitService, GitServiceError, InvalidBranchNameError
 from ...orchestrator.deals.solver_catalog import build_solver_catalog
 from ...orchestrator.deals.solver_templates import (
     all_templates,
@@ -866,3 +871,290 @@ async def preview_deal_run_artifact(
     if manifest.get("deal_id") != deal_id:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found for deal {deal_id}")
     return get_cashflow_preview(run_id, artifact, max_rows=max_rows)
+
+
+# ---------------------------------------------------------------------------
+# Git version-control HTTP API (irvc-4-http-api)
+# ---------------------------------------------------------------------------
+
+
+class CommitRequest(BaseModel):
+    author: str
+    message: str
+    parent_sha: str
+    force: bool = False
+
+
+class CommitResponse(BaseModel):
+    sha: str
+
+
+class GitBranchInfo(BaseModel):
+    name: str
+    tip_sha: str
+    created_at: datetime
+
+
+class GitBranchListResponse(BaseModel):
+    branches: list[GitBranchInfo]
+
+
+class BranchCreateRequest(BaseModel):
+    name: str
+    from_sha: str
+
+
+class GitCommitMeta(BaseModel):
+    sha: str
+    author: str
+    message: str
+    committed_at: datetime
+    parent_sha: str | None
+
+
+class GitLogResponse(BaseModel):
+    commits: list[GitCommitMeta]
+
+
+class StructuralDiffEntry(BaseModel):
+    path: str
+    change: Literal["added", "removed", "modified"]
+    a_value: Any | None = None
+    b_value: Any | None = None
+
+
+class GitDiffResponse(BaseModel):
+    structural_diff: list[StructuralDiffEntry]
+
+
+class GitMergeRequest(BaseModel):
+    branch: str
+    into: str = "main"
+
+
+class MergeConflictPayload(BaseModel):
+    code: str
+    severity: str
+    path: str
+    message: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class GitMergeResult(BaseModel):
+    status: Literal["success", "conflict"]
+    sha: str | None = None
+    diagnostic: MergeConflictPayload | None = None
+
+
+class MergeProgressEvent(BaseModel):
+    event_type: Literal["merge_started", "entity_merged", "merge_complete", "merge_failed"]
+    progress: float
+    current_entity: str | None = None
+    total_entities: int = 0
+    sha: str | None = None
+    diagnostic: dict[str, Any] | None = None
+
+
+def _flatten_diff(
+    a: Any,
+    b: Any,
+    prefix: str = "",
+) -> list[dict[str, Any]]:
+    """Recursively compute a flat list of diff entries between two values."""
+    entries: list[dict[str, Any]] = []
+    if isinstance(a, dict) and isinstance(b, dict):
+        for key in sorted(set(a) | set(b)):
+            child = f"{prefix}.{key}" if prefix else key
+            if key not in a:
+                entries.append({"path": child, "change": "added", "a_value": None, "b_value": b[key]})
+            elif key not in b:
+                entries.append({"path": child, "change": "removed", "a_value": a[key], "b_value": None})
+            else:
+                entries.extend(_flatten_diff(a[key], b[key], prefix=child))
+    elif a != b:
+        entries.append({"path": prefix, "change": "modified", "a_value": a, "b_value": b})
+    return entries
+
+
+@router.post("/deals/{deal_id}/commit", response_model=CommitResponse)
+def commit_deal_endpoint(deal_id: str, body: CommitRequest) -> CommitResponse:
+    service = GitService(repo_path=deal_dir(deal_id))
+    head_commits = service.log(branch="main", limit=1)
+    head_sha = head_commits[0].sha if head_commits else None
+
+    if not body.force and head_sha != body.parent_sha:
+        # FUTURE: collaboration — replace last-writer-wins with merge UI
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "STALE_PARENT_SHA", "head_sha": head_sha},
+        )
+
+    current_payload = service.show(head_sha, "deal.json") if head_sha else b"{}"
+    try:
+        sha = service.commit_deal(
+            current_payload,
+            author=body.author,
+            message=body.message,
+            parent_sha=head_sha,
+        )
+    except GitServiceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return CommitResponse(sha=sha)
+
+
+@router.get("/deals/{deal_id}/branches", response_model=GitBranchListResponse)
+def list_branches(deal_id: str) -> GitBranchListResponse:
+    service = GitService(repo_path=deal_dir(deal_id))
+    try:
+        raw_branches = service.branch_list()
+    except GitServiceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    api_branches: list[GitBranchInfo] = []
+    for b in raw_branches:
+        commits = service.log(branch=b.name, limit=1)
+        api_branches.append(GitBranchInfo(
+            name=b.name,
+            tip_sha=b.tip_sha,
+            created_at=commits[0].committed_at if commits else datetime.now(timezone.utc),
+        ))
+    return GitBranchListResponse(branches=api_branches)
+
+
+@router.post("/deals/{deal_id}/branches", response_model=GitBranchInfo, status_code=201)
+def create_branch(deal_id: str, body: BranchCreateRequest) -> GitBranchInfo:
+    service = GitService(repo_path=deal_dir(deal_id))
+    try:
+        service.branch_create(body.name, from_sha=body.from_sha)
+    except InvalidBranchNameError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GitServiceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    commits = service.log(branch=body.name, limit=1)
+    return GitBranchInfo(
+        name=body.name,
+        tip_sha=body.from_sha,
+        created_at=commits[0].committed_at if commits else datetime.now(timezone.utc),
+    )
+
+
+@router.delete("/deals/{deal_id}/branches/{name:path}", status_code=204)
+def delete_branch(deal_id: str, name: str) -> Response:
+    service = GitService(repo_path=deal_dir(deal_id))
+    try:
+        service.branch_delete(name)
+    except InvalidBranchNameError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GitServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(status_code=204)
+
+
+@router.post("/deals/{deal_id}/merge", response_model=GitMergeResult)
+def merge_endpoint(deal_id: str, body: GitMergeRequest) -> GitMergeResult:
+    service = GitService(repo_path=deal_dir(deal_id))
+    try:
+        result = service.merge(body.branch, into=body.into)
+    except InvalidBranchNameError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GitServiceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if isinstance(result, str):
+        return GitMergeResult(status="success", sha=result)
+    return GitMergeResult(
+        status="conflict",
+        diagnostic=MergeConflictPayload(
+            code=result.code,
+            severity=str(result.severity),
+            path=result.path,
+            message=result.message,
+            payload=result.payload,
+        ),
+    )
+
+
+@router.get("/deals/{deal_id}/diff", response_model=GitDiffResponse)
+def diff_endpoint(deal_id: str, a: str, b: str) -> GitDiffResponse:
+    service = GitService(repo_path=deal_dir(deal_id))
+    try:
+        a_bytes = service.show(a, "deal.json")
+        b_bytes = service.show(b, "deal.json")
+    except GitServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    a_payload = json.loads(a_bytes)
+    b_payload = json.loads(b_bytes)
+    raw_entries = _flatten_diff(a_payload, b_payload)
+    entries = [StructuralDiffEntry(**e) for e in raw_entries]
+    return GitDiffResponse(structural_diff=entries)
+
+
+@router.get("/deals/{deal_id}/log", response_model=GitLogResponse)
+def log_endpoint(
+    deal_id: str,
+    branch: str = "main",
+    limit: int = 50,
+) -> GitLogResponse:
+    service = GitService(repo_path=deal_dir(deal_id))
+    try:
+        git_commits = service.log(branch=branch, limit=limit)
+    except GitServiceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    api_commits = [
+        GitCommitMeta(
+            sha=c.sha,
+            author=c.author,
+            message=c.message,
+            committed_at=c.committed_at,
+            parent_sha=c.parent_sha,
+        )
+        for c in git_commits
+    ]
+    return GitLogResponse(commits=api_commits)
+
+
+@router.get("/deals/{deal_id}/show")
+def show_endpoint(deal_id: str, sha: str, path: str) -> Response:
+    service = GitService(repo_path=deal_dir(deal_id))
+    try:
+        content = service.show(sha, path)
+    except GitServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(content=content, media_type="application/octet-stream")
+
+
+@router.get("/deals/{deal_id}/merge/stream")
+def merge_stream_endpoint(deal_id: str, branch: str) -> StreamingResponse:
+    """SSE endpoint streaming merge progress events terminating in merge_complete or merge_failed."""
+    service = GitService(repo_path=deal_dir(deal_id))
+
+    def event_stream():  # type: ignore[return]
+        start_event = MergeProgressEvent(
+            event_type="merge_started",
+            progress=0.0,
+            total_entities=1,
+        )
+        yield f"data: {start_event.model_dump_json()}\n\n"
+        try:
+            result = service.merge(branch, into="main")
+            if isinstance(result, str):
+                terminal = MergeProgressEvent(
+                    event_type="merge_complete",
+                    progress=1.0,
+                    total_entities=1,
+                    sha=result,
+                )
+            else:
+                terminal = MergeProgressEvent(
+                    event_type="merge_failed",
+                    progress=1.0,
+                    total_entities=1,
+                    diagnostic=result.payload,
+                )
+        except Exception:
+            terminal = MergeProgressEvent(
+                event_type="merge_failed",
+                progress=1.0,
+                total_entities=1,
+            )
+        yield f"data: {terminal.model_dump_json()}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
