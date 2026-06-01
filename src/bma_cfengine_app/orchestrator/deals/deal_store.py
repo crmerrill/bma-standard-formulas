@@ -11,9 +11,13 @@ transition belongs to studio-document-persistence-and-migration.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
+import os
 import subprocess
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +61,41 @@ def pool_dir(pool_id: str) -> Path:
 
 def _compute_checksum(deal_json: str) -> str:
     return hashlib.sha256(deal_json.encode()).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Migration lock (M2 fix: wrap entire first-open migration atomically)
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _migration_lock(deal_dir: Path, timeout_s: float = 30.0):  # type: ignore[return]
+    """Per-deal-dir advisory lock that wraps the entire migration (init + commits +
+    manifest collapse). Bounded retry; raises TimeoutError if not acquired within timeout.
+    """
+    deal_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = deal_dir / ".bma_migration.lock"
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+    deadline = time.monotonic() + timeout_s
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except (BlockingIOError, OSError):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"MIGRATION_LOCK_TIMEOUT: could not acquire migration lock at "
+                        f"{lock_path} within {timeout_s}s"
+                    )
+                time.sleep(0.05)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
 
 
 # ---------------------------------------------------------------------------
@@ -113,32 +152,42 @@ def _migrate_legacy_to_git(deal_id: str) -> None:
     Creates one commit per legacy version in ascending order. Each payload is
     passed through migrate_deal_payload before landing in the commit so the
     canonical history starts at schema-current.
+
+    The entire sequence (git init + commits + manifest collapse) is wrapped in
+    a per-deal-dir advisory lock so concurrent first-opens serialize cleanly
+    and produce exactly one migration commit chain.
     """
     d = deal_dir(deal_id)
     if (d / ".git").exists():
-        return  # idempotent: already migrated
+        return  # fast path: no lock needed
 
-    legacy_versions = _list_legacy_versions(d)
-    if not legacy_versions:
-        return
+    with _migration_lock(d):
+        # Double-check inside the lock (another process may have migrated while
+        # we were waiting).
+        if (d / ".git").exists():
+            return
 
-    _git_init_main(d)
-    service = GitService(repo_path=d)
-    parent_sha: str | None = None
+        legacy_versions = _list_legacy_versions(d)
+        if not legacy_versions:
+            return
 
-    for v in legacy_versions:
-        legacy_path = d / f"v{v}.json"
-        legacy_payload = json.loads(legacy_path.read_text(encoding="utf-8"))
-        canonical_payload = migrate_deal_payload(legacy_payload)
-        canonical_bytes = json.dumps(canonical_payload, indent=2, sort_keys=True).encode("utf-8")
-        parent_sha = service.commit_deal(
-            canonical_bytes,
-            author="system:migration <migration@bma>",
-            message=f"Migrate v{v}",
-            parent_sha=parent_sha,
-        )
+        _git_init_main(d)
+        service = GitService(repo_path=d)
+        parent_sha: str | None = None
 
-    _collapse_manifest_post_migration(deal_id)
+        for v in legacy_versions:
+            legacy_path = d / f"v{v}.json"
+            legacy_payload = json.loads(legacy_path.read_text(encoding="utf-8"))
+            canonical_payload = migrate_deal_payload(legacy_payload)
+            canonical_bytes = json.dumps(canonical_payload, indent=2, sort_keys=True).encode("utf-8")
+            parent_sha = service.commit_deal(
+                canonical_bytes,
+                author="system:migration <migration@bma>",
+                message=f"Migrate v{v}",
+                parent_sha=parent_sha,
+            )
+
+        _collapse_manifest_post_migration(deal_id)
 
 
 def _collapse_manifest_post_migration(deal_id: str) -> None:
@@ -176,25 +225,36 @@ def _collapse_manifest_post_migration(deal_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_version_to_sha(service: GitService, version: int | None) -> str | None:
+    """Map a 1-indexed version number to the corresponding commit SHA.
+
+    Version 1 = oldest commit (the bottom of the linear chain).
+    Version N = the Nth commit from the bottom.
+    Version None = HEAD (latest commit).
+
+    Returns None if the repo has no commits or the requested version is out
+    of range.
+    """
+    commits = service.log(branch="main", limit=10000)  # newest-first
+    if not commits:
+        return None
+    if version is None:
+        return commits[0].sha  # HEAD
+    if version < 1 or version > len(commits):
+        return None
+    # commits is newest-first; version is 1-indexed from oldest.
+    # version=1 -> commits[-1] (oldest); version=len -> commits[0] (newest).
+    return commits[len(commits) - version].sha
+
+
 def _load_from_git(deal_id: str, version: int | None = None) -> DealDefinition | None:
     """Load a deal definition from the git-backed repo."""
     d = deal_dir(deal_id)
     service = GitService(repo_path=d)
 
-    if version is None:
-        commits = service.log(branch="main", limit=1)
-        if not commits:
-            return None
-        sha = commits[0].sha
-    else:
-        all_commits = service.log(branch="main", limit=1000)
-        match = next(
-            (c.sha for c in all_commits if c.message.strip() == f"Migrate v{version}"),
-            None,
-        )
-        if match is None:
-            return None
-        sha = match
+    sha = _resolve_version_to_sha(service, version)
+    if sha is None:
+        return None
 
     raw = service.show(sha, "deal.json")
     payload = json.loads(raw)

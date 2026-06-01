@@ -128,6 +128,49 @@ def test_save_load_routes_to_git_and_applies_schema_migration_first(
     assert loaded.model_dump(mode="json") == new_deal.model_dump(mode="json")
 
 
+def build_minimal_deal_definition(*, deal_name: str) -> DealDefinition:
+    return DealDefinition.model_validate(
+        _build_deal_payload(deal_name=deal_name, coupon=5.0)
+    )
+
+
+def test_load_deal_versioned_lookup_works_for_save_commits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M1 (R1 fix): load_deal(deal_id, version=N) must work for normal saves,
+    not just migration commits."""
+    monkeypatch.setattr(deal_store, "_DEALS_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(deal_store, "_POOLS_DIR", tmp_path / "pools", raising=False)
+
+    deal_id = "deal_v_lookup_test"
+    deal1 = build_minimal_deal_definition(deal_name="v1")
+    deal2 = build_minimal_deal_definition(deal_name="v2")
+    deal3 = build_minimal_deal_definition(deal_name="v3")
+
+    save_result_1 = deal_store.save_deal(deal_id, deal1)  # version 1
+    save_result_2 = deal_store.save_deal(deal_id, deal2)  # version 2
+    save_result_3 = deal_store.save_deal(deal_id, deal3)  # version 3
+
+    # Round-trip each version
+    loaded_v1 = deal_store.load_deal(deal_id, version=save_result_1["version"])
+    assert loaded_v1 is not None
+    assert loaded_v1.deal_name == "v1"
+
+    loaded_v2 = deal_store.load_deal(deal_id, version=save_result_2["version"])
+    assert loaded_v2 is not None
+    assert loaded_v2.deal_name == "v2"
+
+    loaded_v3 = deal_store.load_deal(deal_id, version=save_result_3["version"])
+    assert loaded_v3 is not None
+    assert loaded_v3.deal_name == "v3"
+
+    # version=None returns HEAD (latest = v3)
+    loaded_head = deal_store.load_deal(deal_id, version=None)
+    assert loaded_head is not None
+    assert loaded_head.deal_name == "v3"
+
+
 def test_schema_migration_runs_before_pydantic_validation_negative_case(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

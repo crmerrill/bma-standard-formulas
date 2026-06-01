@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -203,6 +204,32 @@ def test_migration_is_idempotent(
     assert commit_count_after_second_open == commit_count_after_first_open
 
 
+def _seed_legacy_versions(deal_path: Path, count: int) -> None:
+    """Write count legacy v{N}.json files and a manifest into deal_path."""
+    created_at = "2026-01-01T00:00:00+00:00"
+    payloads = [
+        _build_deal_payload(deal_name=f"legacy-v{i}", coupon=5.0 + i * 0.1)
+        for i in range(1, count + 1)
+    ]
+    for idx, payload in enumerate(payloads, start=1):
+        (deal_path / f"v{idx}.json").write_text(
+            json.dumps(payload, indent=2),
+            encoding="utf-8",
+        )
+    manifest: dict[str, Any] = {
+        "deal_id": deal_path.name,
+        "deal_name": payloads[-1]["deal_name"],
+        "created_at": created_at,
+        "current_version": count,
+        "versions": [
+            {"version": idx, "schema_version": p["schema_version"], "created_at": created_at}
+            for idx, p in enumerate(payloads, start=1)
+        ],
+        "updated_at": created_at,
+    }
+    (deal_path / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
 def test_manifest_keys_match_allowed_set(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -237,3 +264,53 @@ def test_manifest_keys_match_allowed_set(
     assert "current_version" not in post_migration_manifest
     assert "versions" not in post_migration_manifest
     assert "solver_presets_library" not in post_migration_manifest
+
+
+def test_concurrent_migration_attempts_do_not_corrupt_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M2 (R1 fix): two threads attempting to migrate the same legacy deal
+    must serialize via the migration lock; only ONE migration commit chain results.
+    """
+    monkeypatch.setattr(deal_store, "_DEALS_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(deal_store, "_POOLS_DIR", tmp_path / "pools", raising=False)
+
+    deal_id = "deal_concurrent_migrate"
+    d = tmp_path / deal_id
+    d.mkdir(parents=True, exist_ok=True)
+    _seed_legacy_versions(d, 3)  # v1, v2, v3 plus legacy manifest
+
+    barrier = threading.Barrier(2)
+    results: dict[int, tuple[str, Any]] = {}
+
+    def attempt_load(thread_id: int) -> None:
+        barrier.wait()  # synchronize start
+        try:
+            result = deal_store.load_deal(deal_id, version=None)
+            results[thread_id] = ("ok", result)
+        except Exception as exc:  # noqa: BLE001
+            results[thread_id] = ("err", exc)
+
+    t1 = threading.Thread(target=attempt_load, args=(1,))
+    t2 = threading.Thread(target=attempt_load, args=(2,))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    # Both threads must succeed
+    assert results[1][0] == "ok", f"Thread 1 failed: {results[1][1]}"
+    assert results[2][0] == "ok", f"Thread 2 failed: {results[2][1]}"
+    assert results[1][1] is not None
+    assert results[2][1] is not None
+
+    # Exactly 3 migration commits must exist (not 6)
+    commit_count = subprocess.run(
+        ["git", "rev-list", "--count", "main"],
+        cwd=d,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert int(commit_count.stdout.strip()) == 3
