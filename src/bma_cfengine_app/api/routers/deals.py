@@ -881,7 +881,7 @@ async def preview_deal_run_artifact(
 class CommitRequest(BaseModel):
     author: str
     message: str
-    parent_sha: str
+    parent_sha: str | None = None
     force: bool = False
 
 
@@ -961,8 +961,10 @@ def _flatten_diff(
     prefix: str = "",
 ) -> list[dict[str, Any]]:
     """Recursively compute a flat list of diff entries between two values."""
-    entries: list[dict[str, Any]] = []
+    if a == b:
+        return []
     if isinstance(a, dict) and isinstance(b, dict):
+        entries: list[dict[str, Any]] = []
         for key in sorted(set(a) | set(b)):
             child = f"{prefix}.{key}" if prefix else key
             if key not in a:
@@ -971,9 +973,20 @@ def _flatten_diff(
                 entries.append({"path": child, "change": "removed", "a_value": a[key], "b_value": None})
             else:
                 entries.extend(_flatten_diff(a[key], b[key], prefix=child))
-    elif a != b:
-        entries.append({"path": prefix, "change": "modified", "a_value": a, "b_value": b})
-    return entries
+        return entries
+    if isinstance(a, list) and isinstance(b, list):
+        entries = []
+        for i in range(max(len(a), len(b))):
+            child = f"{prefix}[{i}]"
+            a_item = a[i] if i < len(a) else None
+            b_item = b[i] if i < len(b) else None
+            entries.extend(_flatten_diff(a_item, b_item, prefix=child))
+        return entries
+    if a is None:
+        return [{"path": prefix, "change": "added", "a_value": None, "b_value": b}]
+    if b is None:
+        return [{"path": prefix, "change": "removed", "a_value": a, "b_value": None}]
+    return [{"path": prefix, "change": "modified", "a_value": a, "b_value": b}]
 
 
 @router.post("/deals/{deal_id}/commit", response_model=CommitResponse)
@@ -1045,6 +1058,11 @@ def delete_branch(deal_id: str, name: str) -> Response:
     except InvalidBranchNameError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except GitServiceError as exc:
+        if "PROTECTED_BRANCH" in str(exc):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "PROTECTED_BRANCH", "message": str(exc)},
+            ) from exc
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return Response(status_code=204)
 
@@ -1147,13 +1165,20 @@ def merge_stream_endpoint(deal_id: str, branch: str) -> StreamingResponse:
                     event_type="merge_failed",
                     progress=1.0,
                     total_entities=1,
-                    diagnostic=result.payload,
+                    diagnostic={
+                        "code": result.code,
+                        "severity": str(result.severity),
+                        "path": result.path,
+                        "message": result.message,
+                        "payload": result.payload,
+                    },
                 )
-        except Exception:
+        except Exception as exc:
             terminal = MergeProgressEvent(
                 event_type="merge_failed",
                 progress=1.0,
                 total_entities=1,
+                diagnostic={"code": "MERGE_INTERNAL_ERROR", "message": str(exc)},
             )
         yield f"data: {terminal.model_dump_json()}\n\n"
 

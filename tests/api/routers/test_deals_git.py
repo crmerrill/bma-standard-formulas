@@ -309,3 +309,164 @@ def test_merge_sse_telemetry_yields_progress_events_with_terminal_close(
     if terminal_event.event_type == "merge_complete":
         assert terminal_event.sha is not None
         assert _SHA_RE.fullmatch(terminal_event.sha)
+
+
+# ---------------------------------------------------------------------------
+# R1 regression tests (irvc-4-fix-pass)
+# ---------------------------------------------------------------------------
+
+
+def test_branch_delete_main_is_rejected_with_409(
+    client: TestClient, deal_id: str
+) -> None:
+    """C1: DELETE /branches/main returns 409 with PROTECTED_BRANCH code."""
+    response = client.delete(f"/api/deals/{deal_id}/branches/main")
+    assert response.status_code == 409
+    body = response.json()
+    assert body.get("detail", {}).get("code") == "PROTECTED_BRANCH"
+
+
+def test_commit_endpoint_accepts_null_parent_sha_on_brand_new_deal(
+    client: TestClient,
+) -> None:
+    """M1: null parent_sha is accepted when the deal repo has no commits yet."""
+    import subprocess
+
+    deal_identifier = "deal_brand_new"
+    repo_path = deal_store.deal_dir(deal_identifier)
+    subprocess.run(["git", "init", str(repo_path)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo_path), "symbolic-ref", "HEAD", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+    )
+
+    response = client.post(
+        f"/api/deals/{deal_identifier}/commit",
+        json={
+            "author": "Tester <tester@example.com>",
+            "message": "initial commit on brand-new deal",
+            "parent_sha": None,
+            "force": False,
+        },
+    )
+    assert response.status_code in {200, 201}
+    body = response.json()
+    assert _SHA_RE.fullmatch(body["sha"]), f"Invalid commit SHA: {body['sha']!r}"
+
+
+def test_commit_endpoint_returns_409_on_null_parent_sha_when_head_exists(
+    client: TestClient, deal_id: str
+) -> None:
+    """M1: null parent_sha conflicts with an existing HEAD commit, returning 409."""
+    response = client.post(
+        f"/api/deals/{deal_id}/commit",
+        json={
+            "author": "Tester <tester@example.com>",
+            "message": "should be rejected",
+            "parent_sha": None,
+            "force": False,
+        },
+    )
+    assert response.status_code == 409
+    body = response.json()
+    assert body.get("detail", {}).get("code") == "STALE_PARENT_SHA"
+
+
+def test_merge_stream_emits_diagnostic_on_typed_conflict(
+    client: TestClient, deal_id: str
+) -> None:
+    """M2: SSE merge_failed event carries full DiagnosticPayload shape on typed conflict."""
+    import subprocess
+    from typing import Any
+
+    service = _service_for(deal_id)
+    repo_path = deal_store.deal_dir(deal_id)
+    author = "Tester <tester@example.com>"
+
+    history = _main_history(deal_id, limit=10)
+    assert len(history) >= 2, "Seed data must create at least two commits"
+    # history is newest-first; oldest commit is the ancestor
+    base_sha = history[-1]
+    our_sha = history[0]
+
+    # Create branch from ancestor (ours = main at our_sha, ancestor = base_sha)
+    service.branch_create("what-if/sse-conflict", from_sha=base_sha)
+
+    # Theirs: coupon=99.0 from the same ancestor; since main != base_sha,
+    # commit_deal goes to detached HEAD, leaving main at our_sha.
+    their_payload = _build_minimal_deal_definition(deal_name="git-api-initial", coupon=99.0)
+    their_sha = service.commit_deal(
+        their_payload.model_dump(mode="json"),
+        author=author,
+        message="theirs: coupon=99.0 (conflict branch)",
+        parent_sha=base_sha,
+    )
+    subprocess.run(
+        ["git", "branch", "-f", "what-if/sse-conflict", their_sha],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    # Restore main (commit_deal may have moved HEAD via set_head)
+    subprocess.run(
+        ["git", "checkout", "main"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    # Sanity: ensure main is still at our_sha
+    subprocess.run(
+        ["git", "reset", "--hard", our_sha],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+
+    raw_events: list[dict[str, Any]] = []
+    with client.stream(
+        "GET",
+        f"/api/deals/{deal_id}/merge/stream",
+        params={"branch": "what-if/sse-conflict"},
+        timeout=10.0,
+    ) as response:
+        assert response.status_code == 200
+        for line in response.iter_lines():
+            payload = _extract_sse_data(line)
+            if payload is None:
+                continue
+            raw_events.append(payload)
+
+    assert raw_events, "Expected at least one SSE event"
+    terminal = raw_events[-1]
+    assert terminal["event_type"] == "merge_failed", (
+        f"Expected merge_failed terminal event, got {terminal['event_type']!r}"
+    )
+    diag = terminal.get("diagnostic")
+    assert diag is not None, "merge_failed event must carry a 'diagnostic' key"
+    assert diag.get("code") == "MERGE_CONFLICT", f"Expected MERGE_CONFLICT, got {diag.get('code')!r}"
+    assert "severity" in diag, "diagnostic must include 'severity'"
+    assert "path" in diag, "diagnostic must include 'path'"
+    assert "message" in diag, "diagnostic must include 'message'"
+
+
+def test_lww_future_collaboration_marker_present_in_router() -> None:
+    """m2/AC 4: The verbatim Python FUTURE marker must exist in the router.
+
+    The TypeScript marker is deferred until the frontend conflict UI ticket opens.
+    """
+    from pathlib import Path
+
+    router_path = (
+        Path(__file__).resolve().parents[3]
+        / "src"
+        / "bma_cfengine_app"
+        / "api"
+        / "routers"
+        / "deals.py"
+    )
+    content = router_path.read_text(encoding="utf-8")
+    assert "# FUTURE: collaboration — replace last-writer-wins with merge UI" in content, (
+        "Python FUTURE marker missing from router; "
+        "add: # FUTURE: collaboration — replace last-writer-wins with merge UI"
+    )

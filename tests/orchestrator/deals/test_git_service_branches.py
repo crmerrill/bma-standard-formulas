@@ -50,3 +50,14 @@ def test_branch_name_validation_rejects_path_traversal_and_invalid_slugs(
     with pytest.raises(Exception) as exc:
         service._validate_branch_name(name)
     assert "INVALID_BRANCH_NAME" in str(exc.value)
+
+
+def test_branch_delete_main_raises_protected_branch_error(tmp_path: Path) -> None:
+    """C1: branch_delete('main') raises GitServiceError with PROTECTED_BRANCH
+    before touching the git backend, regardless of whether the repo exists."""
+    from bma_cfengine_app.orchestrator.deals.git_service import GitService, GitServiceError
+
+    service = GitService(repo_path=tmp_path)
+    with pytest.raises(GitServiceError) as exc_info:
+        service.branch_delete("main")
+    assert "PROTECTED_BRANCH" in str(exc_info.value)

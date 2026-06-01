@@ -338,6 +338,10 @@ class GitService:
 
     @_wrap_pygit2
     def branch_delete(self, name: str) -> None:
+        if name == "main":
+            raise GitServiceError(
+                "PROTECTED_BRANCH: refusing to delete the primary branch 'main'"
+            )
         self._validate_branch_name(name)
         with self._write_lock():
             if self._use_pygit2:
