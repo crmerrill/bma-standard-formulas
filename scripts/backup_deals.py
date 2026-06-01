@@ -16,21 +16,29 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bma_cfengine_app.orchestrator.deals import deal_store  # noqa: E402
-from bma_cfengine_app.orchestrator.deals.deal_store import deal_dir  # noqa: E402
 
 
 def _backup_one_deal(deal_id: str, out_dir: Path) -> Path:
     """Create a self-contained git bundle for one deal."""
-    src = deal_dir(deal_id)
+    src = deal_store._DEALS_DIR / deal_id
+    if not src.exists() or not (src / ".git").exists():
+        raise FileNotFoundError(
+            f"deal {deal_id!r} does not exist or has no .git/ directory at {src}"
+        )
     out_dir.mkdir(parents=True, exist_ok=True)
     bundle_path = out_dir / f"deal_{deal_id}.bundle"
-    subprocess.run(
-        ["git", "bundle", "create", str(bundle_path), "--all"],
-        cwd=str(src),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        subprocess.run(
+            ["git", "bundle", "create", str(bundle_path), "--all"],
+            cwd=str(src),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"git bundle create failed for deal {deal_id!r}: {exc.stderr.strip()}"
+        ) from exc
     return bundle_path
 
 
@@ -66,10 +74,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
 
-    if args.deal:
-        path = _backup_one_deal(args.deal, args.out)
-    else:
-        path = _backup_tenant(args.tenant, args.out)
+    try:
+        if args.deal:
+            path = _backup_one_deal(args.deal, args.out)
+        else:
+            path = _backup_tenant(args.tenant, args.out)
+    except (FileNotFoundError, RuntimeError) as exc:
+        print(f"backup_deals: {exc}", file=sys.stderr)
+        return 1
     print(f"Created {path}")
     return 0
 

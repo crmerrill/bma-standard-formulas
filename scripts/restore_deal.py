@@ -15,9 +15,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
 def _find_latest_bundle(backups_dir: Path, deal_id: str) -> Path | None:
-    candidates = list(backups_dir.glob(f"deal_{deal_id}*.bundle"))
-    candidates += list(backups_dir.glob(f"*{deal_id}*.bundle"))
-    candidates = list(set(candidates))
+    """Locate the latest bundle for a specific deal.
+
+    Strict naming contract: only matches `deal_{deal_id}.bundle` and
+    `deal_{deal_id}_*.bundle` (the `_*` form reserves space for a future
+    timestamp suffix). Substring matching is intentionally NOT used —
+    `deal_abc.bundle` must not be a candidate when the user asks for
+    deal `bc`. R1 m1 (irvc-5b) closure.
+    """
+    candidates = set(backups_dir.glob(f"deal_{deal_id}.bundle"))
+    candidates |= set(backups_dir.glob(f"deal_{deal_id}_*.bundle"))
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)

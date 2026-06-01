@@ -254,3 +254,56 @@ def test_restore_cli_locates_latest_bundle_and_unbundles(
         event.get("event_type") == "restore_result" and event.get("outcome") == "success"
         for event in events
     )
+
+
+def test_backup_missing_deal_returns_clear_error(
+    redirected_deals_dir: Path,
+    scripts_import_path: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """R1 m1 (irvc-5b): backing up a non-existent / non-git deal must
+    fail with a clear stderr message and a non-zero exit code, not via a
+    raw subprocess.CalledProcessError traceback."""
+    import scripts.backup_deals as backup_deals
+
+    backups_dir = redirected_deals_dir / "backups_missing_deal"
+    rc = backup_deals.main(
+        ["--deal", "deal_does_not_exist", "--out", str(backups_dir)]
+    )
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "deal_does_not_exist" in captured.err
+    assert "does not exist" in captured.err or "no .git" in captured.err
+
+
+def test_restore_cli_does_not_match_substring_collisions(
+    redirected_deals_dir: Path,
+    scripts_import_path: None,
+) -> None:
+    """R1 M1 (irvc-5b): _find_latest_bundle must NOT match `deal_abc.bundle`
+    when restoring deal `bc`. The fix tightens the glob to exact
+    `deal_{deal_id}.bundle` plus reserved future `deal_{deal_id}_*.bundle`."""
+    import scripts.restore_deal as restore_cli
+
+    backups_dir = redirected_deals_dir / "collision_backups"
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    # Seed a bundle for a different deal whose ID contains "bc" as substring
+    (backups_dir / "deal_abc.bundle").write_bytes(b"# fake bundle for deal_abc")
+    # No bundle for "bc" exists
+    result = restore_cli._find_latest_bundle(backups_dir, "bc")
+    assert result is None, (
+        "Expected None (no bundle for 'bc'); substring match would have "
+        "incorrectly returned deal_abc.bundle."
+    )
+
+    # Sanity: an exact match still works
+    (backups_dir / "deal_bc.bundle").write_bytes(b"# fake bundle for deal_bc")
+    result = restore_cli._find_latest_bundle(backups_dir, "bc")
+    assert result is not None
+    assert result.name == "deal_bc.bundle"
+
+    # And the timestamp-suffix form also works
+    (backups_dir / "deal_bc_20260601_120000.bundle").write_bytes(b"# fake")
+    result = restore_cli._find_latest_bundle(backups_dir, "bc")
+    assert result is not None
+    assert result.name in {"deal_bc.bundle", "deal_bc_20260601_120000.bundle"}
