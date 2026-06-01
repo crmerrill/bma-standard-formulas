@@ -1,11 +1,19 @@
-"""Deal definition persistence — versioned JSON storage alongside run artifacts.
+"""Deal definition persistence — git-backed canonical storage with legacy migration.
 
-Follows the same filesystem layout pattern as run_store.py but for deal
-definitions (IR documents). Each deal gets a directory with versioned
-JSON snapshots and a manifest tracking the version history.
+Canonical deal persistence uses a GitService-backed git repository in each
+deal directory. On first open of a legacy deal (containing v{N}.json files),
+an idempotent migration runs: git init + one commit per legacy version with
+author "system:migration" in version order + manifest collapse.
+
+Studio IR snapshots (studio_v{N}.json) and solver presets continue to operate
+on flat files in the deal directory and are NOT routed through git; that
+transition belongs to studio-document-persistence-and-migration.
 """
+from __future__ import annotations
+
 import hashlib
 import json
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +23,7 @@ from bma_standard_formulas.deals.schemas.ir import DealDefinition
 from bma_standard_formulas.deals.schemas.migrations import migrate_deal_payload
 
 from ...storage.run_store import APP_HOME
+from .git_service import GitService
 
 _DEALS_DIR = APP_HOME / "deals"
 _POOLS_DIR = APP_HOME / "pools"
@@ -50,66 +59,234 @@ def _compute_checksum(deal_json: str) -> str:
     return hashlib.sha256(deal_json.encode()).hexdigest()[:16]
 
 
-def save_deal(
-    deal_id: str,
-    deal: DealDefinition,
-    version: int | None = None,
-) -> dict[str, Any]:
-    """Save a deal definition as a versioned JSON snapshot.
+# ---------------------------------------------------------------------------
+# Legacy migration helpers
+# ---------------------------------------------------------------------------
 
-    Returns manifest metadata for the saved version.
+
+def _has_legacy_snapshots(d: Path) -> bool:
+    """Return True if the deal directory contains any v{N}.json files."""
+    return any(
+        p
+        for p in d.iterdir()
+        if p.name.startswith("v") and p.name.endswith(".json") and p.stem[1:].isdigit()
+    )
+
+
+def _list_legacy_versions(d: Path) -> list[int]:
+    """Return sorted list of legacy version integers found in the deal directory."""
+    versions: list[int] = []
+    for p in d.iterdir():
+        if p.name.startswith("v") and p.name.endswith(".json") and p.stem[1:].isdigit():
+            versions.append(int(p.stem[1:]))
+    return sorted(versions)
+
+
+def _git_init_main(d: Path) -> None:
+    """Initialize a git repository with 'main' as the default branch."""
+    subprocess.run(["git", "init", str(d)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(d), "symbolic-ref", "HEAD", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _commit_count(deal_id: str) -> int:
+    """Return the total number of commits on main in the git-backed deal repo."""
+    d = deal_dir(deal_id)
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(d), "rev-list", "--count", "main"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return int(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        return 0
+
+
+def _migrate_legacy_to_git(deal_id: str) -> None:
+    """Idempotent: migrate legacy v{N}.json files into a linear git history.
+
+    Creates one commit per legacy version in ascending order. Each payload is
+    passed through migrate_deal_payload before landing in the commit so the
+    canonical history starts at schema-current.
     """
     d = deal_dir(deal_id)
-    manifest_path = d / "manifest.json"
+    if (d / ".git").exists():
+        return  # idempotent: already migrated
 
+    legacy_versions = _list_legacy_versions(d)
+    if not legacy_versions:
+        return
+
+    _git_init_main(d)
+    service = GitService(repo_path=d)
+    parent_sha: str | None = None
+
+    for v in legacy_versions:
+        legacy_path = d / f"v{v}.json"
+        legacy_payload = json.loads(legacy_path.read_text(encoding="utf-8"))
+        canonical_payload = migrate_deal_payload(legacy_payload)
+        canonical_bytes = json.dumps(canonical_payload, indent=2, sort_keys=True).encode("utf-8")
+        parent_sha = service.commit_deal(
+            canonical_bytes,
+            author="system:migration <migration@bma>",
+            message=f"Migrate v{v}",
+            parent_sha=parent_sha,
+        )
+
+    _collapse_manifest_post_migration(deal_id)
+
+
+def _collapse_manifest_post_migration(deal_id: str) -> None:
+    """Rewrite manifest.json to the AC-3 allowed field set after git migration."""
+    d = deal_dir(deal_id)
+    manifest_path = d / "manifest.json"
+    legacy: dict[str, Any] = (
+        json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    )
+
+    service = GitService(repo_path=d)
+    commits = service.log(branch="main", limit=1)
+    if commits:
+        raw = service.show(commits[0].sha, "deal.json")
+        final_payload: dict[str, Any] = json.loads(raw)
+    else:
+        final_payload = {}
+
+    new_manifest: dict[str, Any] = {
+        "deal_id": deal_id,
+        "deal_name": final_payload.get("deal_name") or legacy.get("deal_name", ""),
+        "asset_class": final_payload.get("asset_class") or legacy.get("asset_class"),
+        "schema_version_pin": final_payload.get("schema_version") or legacy.get("schema_version_pin"),
+        "created_at": legacy.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        # FUTURE: studio-document-persistence-and-migration — migrate these transitional fields out
+        "studio_current_version": legacy.get("studio_current_version", 0),
+        "studio_versions": legacy.get("studio_versions", []),
+    }
+    manifest_path.write_text(json.dumps(new_manifest, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Git-backed load helper
+# ---------------------------------------------------------------------------
+
+
+def _load_from_git(deal_id: str, version: int | None = None) -> DealDefinition | None:
+    """Load a deal definition from the git-backed repo."""
+    d = deal_dir(deal_id)
+    service = GitService(repo_path=d)
+
+    if version is None:
+        commits = service.log(branch="main", limit=1)
+        if not commits:
+            return None
+        sha = commits[0].sha
+    else:
+        all_commits = service.log(branch="main", limit=1000)
+        match = next(
+            (c.sha for c in all_commits if c.message.strip() == f"Migrate v{version}"),
+            None,
+        )
+        if match is None:
+            return None
+        sha = match
+
+    raw = service.show(sha, "deal.json")
+    payload = json.loads(raw)
+    payload = migrate_deal_payload(payload)
+    return DealDefinition.model_validate(payload)
+
+
+def _update_manifest_on_save(deal_id: str, deal: DealDefinition) -> None:
+    """Update manifest after a git-backed save; preserves all existing fields."""
+    d = deal_dir(deal_id)
+    manifest_path = d / "manifest.json"
     if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
-        current_version = manifest.get("current_version", 0)
+        manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
     else:
         manifest = {
             "deal_id": deal_id,
             "deal_name": deal.deal_name,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "current_version": 0,
-            "versions": [],
+            # FUTURE: studio-document-persistence-and-migration — migrate these transitional fields out
+            "studio_current_version": 0,
+            "studio_versions": [],
         }
-        current_version = 0
-
-    new_version = version if version is not None else current_version + 1
-    deal_json = deal.model_dump_json(indent=2)
-    checksum = _compute_checksum(deal_json)
-
-    version_file = d / f"v{new_version}.json"
-    version_file.write_text(deal_json)
-
-    version_entry = {
-        "version": new_version,
-        "schema_version": deal.schema_version,
-        "checksum": checksum,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    manifest["current_version"] = new_version
     manifest["deal_name"] = deal.deal_name
-    manifest["versions"].append(version_entry)
     manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+    manifest["schema_version_pin"] = deal.schema_version
     manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
 
-    return version_entry
+
+# ---------------------------------------------------------------------------
+# Public API: save_deal / load_deal
+# ---------------------------------------------------------------------------
 
 
-def load_deal(deal_id: str, version: int | None = None) -> DealDefinition:
-    """Load a deal definition by ID and optional version.
+def save_deal(
+    deal_id: str,
+    deal: DealDefinition,
+    version: int | None = None,
+) -> dict[str, Any]:
+    """Persist a deal definition via GitService.
 
-    If version is None, loads the latest version.
+    Returns a dict with the commit SHA and version count.
     """
+    d = deal_dir(deal_id)
+
+    if not (d / ".git").exists() and _has_legacy_snapshots(d):
+        _migrate_legacy_to_git(deal_id)
+
+    if not (d / ".git").exists():
+        _git_init_main(d)
+
+    service = GitService(repo_path=d)
+    head_commits = service.log(branch="main", limit=1)
+    parent_sha: str | None = head_commits[0].sha if head_commits else None
+
+    payload_bytes = deal.model_dump_json(indent=2).encode("utf-8")
+    new_sha = service.commit_deal(
+        payload_bytes,
+        author="system:user <user@bma>",
+        message=f"Save deal {deal.deal_name}",
+        parent_sha=parent_sha,
+    )
+
+    _update_manifest_on_save(deal_id, deal)
+    return {"sha": new_sha, "version": _commit_count(deal_id)}
+
+
+def load_deal(deal_id: str, version: int | None = None) -> DealDefinition | None:
+    """Load a deal definition; triggers legacy migration on first open.
+
+    Migration is idempotent: skipped if .git/ already exists.
+    Falls back to legacy flat-file behavior for deals without legacy snapshots.
+    """
+    d = deal_dir(deal_id)
+
+    if not (d / ".git").exists() and _has_legacy_snapshots(d):
+        _migrate_legacy_to_git(deal_id)
+
+    if (d / ".git").exists():
+        return _load_from_git(deal_id, version=version)
+
+    return _load_legacy(deal_id, version=version)
+
+
+def _load_legacy(deal_id: str, version: int | None = None) -> DealDefinition | None:
+    """Legacy flat-file load path for deals with no git repo and no legacy snapshots."""
     d = deal_dir(deal_id)
     manifest_path = d / "manifest.json"
 
     if not manifest_path.exists():
         raise FileNotFoundError(f"No deal found with ID {deal_id}")
 
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     target_version = version or manifest.get("current_version", 1)
 
     version_file = d / f"v{target_version}.json"
@@ -118,7 +295,7 @@ def load_deal(deal_id: str, version: int | None = None) -> DealDefinition:
             f"Version {target_version} not found for deal {deal_id}"
         )
 
-    payload = json.loads(version_file.read_text())
+    payload = json.loads(version_file.read_text(encoding="utf-8"))
     return DealDefinition.model_validate(migrate_deal_payload(payload))
 
 
@@ -127,7 +304,7 @@ def load_deal_manifest(deal_id: str) -> dict[str, Any]:
     manifest_path = d / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No deal found with ID {deal_id}")
-    return json.loads(manifest_path.read_text())
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
 def list_deals() -> list[dict[str, Any]]:
@@ -141,7 +318,7 @@ def list_deals() -> list[dict[str, Any]]:
         if not manifest_path.exists():
             continue
         try:
-            m = json.loads(manifest_path.read_text())
+            m = json.loads(manifest_path.read_text(encoding="utf-8"))
             results.append({
                 "deal_id": d.name,
                 "deal_name": m.get("deal_name", ""),
@@ -173,7 +350,7 @@ def save_studio_ir(
     now = datetime.now(timezone.utc).isoformat()
 
     if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     else:
         manifest = {"deal_id": did, "deal_name": deal_name, "created_at": now}
 
@@ -214,7 +391,7 @@ def load_studio_snapshot(deal_id: str, version: int | None = None) -> dict[str, 
     manifest_path = d / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No deal {deal_id!r}")
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     ver = version if version is not None else int(
         manifest.get("studio_current_version", 0) or 0
     )
@@ -223,7 +400,7 @@ def load_studio_snapshot(deal_id: str, version: int | None = None) -> dict[str, 
     path = d / f"studio_v{ver}.json"
     if not path.exists():
         raise FileNotFoundError(f"studio_v{ver}.json not found for {deal_id!r}")
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def list_studio_deals() -> list[dict[str, Any]]:
@@ -238,7 +415,7 @@ def list_studio_deals() -> list[dict[str, Any]]:
         if not mp.exists():
             continue
         try:
-            m = json.loads(mp.read_text())
+            m = json.loads(mp.read_text(encoding="utf-8"))
         except Exception:
             continue
         ver = int(m.get("studio_current_version", 0) or 0)
@@ -261,7 +438,7 @@ def list_solver_presets(deal_id: str) -> list[dict[str, Any]]:
     manifest_path = d / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No deal {deal_id!r}")
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     presets = manifest.get("solver_presets_library", [])
     if not isinstance(presets, list):
         return []
@@ -278,7 +455,7 @@ def save_solver_preset(
     manifest_path = d / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No deal {deal_id!r}")
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     now = datetime.now(timezone.utc).isoformat()
     presets = manifest.get("solver_presets_library", [])
     if not isinstance(presets, list):
@@ -325,7 +502,7 @@ def save_pool_snapshot(
     now = datetime.now(timezone.utc).isoformat()
 
     if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     else:
         manifest = {"pool_id": pid, "pool_name": pool_name, "created_at": now}
 
@@ -354,14 +531,14 @@ def load_pool_snapshot(pool_id: str, version: int | None = None) -> dict[str, An
     manifest_path = d / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No pool {pool_id!r}")
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     ver = version if version is not None else int(manifest.get("current_version", 0) or 0)
     if ver < 1:
         raise FileNotFoundError(f"No versions found for pool {pool_id!r}")
     path = d / f"v{ver}.json"
     if not path.exists():
         raise FileNotFoundError(f"v{ver}.json not found for pool {pool_id!r}")
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def list_pool_snapshots(search: str | None = None) -> list[dict[str, Any]]:
@@ -377,7 +554,7 @@ def list_pool_snapshots(search: str | None = None) -> list[dict[str, Any]]:
         if not mp.exists():
             continue
         try:
-            m = json.loads(mp.read_text())
+            m = json.loads(mp.read_text(encoding="utf-8"))
         except Exception:
             continue
         row = {
