@@ -56,6 +56,14 @@ class InvalidBranchNameError(GitServiceError):
         super().__init__(f"INVALID_BRANCH_NAME: {name!r}")
 
 
+class StaleParentShaError(GitServiceError):
+    """Raised when parent_sha does not match the target branch's current tip."""
+
+    def __init__(self, head_sha: str | None) -> None:
+        super().__init__(f"STALE_PARENT_SHA: head_sha={head_sha}")
+        self.head_sha = head_sha
+
+
 # ---------------------------------------------------------------------------
 # Value types
 # ---------------------------------------------------------------------------
@@ -309,11 +317,8 @@ class GitService:
         if commit_target != "main":
             target_ref = repo.references.get(f"refs/heads/{commit_target}")
             target_tip = str(target_ref.peel().id) if target_ref is not None else None
-            if parent_sha is not None and target_tip is not None and parent_sha != target_tip:
-                raise GitServiceError(
-                    f"STALE_PARENT_SHA: expected {target_tip!r}, got {parent_sha!r} "
-                    f"for branch {commit_target!r}"
-                )
+            if target_tip != parent_sha:
+                raise StaleParentShaError(head_sha=target_tip)
 
             blob_id = repo.create_blob(data)
             if parent_sha:
@@ -416,11 +421,8 @@ class GitService:
             except GitServiceError:
                 target_tip = None  # unborn branch
 
-            if parent_sha is not None and target_tip is not None and parent_sha != target_tip:
-                raise GitServiceError(
-                    f"STALE_PARENT_SHA: expected {target_tip!r}, got {parent_sha!r} "
-                    f"for branch {commit_target!r}"
-                )
+            if target_tip != parent_sha:
+                raise StaleParentShaError(head_sha=target_tip)
 
             blob_sha = self._git_cli(
                 "hash-object", "-w", "--stdin",

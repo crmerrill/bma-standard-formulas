@@ -47,7 +47,7 @@ from ...orchestrator.deals.deal_store import (
     save_solver_preset,
     save_studio_ir,
 )
-from ...orchestrator.deals.git_service import GitService, GitServiceError, InvalidBranchNameError
+from ...orchestrator.deals.git_service import GitService, GitServiceError, InvalidBranchNameError, StaleParentShaError
 from ...orchestrator.deals.operational import (
     export_deal,
     gc_branch_after_apply,
@@ -1048,6 +1048,12 @@ def commit_deal_endpoint(deal_id: str, body: CommitRequest) -> CommitResponse:
         )
     except InvalidBranchNameError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except StaleParentShaError as exc:
+        # FUTURE: collaboration — replace last-writer-wins with merge UI
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "STALE_PARENT_SHA", "head_sha": exc.head_sha},
+        ) from exc
     except GitServiceError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return CommitResponse(sha=sha)
