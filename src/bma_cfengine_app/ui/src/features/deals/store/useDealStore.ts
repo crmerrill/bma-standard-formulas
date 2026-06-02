@@ -36,7 +36,7 @@ export type DealStoreState = {
   createEphemeralSession: (args: {
     branch_name: BranchName;
     base_sha: string;
-    ui_role: "primary" | "preview";
+    ui_role: "preview";
   }) => Promise<string>;
   setActiveSession: (sessionId: string) => void;
   setDiagnostics: (sessionId: string, payloads: DiagnosticPayload[]) => void;
@@ -44,12 +44,54 @@ export type DealStoreState = {
 };
 
 function createPerSessionTemporal(
-  pastStates: DealState[] = [],
+  sessionId: string,
+  storeSet: (fn: (state: DealStoreState) => Partial<DealStoreState>) => void,
+  storeGet: () => DealStoreState,
 ): TemporalState<DealState> {
+  const past: DealState[] = [];
+  const future: DealState[] = [];
+  let paused = false;
+
   return {
-    getState: () => ({ pastStates, futureStates: [] }),
-    pause: () => {},
-    resume: () => {},
+    getState: () => ({ pastStates: past, futureStates: future }),
+    pause: () => {
+      paused = true;
+    },
+    resume: () => {
+      paused = false;
+    },
+    handleSet: (state: DealState) => {
+      if (!paused) {
+        past.push(state);
+        future.length = 0;
+      }
+    },
+    undo: () => {
+      if (past.length === 0) return;
+      const current = storeGet().sessions[sessionId]?.working_tree;
+      if (current === undefined) return;
+      const prev = past.pop()!;
+      future.push(current);
+      storeSet((s) => ({
+        sessions: {
+          ...s.sessions,
+          [sessionId]: { ...s.sessions[sessionId], working_tree: prev },
+        },
+      }));
+    },
+    redo: () => {
+      if (future.length === 0) return;
+      const current = storeGet().sessions[sessionId]?.working_tree;
+      if (current === undefined) return;
+      const next = future.pop()!;
+      past.push(current);
+      storeSet((s) => ({
+        sessions: {
+          ...s.sessions,
+          [sessionId]: { ...s.sessions[sessionId], working_tree: next },
+        },
+      }));
+    },
   };
 }
 
@@ -78,7 +120,7 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
       working_tree: emptyDealState(),
       validation_target: "self",
       commit_target: mainBranch,
-      zundo_history: createPerSessionTemporal(),
+      zundo_history: createPerSessionTemporal("main", set, get),
       ui_role: "primary",
       diagnostics: [],
     },
@@ -94,32 +136,18 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
     set((state) => {
       const sessionId = state.activeSessionId;
       const session = state.sessions[sessionId];
-      const previousWorkingTree = session.working_tree;
+      if (!session) return {};
+      const oldWorkingTree = session.working_tree;
 
       const result = applyAction(state, action);
       const newSessions = result.sessions ?? state.sessions;
-      const updatedSession = newSessions[sessionId];
+      const newWorkingTree = newSessions[sessionId]?.working_tree ?? oldWorkingTree;
 
-      if (!session.zundo_history) {
-        return result;
+      if (newWorkingTree !== oldWorkingTree) {
+        session.zundo_history.handleSet(oldWorkingTree);
       }
 
-      const currentPastStates =
-        session.zundo_history.getState().pastStates;
-
-      return {
-        ...result,
-        sessions: {
-          ...newSessions,
-          [sessionId]: {
-            ...updatedSession,
-            zundo_history: createPerSessionTemporal([
-              ...currentPastStates,
-              previousWorkingTree,
-            ]),
-          },
-        },
-      };
+      return result;
     }),
 
   createEphemeralSession: async ({ branch_name, base_sha, ui_role }) => {
@@ -135,9 +163,8 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
       throw new Error(`Branch creation failed: ${branchRes.status}`);
     }
 
-    const showRes = await fetch(
-      `/deals/${deal_id}/show?sha=${base_sha}&path=deal.json`,
-    );
+    const params = new URLSearchParams({ sha: base_sha, path: "deal.json" });
+    const showRes = await fetch(`/deals/${deal_id}/show?${params.toString()}`);
     if (!showRes.ok) {
       throw new Error(`Show endpoint failed: ${showRes.status}`);
     }
@@ -153,7 +180,7 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
           working_tree,
           validation_target: "self" as const,
           commit_target: branch_name,
-          zundo_history: createPerSessionTemporal(),
+          zundo_history: createPerSessionTemporal(session_id, set, get),
           ui_role,
           diagnostics: [],
         },
@@ -200,7 +227,9 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
     }
     set((state) => {
       const { [sessionId]: _, ...rest } = state.sessions;
-      return { sessions: rest };
+      const activeSessionId =
+        state.activeSessionId === sessionId ? "main" : state.activeSessionId;
+      return { sessions: rest, activeSessionId };
     });
   },
 }));

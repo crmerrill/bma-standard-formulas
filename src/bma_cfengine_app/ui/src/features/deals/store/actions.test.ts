@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import { useDealStore } from "./useDealStore";
 import type { BondDefIR, DealDefinitionIR, RuleNodeIR } from "../ir-types";
+import { mkBranchName } from "./session";
+import type { TemporalState } from "./session";
 
 type DealState = DealDefinitionIR;
 type BondDef = BondDefIR;
@@ -155,12 +157,19 @@ describe("deal actions (sds-1 scaffolding)", () => {
         ...state.sessions,
         [siblingId]: {
           session_id: siblingId,
-          branch_name: "ai/turn-isolation-test",
+          branch_name: mkBranchName("ai/turn-isolation-test"),
           base_sha: "",
           working_tree: siblingTree,
           validation_target: "self",
-          commit_target: "ai/turn-isolation-test",
-          zundo_history: null,
+          commit_target: mkBranchName("ai/turn-isolation-test"),
+          zundo_history: {
+            getState: () => ({ pastStates: [], futureStates: [] }),
+            pause: () => {},
+            resume: () => {},
+            handleSet: () => {},
+            undo: () => {},
+            redo: () => {},
+          } satisfies TemporalState<DealState>,
           ui_role: "preview",
           diagnostics: [],
         },

@@ -19,6 +19,9 @@ export type TemporalState<T> = {
   getState: () => { pastStates: T[]; futureStates: T[] };
   pause: () => void;
   resume: () => void;
+  handleSet: (state: T) => void;
+  undo: () => void;
+  redo: () => void;
 };
 
 export type DocumentSession = {
