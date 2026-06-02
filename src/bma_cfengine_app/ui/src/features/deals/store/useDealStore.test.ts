@@ -110,6 +110,11 @@ describe("useDealStore (sds-1 scaffolding)", () => {
   });
 
   test("test_fixture_deal_json_parses_into_working_tree_without_field_renames", () => {
+    // R1 sds-1 Minor #1 (deferred to sds-3): once sds-3 lands the canonical
+    // fixture emitter (scripts/emit_canonical_fixtures.py producing real
+    // <fixture>/deal.json artifacts), the round-trip in compile.roundtrip.test.ts
+    // exercises the full Python -> TS shape contract. Until then, this test
+    // proves shape integrity using a structurally-faithful synthetic fixture.
     const fixtureJson = JSON.stringify(makeDealFixture());
     const parsedFixture = JSON.parse(fixtureJson) as DealState;
     const { activeSessionId, setDealId } = useDealStore.getState();

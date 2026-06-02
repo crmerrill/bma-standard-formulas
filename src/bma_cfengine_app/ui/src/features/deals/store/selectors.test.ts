@@ -113,4 +113,55 @@ describe("store selectors (sds-1 scaffolding)", () => {
     expect(result.current.accounts).toBe(firstResult.accounts);
     expect(result.current.rules).toBe(firstResult.rules);
   });
+
+  test("test_per_pane_selectors_unchanged_when_other_slices_update", () => {
+    // R1 sds-1 Minor #3: prove referential stability holds when an unrelated
+    // slice changes (e.g., bonds reference must remain stable when only
+    // accounts is mutated). zustand v5's default selector equality is
+    // Object.is on the selector return; updating accounts produces a new
+    // working_tree object reference, but each selector's slice reference
+    // (bonds, rules) must be reused so consuming components do not re-render.
+    const { result, rerender } = renderHook(() => ({
+      bonds: useBondsSelector(),
+      accounts: useAccountsSelector(),
+      rules: useRulesSelector(),
+    }));
+
+    const bondsBefore = result.current.bonds;
+    const rulesBefore = result.current.rules;
+    const accountsBefore = result.current.accounts;
+
+    // Mutate accounts only (a non-bonds, non-rules update).
+    const sid = useDealStore.getState().activeSessionId;
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [sid]: {
+          ...state.sessions[sid],
+          working_tree: {
+            ...state.sessions[sid].working_tree,
+            accounts: [
+              ...state.sessions[sid].working_tree.accounts,
+              {
+                name: "Reserve2",
+                account_category: "RESERVE",
+                starting_amount: 0,
+                starting_pct: null,
+                starting_basis: "AMOUNT",
+              },
+            ],
+          },
+        },
+      },
+    }));
+
+    rerender();
+
+    // bonds and rules slice references must be stable across the unrelated
+    // mutation; accounts must be a new reference.
+    expect(result.current.bonds).toBe(bondsBefore);
+    expect(result.current.rules).toBe(rulesBefore);
+    expect(result.current.accounts).not.toBe(accountsBefore);
+    expect(result.current.accounts).toHaveLength(2);
+  });
 });

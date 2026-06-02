@@ -125,15 +125,74 @@ describe("deal actions (sds-1 scaffolding)", () => {
     expect(rule?.priority).toBe(5);
   });
 
-  test("test_unknown_action_type_fails_compile_via_never_guard", () => {
+  test("test_dispatch_rejects_unknown_action_type_via_discriminated_union", () => {
     const { activeSessionId, dispatch } = useDealStore.getState();
     const before = useDealStore.getState().sessions[activeSessionId].working_tree;
 
-    // This assertion is compile-time (tsc/vitest --typecheck), not runtime.
+    // The @ts-expect-error directive proves at compile time that the
+    // DealAction discriminated union rejects unknown `type` values; tsc -b
+    // (and vitest --typecheck) flag any line where the directive is no
+    // longer needed. At runtime the dispatcher's never-guard default branch
+    // returns the empty partial state object, leaving the working_tree
+    // referentially unchanged — proven by the toBe() assertion below.
     // @ts-expect-error - invalid action type must violate DealAction union.
     expect(() => dispatch({ type: "not-a-real-action", payload: {} })).not.toThrow();
 
     const after = useDealStore.getState().sessions[activeSessionId].working_tree;
     expect(after).toBe(before);
+  });
+
+  test("test_action_dispatch_only_mutates_active_session_not_siblings", () => {
+    // R1 sds-1 Minor #2: prove inactive-session isolation by seeding a
+    // sibling session, switching activeSessionId, dispatching, and asserting
+    // the inactive session is referentially unchanged.
+    const siblingId = "ephemeral_sibling_for_isolation_test";
+    const siblingTree = makeDealFixture();
+    siblingTree.bonds = [makeBond("SIBLING_PRESEEDED")];
+
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [siblingId]: {
+          session_id: siblingId,
+          branch_name: "ai/turn-isolation-test",
+          base_sha: "",
+          working_tree: siblingTree,
+          validation_target: "self",
+          commit_target: "ai/turn-isolation-test",
+          zundo_history: null,
+          ui_role: "preview",
+          diagnostics: [],
+        },
+      },
+    }));
+
+    const siblingTreeBefore = useDealStore.getState().sessions[siblingId].working_tree;
+    const mainTreeBefore = useDealStore.getState().sessions.main.working_tree;
+
+    // Dispatch with main as the active session (default).
+    useDealStore.getState().dispatch({ type: "addBond", payload: makeBond("MAIN_NEW") });
+
+    const stateAfter = useDealStore.getState();
+    expect(stateAfter.sessions[siblingId].working_tree).toBe(siblingTreeBefore);
+    expect(stateAfter.sessions.main.working_tree).not.toBe(mainTreeBefore);
+    expect(
+      stateAfter.sessions[siblingId].working_tree.bonds.find((b) => b.name === "MAIN_NEW"),
+    ).toBeUndefined();
+    expect(
+      stateAfter.sessions.main.working_tree.bonds.find((b) => b.name === "MAIN_NEW"),
+    ).toBeDefined();
+
+    // Now switch to the sibling and dispatch; main must be untouched.
+    useDealStore.setState({ activeSessionId: siblingId });
+    const mainTreeBeforeSiblingDispatch = useDealStore.getState().sessions.main.working_tree;
+    useDealStore.getState().dispatch({ type: "addBond", payload: makeBond("SIBLING_NEW") });
+    expect(useDealStore.getState().sessions.main.working_tree).toBe(mainTreeBeforeSiblingDispatch);
+    expect(
+      useDealStore
+        .getState()
+        .sessions[siblingId]
+        .working_tree.bonds.find((b) => b.name === "SIBLING_NEW"),
+    ).toBeDefined();
   });
 });
