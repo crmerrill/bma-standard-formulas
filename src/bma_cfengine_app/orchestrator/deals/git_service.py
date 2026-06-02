@@ -270,11 +270,25 @@ class GitService:
         author: str,
         message: str,
         parent_sha: str | None = None,
+        commit_target: str = "main",
     ) -> str:
+        self._validate_branch_name(commit_target)
         with self._write_lock():
             if self._use_pygit2:
-                return self._commit_deal_pygit2(deal_payload, author=author, message=message, parent_sha=parent_sha)
-            return self._commit_deal_cli(deal_payload, author=author, message=message, parent_sha=parent_sha)
+                return self._commit_deal_pygit2(
+                    deal_payload,
+                    author=author,
+                    message=message,
+                    parent_sha=parent_sha,
+                    commit_target=commit_target,
+                )
+            return self._commit_deal_cli(
+                deal_payload,
+                author=author,
+                message=message,
+                parent_sha=parent_sha,
+                commit_target=commit_target,
+            )
 
     @_wrap_pygit2
     def _commit_deal_pygit2(
@@ -284,11 +298,47 @@ class GitService:
         author: str,
         message: str,
         parent_sha: str | None,
+        commit_target: str,
     ) -> str:
         data = deal_payload if isinstance(deal_payload, bytes) else json.dumps(deal_payload, indent=2).encode("utf-8")
 
         repo = pygit2.Repository(str(self._repo_path / ".git"))
 
+        # Non-main branch: validate parent_sha against the target branch tip and always
+        # advance the target ref directly (no is_fast_forward dance, no HEAD manipulation).
+        if commit_target != "main":
+            target_ref = repo.references.get(f"refs/heads/{commit_target}")
+            target_tip = str(target_ref.peel().id) if target_ref is not None else None
+            if parent_sha is not None and target_tip is not None and parent_sha != target_tip:
+                raise GitServiceError(
+                    f"STALE_PARENT_SHA: expected {target_tip!r}, got {parent_sha!r} "
+                    f"for branch {commit_target!r}"
+                )
+
+            blob_id = repo.create_blob(data)
+            if parent_sha:
+                tb = repo.TreeBuilder(repo.revparse_single(parent_sha).tree)
+            else:
+                tb = repo.TreeBuilder()
+            tb.insert("deal.json", blob_id, pygit2.GIT_FILEMODE_BLOB)
+            tree_id = tb.write()
+
+            author_name, author_email = _parse_author(author)
+            sig = pygit2.Signature(author_name, author_email)
+            parents = [pygit2.Oid(hex=parent_sha)] if parent_sha else []
+
+            commit_oid = repo.create_commit(
+                f"refs/heads/{commit_target}",
+                sig,
+                sig,
+                message,
+                tree_id,
+                parents,
+            )
+            return str(commit_oid)
+
+        # Main branch: preserve the original is_fast_forward / set_head / working-tree behavior
+        # exactly so that existing irvc-1 tests continue to pass without modification.
         blob_id = repo.create_blob(data)
         if parent_sha:
             tb = repo.TreeBuilder(repo.revparse_single(parent_sha).tree)
@@ -352,8 +402,75 @@ class GitService:
         author: str,
         message: str,
         parent_sha: str | None,
+        commit_target: str,
     ) -> str:
         data = deal_payload if isinstance(deal_payload, bytes) else json.dumps(deal_payload, indent=2).encode("utf-8")
+
+        # Non-main branch: validate parent_sha against the target branch tip and use
+        # low-level plumbing commands (commit-tree + update-ref) to avoid touching HEAD.
+        if commit_target != "main":
+            try:
+                target_tip = self._git_cli(
+                    "rev-parse", f"refs/heads/{commit_target}"
+                ).stdout.strip()
+            except GitServiceError:
+                target_tip = None  # unborn branch
+
+            if parent_sha is not None and target_tip is not None and parent_sha != target_tip:
+                raise GitServiceError(
+                    f"STALE_PARENT_SHA: expected {target_tip!r}, got {parent_sha!r} "
+                    f"for branch {commit_target!r}"
+                )
+
+            blob_sha = self._git_cli(
+                "hash-object", "-w", "--stdin",
+                input=data.decode("utf-8"),
+            ).stdout.strip()
+
+            if parent_sha:
+                fd, tmp_idx = tempfile.mkstemp(prefix="bma_commit_idx_")
+                os.close(fd)
+                try:
+                    idx_env = {**os.environ, "GIT_INDEX_FILE": tmp_idx}
+                    self._git_cli("read-tree", parent_sha, env=idx_env)
+                    self._git_cli(
+                        "update-index", "--add", "--cacheinfo",
+                        f"100644,{blob_sha},deal.json",
+                        env=idx_env,
+                    )
+                    tree_sha = self._git_cli("write-tree", env=idx_env).stdout.strip()
+                finally:
+                    Path(tmp_idx).unlink(missing_ok=True)
+            else:
+                tree_sha = self._git_cli(
+                    "mktree",
+                    input=f"100644 blob {blob_sha}\tdeal.json\n",
+                ).stdout.strip()
+
+            author_name, author_email = _parse_author(author)
+            author_env = {
+                **os.environ,
+                "GIT_AUTHOR_NAME": author_name,
+                "GIT_AUTHOR_EMAIL": author_email,
+                "GIT_COMMITTER_NAME": author_name,
+                "GIT_COMMITTER_EMAIL": author_email,
+            }
+            commit_args = ["commit-tree", tree_sha, "-m", message]
+            if parent_sha:
+                commit_args.extend(["-p", parent_sha])
+            commit_sha = self._git_cli(*commit_args, env=author_env).stdout.strip()
+
+            if target_tip:
+                self._git_cli(
+                    "update-ref", f"refs/heads/{commit_target}", commit_sha, target_tip
+                )
+            else:
+                self._git_cli("update-ref", f"refs/heads/{commit_target}", commit_sha)
+
+            return commit_sha
+
+        # Main branch: preserve original behavior exactly so that existing irvc-1 tests
+        # continue to pass without modification.
         deal_path = self._repo_path / "deal.json"
         deal_path.write_bytes(data)
 

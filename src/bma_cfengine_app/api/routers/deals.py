@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from bma_standard_formulas.deals.schemas.input import DealRunInput
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
@@ -898,6 +898,8 @@ class CommitRequest(BaseModel):
     message: str
     parent_sha: str | None = None
     force: bool = False
+    payload: dict[str, Any] | None = None
+    branch: str = "main"
 
 
 class CommitResponse(BaseModel):
@@ -1007,7 +1009,15 @@ def _flatten_diff(
 @router.post("/deals/{deal_id}/commit", response_model=CommitResponse)
 def commit_deal_endpoint(deal_id: str, body: CommitRequest) -> CommitResponse:
     service = GitService(repo_path=deal_dir(deal_id))
-    head_commits = service.log(branch="main", limit=1)
+
+    # Validate branch name early so invalid names return 400, not 409 or 500.
+    try:
+        service._validate_branch_name(body.branch)
+    except InvalidBranchNameError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Resolve the HEAD SHA for the supplied branch (defaults to "main").
+    head_commits = service.log(branch=body.branch, limit=1)
     head_sha = head_commits[0].sha if head_commits else None
 
     if not body.force and head_sha != body.parent_sha:
@@ -1017,14 +1027,27 @@ def commit_deal_endpoint(deal_id: str, body: CommitRequest) -> CommitResponse:
             detail={"code": "STALE_PARENT_SHA", "head_sha": head_sha},
         )
 
-    current_payload = service.show(head_sha, "deal.json") if head_sha else b"{}"
+    # Determine the payload bytes to commit.
+    if body.payload is not None:
+        try:
+            validated = DealDefinition.model_validate(body.payload)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        commit_payload: bytes = validated.model_dump_json(indent=2).encode("utf-8")
+    else:
+        # Legacy path: re-read the current deal.json from the target branch HEAD.
+        commit_payload = service.show(head_sha, "deal.json") if head_sha else b"{}"
+
     try:
         sha = service.commit_deal(
-            current_payload,
+            commit_payload,
             author=body.author,
             message=body.message,
             parent_sha=head_sha,
+            commit_target=body.branch,
         )
+    except InvalidBranchNameError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except GitServiceError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return CommitResponse(sha=sha)
