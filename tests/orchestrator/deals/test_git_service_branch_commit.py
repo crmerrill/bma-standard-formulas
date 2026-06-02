@@ -68,23 +68,22 @@ def _branch_tip(service: GitService, branch: str) -> str:
     return tips[branch]
 
 
-def _make_service(repo_path: Path, use_cli: bool) -> GitService:
-    """Return a GitService forced to the requested backend."""
+def _make_service(
+    repo_path: Path, use_cli: bool, monkeypatch: pytest.MonkeyPatch
+) -> GitService:
+    """Return a GitService forced to the requested backend.
+
+    `GitService._use_pygit2` is a live property that re-reads the
+    module-level `pygit2` symbol on every call, so we must keep the
+    `pygit2 = None` patch active for the duration of the test, not just
+    while the constructor runs. `monkeypatch.setattr` automatically
+    restores the attribute at test teardown, which is the contract we
+    need for true CLI-fallback parametrization.
+    """
     if use_cli:
         if shutil.which("git") is None:
             pytest.skip("git CLI not available on PATH")
-        # Monkeypatching at module level isn't safe here because tests may run
-        # concurrently; instead we instantiate with pygit2 unavailable by
-        # temporarily patching the module attribute before construction.
-        # We rely on the fact that GitService reads _use_pygit2 once at __init__
-        # time from the module-level pygit2 symbol.
-        saved = git_service_module.pygit2
-        git_service_module.pygit2 = None  # type: ignore[assignment]
-        try:
-            svc = GitService(repo_path=repo_path)
-        finally:
-            git_service_module.pygit2 = saved
-        return svc
+        monkeypatch.setattr(git_service_module, "pygit2", None, raising=False)
     return GitService(repo_path=repo_path)
 
 
@@ -94,13 +93,13 @@ def _make_service(repo_path: Path, use_cli: bool) -> GitService:
 
 @pytest.mark.parametrize("use_cli", [False, True], ids=["pygit2", "cli"])
 def test_commit_deal_writes_to_supplied_commit_target_branch_only(
-    tmp_path: Path, use_cli: bool
+    tmp_path: Path, use_cli: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC 4, 6: commit_target branch advances while main stays byte-identical."""
     repo_path = tmp_path / "repo"
     repo_path.mkdir(parents=True, exist_ok=True)
     main_tip = _seed_repo_with_initial_commit(repo_path)
-    service = _make_service(repo_path, use_cli)
+    service = _make_service(repo_path, use_cli, monkeypatch)
 
     service.branch_create("ai/turn-test", from_sha=main_tip)
     ephemeral_tip_before = _branch_tip(service, "ai/turn-test")
@@ -128,7 +127,7 @@ def test_commit_deal_writes_to_supplied_commit_target_branch_only(
 
 @pytest.mark.parametrize("use_cli", [False, True], ids=["pygit2", "cli"])
 def test_commit_deal_default_commit_target_remains_main_for_backward_compat(
-    tmp_path: Path, use_cli: bool
+    tmp_path: Path, use_cli: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC 4, 5: omitted commit_target keeps legacy main behavior."""
     signature = inspect.signature(GitService.commit_deal)
@@ -138,7 +137,7 @@ def test_commit_deal_default_commit_target_remains_main_for_backward_compat(
     repo_path = tmp_path / "repo"
     repo_path.mkdir(parents=True, exist_ok=True)
     main_tip = _seed_repo_with_initial_commit(repo_path)
-    service = _make_service(repo_path, use_cli)
+    service = _make_service(repo_path, use_cli, monkeypatch)
 
     legacy_sha = service.commit_deal(
         _payload("legacy-default-target"),
@@ -163,13 +162,13 @@ def test_commit_deal_default_commit_target_remains_main_for_backward_compat(
 
 @pytest.mark.parametrize("use_cli", [False, True], ids=["pygit2", "cli"])
 def test_commit_deal_invalid_commit_target_raises_invalid_branch_name(
-    tmp_path: Path, use_cli: bool
+    tmp_path: Path, use_cli: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC 4: invalid commit_target names are rejected by branch validator."""
     repo_path = tmp_path / "repo"
     repo_path.mkdir(parents=True, exist_ok=True)
     main_tip = _seed_repo_with_initial_commit(repo_path)
-    service = _make_service(repo_path, use_cli)
+    service = _make_service(repo_path, use_cli, monkeypatch)
 
     for invalid in ["Invalid/Name!", "../escape", "UPPERCASE", "main with spaces"]:
         with pytest.raises(InvalidBranchNameError):
@@ -184,13 +183,13 @@ def test_commit_deal_invalid_commit_target_raises_invalid_branch_name(
 
 @pytest.mark.parametrize("use_cli", [False, True], ids=["pygit2", "cli"])
 def test_commit_deal_parent_sha_validated_against_supplied_branch_tip_not_main(
-    tmp_path: Path, use_cli: bool
+    tmp_path: Path, use_cli: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC 4: parent_sha is checked against commit_target tip, not main tip."""
     repo_path = tmp_path / "repo"
     repo_path.mkdir(parents=True, exist_ok=True)
     base_sha = _seed_repo_with_initial_commit(repo_path)
-    service = _make_service(repo_path, use_cli)
+    service = _make_service(repo_path, use_cli, monkeypatch)
 
     m1 = service.commit_deal(
         _payload("main-m1"),
@@ -236,7 +235,7 @@ def test_commit_deal_parent_sha_validated_against_supplied_branch_tip_not_main(
 
 @pytest.mark.parametrize("use_cli", [False, True], ids=["pygit2", "cli"])
 def test_commit_deal_parent_sha_none_rejected_on_existing_branch_tip(
-    tmp_path: Path, use_cli: bool
+    tmp_path: Path, use_cli: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC 4, AC 13: parent_sha=None is rejected when the target branch already has a tip.
 
@@ -246,7 +245,7 @@ def test_commit_deal_parent_sha_none_rejected_on_existing_branch_tip(
     repo_path = tmp_path / "repo"
     repo_path.mkdir(parents=True, exist_ok=True)
     main_tip = _seed_repo_with_initial_commit(repo_path)
-    service = _make_service(repo_path, use_cli)
+    service = _make_service(repo_path, use_cli, monkeypatch)
 
     # Give the ephemeral branch a tip by committing once.
     service.branch_create("ai/turn-null-test", from_sha=main_tip)
@@ -275,7 +274,7 @@ def test_commit_deal_parent_sha_none_rejected_on_existing_branch_tip(
 
 @pytest.mark.parametrize("use_cli", [False, True], ids=["pygit2", "cli"])
 def test_commit_deal_non_null_parent_sha_rejected_on_unborn_branch(
-    tmp_path: Path, use_cli: bool
+    tmp_path: Path, use_cli: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC 4, AC 13: non-null parent_sha is rejected when the target branch is unborn.
 
@@ -292,7 +291,7 @@ def test_commit_deal_non_null_parent_sha_rejected_on_unborn_branch(
     repo_path = tmp_path / "repo"
     repo_path.mkdir(parents=True, exist_ok=True)
     main_tip = _seed_repo_with_initial_commit(repo_path)
-    service = _make_service(repo_path, use_cli)
+    service = _make_service(repo_path, use_cli, monkeypatch)
 
     # The branch "ai/turn-unborn" has never been created — it is unborn (no ref).
     # Supplying main_tip as parent_sha must fail: target_tip (None) != parent_sha.
