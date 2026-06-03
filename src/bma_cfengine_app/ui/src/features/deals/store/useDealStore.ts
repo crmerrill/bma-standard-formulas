@@ -53,6 +53,7 @@ export type DealStoreState = {
   discardEphemeralSession: (sessionId: string) => Promise<void>;
   forceCommit: (sessionId: string) => Promise<void>;
   reloadFromHead: (sessionId: string) => Promise<void>;
+  promoteLocalDraft: () => Promise<void>;
 };
 
 function createPerSessionTemporal(
@@ -242,6 +243,60 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
       const activeSessionId =
         state.activeSessionId === sessionId ? "main" : state.activeSessionId;
       return { sessions: rest, activeSessionId };
+    });
+  },
+
+  promoteLocalDraft: async () => {
+    const state = get();
+    const oldDealId = state.deal_id;
+
+    const res = await fetch("/deals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        working_tree: state.sessions.main?.working_tree,
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`promoteLocalDraft failed: ${res.status}`);
+    }
+    const data = (await res.json()) as {
+      deal_id?: string;
+      id?: string;
+      initial_sha?: string;
+      sha?: string;
+    };
+    const realDealId = (data.deal_id ?? data.id ?? "") as string;
+    const realSha = (data.initial_sha ?? data.sha ?? "") as string;
+
+    const currentState = get();
+    for (const sessionId of Object.keys(currentState.sessions)) {
+      const oldKey = `bma:draft:${oldDealId}:${sessionId}`;
+      let value: string | null = null;
+      try {
+        value = sessionStorage.getItem(oldKey);
+      } catch {
+        // sessionStorage unavailable
+      }
+      if (value !== null) {
+        const newKey = `bma:draft:${realDealId}:${sessionId}`;
+        try {
+          sessionStorage.setItem(newKey, value);
+          sessionStorage.removeItem(oldKey);
+        } catch {
+          // sessionStorage unavailable
+        }
+      }
+    }
+
+    set((s) => {
+      const updatedSessions = Object.fromEntries(
+        Object.entries(s.sessions).map(([id, session]) => [
+          id,
+          { ...session, base_sha: realSha },
+        ]),
+      );
+      return { deal_id: realDealId, sessions: updatedSessions };
     });
   },
 
