@@ -27,12 +27,27 @@ class StudioSidecar(BaseModel):
 
     @field_validator("layout_overrides")
     @classmethod
-    def _require_x_and_y(
+    def _validate_layout_entries(
         cls, v: dict[str, dict[str, Any]]
     ) -> dict[str, dict[str, Any]]:
+        """Per-entity layout entries require x: float, y: float; optional collapsed: bool | None."""
         for key, entry in v.items():
-            if "x" not in entry:
-                raise ValueError(f"layout entry '{key}' missing required field 'x'")
-            if "y" not in entry:
-                raise ValueError(f"layout entry '{key}' missing required field 'y'")
+            # Required: x, y must be present and numeric (int/float; bool excluded since bool is a subtype of int in Python).
+            for field in ("x", "y"):
+                if field not in entry:
+                    raise ValueError(
+                        f"layout entry '{key}' missing required field '{field}'"
+                    )
+                value = entry[field]
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError(
+                        f"layout entry '{key}' field '{field}' must be a number; got {type(value).__name__}"
+                    )
+            # Optional: collapsed must be bool or None when present.
+            if "collapsed" in entry:
+                collapsed = entry["collapsed"]
+                if collapsed is not None and not isinstance(collapsed, bool):
+                    raise ValueError(
+                        f"layout entry '{key}' field 'collapsed' must be bool or None; got {type(collapsed).__name__}"
+                    )
         return v

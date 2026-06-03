@@ -103,3 +103,41 @@ def test_studio_sidecar_roundtrip_serialization() -> None:
 
     assert restored == original
     assert restored.model_dump() == original.model_dump()
+
+
+def test_studio_sidecar_rejects_invalid_layout_field_types() -> None:
+    """AC 1 (R1 fix-pass): inner layout entries require numeric x/y and bool|None collapsed."""
+    import pytest
+    from pydantic import ValidationError
+    from bma_standard_formulas.deals.schemas.studio_sidecar import StudioSidecar
+
+    # Invalid x type (string)
+    with pytest.raises(ValidationError) as exc:
+        StudioSidecar(layout_overrides={"bond:A1": {"x": "left", "y": 100.0}})
+    assert "x" in str(exc.value)
+
+    # Invalid y type (list)
+    with pytest.raises(ValidationError) as exc:
+        StudioSidecar(layout_overrides={"bond:A1": {"x": 100.0, "y": [1, 2]}})
+    assert "y" in str(exc.value)
+
+    # Invalid collapsed type (string)
+    with pytest.raises(ValidationError) as exc:
+        StudioSidecar(
+            layout_overrides={"bond:A1": {"x": 100.0, "y": 200.0, "collapsed": "yes"}}
+        )
+    assert "collapsed" in str(exc.value)
+
+    # bool x is rejected (bool is technically int subtype in Python; excluded explicitly)
+    with pytest.raises(ValidationError) as exc:
+        StudioSidecar(layout_overrides={"bond:A1": {"x": True, "y": 100.0}})
+    assert "x" in str(exc.value)
+
+    # Valid baseline still works
+    StudioSidecar(
+        layout_overrides={
+            "bond:A1": {"x": 100, "y": 200.5, "collapsed": True},
+            "bond:M1": {"x": 50.0, "y": 75.0, "collapsed": None},
+            "bond:R1": {"x": 0.0, "y": 0.0},
+        }
+    )
