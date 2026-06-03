@@ -14,7 +14,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:ux": "npm run test && npm run test:e2e",
-    "sync:field-order": "cp ../../../bma_standard_formulas/deals/schemas/field_order.json ./src/features/deals/field_order.json"
+    "sync:field-order": "cp ../../bma_standard_formulas/deals/schemas/field_order.json ./src/features/deals/field_order.json"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.21.3",
