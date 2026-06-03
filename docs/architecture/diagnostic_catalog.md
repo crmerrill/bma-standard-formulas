@@ -25,3 +25,4 @@ Each row in the Catalog Table below defines one diagnostic code. The columns map
 | --- | --- | --- | --- | --- | --- | --- |
 | MERGE_CONFLICT | error | deal.{entity_kind}[{entity_id}].{field_path} | Merge conflict on {field_path} between base and branch values for {entity_kind} {entity_id} | backend | Resolve the conflicting field in Studio or reset the feature branch to base before retrying the merge. | src/bma_cfengine_app/orchestrator/deals/merge.py:17 |
 | REPO_CORRUPT | error | deal:{deal_id} | Repository corruption detected for deal {deal_id}: {detail} | backend | Run restore_deal to re-clone the deal bundle from the last known-good backup. | src/bma_cfengine_app/orchestrator/deals/operational.py:45 |
+| BOND_NAME_EMPTY | error | deal.bonds[*].name | Bond at index {index} has an empty or missing name. | both | Supply a non-blank name for every bond in the deal definition. | src/bma_standard_formulas/diagnostics/structural_validators.py:26 |

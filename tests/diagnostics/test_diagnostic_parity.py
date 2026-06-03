@@ -61,7 +61,7 @@ _REGISTRY_SNAPSHOT: dict[str, Any] = dict(_diag_registry._REGISTRY)
 # Fixture files
 # ---------------------------------------------------------------------------
 
-_FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "diagnostic_parity"
+_FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "diagnostic_parity"
 _FIXTURE_PATHS: list[Path] = (
     sorted(_FIXTURES_DIR.glob("*.json")) if _FIXTURES_DIR.exists() else []
 )

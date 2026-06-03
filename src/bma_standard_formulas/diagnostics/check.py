@@ -40,7 +40,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _DEFAULT_CATALOG = _REPO_ROOT / "docs" / "architecture" / "diagnostic_catalog.md"
 _DEFAULT_SRC_DIRS: list[Path] = [_REPO_ROOT / "src"]
-_DEFAULT_TS_FILES: list[Path] = [
+
+# Scan all non-test TypeScript files in the validation feature directory so
+# that validator modules added alongside diagnosticRegistry.ts (e.g.
+# structuralValidators.ts) are automatically picked up without requiring
+# explicit --ts-file arguments.
+_DEFAULT_TS_DIR = (
     _REPO_ROOT
     / "src"
     / "bma_cfengine_app"
@@ -48,8 +53,12 @@ _DEFAULT_TS_FILES: list[Path] = [
     / "src"
     / "features"
     / "validation"
-    / "diagnosticRegistry.ts"
-]
+)
+_DEFAULT_TS_FILES: list[Path] = (
+    [p for p in sorted(_DEFAULT_TS_DIR.glob("*.ts")) if not p.name.endswith(".test.ts")]
+    if _DEFAULT_TS_DIR.exists()
+    else []
+)
 
 
 # ---------------------------------------------------------------------------
