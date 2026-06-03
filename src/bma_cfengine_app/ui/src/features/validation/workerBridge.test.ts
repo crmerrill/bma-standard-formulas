@@ -24,6 +24,7 @@ describe("test_bridge_debounces_rapid_mutations", () => {
     vi.useFakeTimers();
 
     // Mock the global Worker constructor so jsdom doesn't throw.
+    // Use a regular function (not arrow) so it is constructable with `new`.
     const mockPostMessage = vi.fn();
     const mockTerminate = vi.fn();
     const mockWorkerInstance = {
@@ -31,7 +32,7 @@ describe("test_bridge_debounces_rapid_mutations", () => {
       terminate: mockTerminate,
       onmessage: null as ((e: MessageEvent) => void) | null,
     };
-    vi.stubGlobal("Worker", vi.fn(() => mockWorkerInstance));
+    vi.stubGlobal("Worker", function MockWorker() { return mockWorkerInstance; });
 
     // Minimal store stub: records the subscriber so tests can drive it.
     const subscribers: Array<(state: unknown, prev: unknown) => void> = [];
@@ -101,7 +102,8 @@ describe("test_bridge_debounces_rapid_mutations", () => {
       terminate: vi.fn(),
       onmessage: null as ((e: MessageEvent) => void) | null,
     };
-    vi.stubGlobal("Worker", vi.fn(() => mockWorkerInstance));
+    // Use a regular function (not arrow) so it can be used as a constructor.
+    vi.stubGlobal("Worker", function MockWorker() { return mockWorkerInstance; });
 
     const subscribers: Array<(state: unknown, prev: unknown) => void> = [];
     const mockStore = {
@@ -137,7 +139,8 @@ describe("test_bridge_debounces_rapid_mutations", () => {
     vi.useFakeTimers();
 
     const mockPostMessage = vi.fn();
-    vi.stubGlobal("Worker", vi.fn(() => ({ postMessage: mockPostMessage, terminate: vi.fn(), onmessage: null })));
+    const mockWorkerInstanceNoOp = { postMessage: mockPostMessage, terminate: vi.fn(), onmessage: null as any };
+    vi.stubGlobal("Worker", function MockWorker() { return mockWorkerInstanceNoOp; });
 
     const subscribers: Array<(state: unknown, prev: unknown) => void> = [];
     const mockStore = {
