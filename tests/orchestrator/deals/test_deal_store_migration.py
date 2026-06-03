@@ -255,14 +255,12 @@ def test_manifest_keys_match_allowed_set(
         "schema_version_pin",
         "created_at",
         "updated_at",
-        "studio_current_version",
-        "studio_versions",
     }
     assert set(post_migration_manifest.keys()) == allowed_keys
-    assert post_migration_manifest["studio_current_version"] == pre_migration_manifest["studio_current_version"]
-    assert post_migration_manifest["studio_versions"] == pre_migration_manifest["studio_versions"]
     assert "current_version" not in post_migration_manifest
     assert "versions" not in post_migration_manifest
+    assert "studio_current_version" not in post_migration_manifest
+    assert "studio_versions" not in post_migration_manifest
     assert "solver_presets_library" not in post_migration_manifest
 
 

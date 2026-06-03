@@ -37,15 +37,10 @@ from ...orchestrator.deals.deal_solver_service import (
 from ...orchestrator.deals.deal_store import (
     deal_dir,
     list_pool_snapshots,
-    list_studio_deals,
     load_deal,
     load_pool_snapshot,
-    list_solver_presets,
-    load_studio_snapshot,
     save_pool_snapshot,
     save_deal as save_canonical_deal,
-    save_solver_preset,
-    save_studio_ir,
 )
 from ...orchestrator.deals.git_service import GitService, GitServiceError, InvalidBranchNameError, StaleParentShaError
 from ...orchestrator.deals.operational import (
@@ -108,12 +103,6 @@ _LEGACY_RULE_SOURCE_MAP = {
 _LEGACY_TRANCHE_KIND_MAP = _MIGRATIONS_TRANCHE_KIND_MAP
 
 
-class StudioDealSaveBody(BaseModel):
-    deal_id: str | None = None
-    deal_name: str = Field(default="Deal", min_length=1, max_length=256)
-    ir: dict[str, Any]
-
-
 class RunSetupRefSource(BaseModel):
     source_mode: Literal["runsetup_ref"] = "runsetup_ref"
     run_id: str
@@ -154,12 +143,6 @@ class DealSolveRequest(BaseModel):
     source: DealRunSource
     solver_spec: SolverSpec
     scenario_name: str = "Base Case"
-
-
-class SolverPresetUpsertBody(BaseModel):
-    preset_name: str = Field(min_length=1, max_length=128)
-    solver_spec: dict[str, Any]
-    notes: str | None = None
 
 
 class PoolSnapshotSaveBody(BaseModel):
@@ -281,111 +264,6 @@ async def save_pool(body: PoolSnapshotSaveBody):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/deals")
-async def list_deals():
-    return list_studio_deals()
-
-
-@router.get("/deals/{deal_id}")
-async def get_deal(deal_id: str, version: int | None = Query(None)):
-    """Return a studio snapshot with legacy IR fields normalized to 2.0 form.
-
-    The raw snapshot file is NOT modified. Normalization is applied in memory
-    on each GET so the UI always receives 2.0-canonical `kind`, `account_category`,
-    `notional`, `relations`, etc., regardless of when the deal was saved.
-
-    Response shape:
-      - `ir`: the normalized IR (always present)
-      - `ir_display_normalized`: true when normalization was applied
-      - `ir_original_schema_version`: the schema_version field as persisted on disk
-      - `normalization_error`: present when normalization encountered an error;
-        in that case `ir` contains the best-effort partial normalization and
-        the error detail explains what manual fix is needed.
-    """
-    try:
-        snapshot = load_studio_snapshot(deal_id, version=version)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-
-    if not isinstance(snapshot, dict):
-        return snapshot
-
-    raw_ir = snapshot.get("ir")
-    if not isinstance(raw_ir, dict):
-        return snapshot
-
-    original_schema_version = raw_ir.get("schema_version")
-    normalization_error: str | None = None
-    migrated_ir: dict = raw_ir
-
-    schema_validation_error: str | None = None
-    try:
-        normalized_ir = _normalize_legacy_studio_ir(raw_ir)
-        migrated_ir = migrate_deal_payload(normalized_ir)
-        # Attempt schema validation so the UI can surface structural errors early.
-        # Failures here do NOT block the GET — we return the normalized IR plus
-        # a `schema_validation_error` field so callers can decide whether to show
-        # a warning or require fixes before allowing a run.
-        try:
-            DealDefinition.model_validate(migrated_ir)
-        except Exception as ve:
-            import pydantic
-            if isinstance(ve, pydantic.ValidationError):
-                # Omit input data from error messages to keep responses compact.
-                schema_validation_error = "; ".join(
-                    e.get("msg", str(e))
-                    for e in ve.errors(include_input=False)
-                )
-            else:
-                schema_validation_error = str(ve)
-    except ValueError as exc:
-        # ValueError from migrate_deal_payload means an ambiguous field that
-        # requires manual intervention (e.g. PAY_FROM_RESERVE).  Return the
-        # best-effort normalized form (pre-migration) plus an actionable error.
-        normalization_error = str(exc)
-        try:
-            migrated_ir = _normalize_legacy_studio_ir(raw_ir)
-        except Exception:
-            migrated_ir = raw_ir
-    except Exception as exc:
-        normalization_error = f"Unexpected normalization error: {exc}"
-        migrated_ir = raw_ir
-
-    response = {
-        **snapshot,
-        "ir": migrated_ir,
-        "ir_display_normalized": migrated_ir is not raw_ir,
-        "ir_original_schema_version": original_schema_version,
-    }
-    if normalization_error:
-        response["normalization_error"] = normalization_error
-    if schema_validation_error:
-        response["schema_validation_error"] = schema_validation_error
-    return response
-
-
-@router.post("/deals")
-async def save_deal(body: StudioDealSaveBody):
-    try:
-        deal_id, meta = save_studio_ir(
-            body.deal_id,
-            body.deal_name.strip() or "Deal",
-            body.ir,
-        )
-        # Keep canonical deal snapshots synchronized with studio saves so subsequent
-        # runs/solves always pick up latest sizing/coupon edits.
-        try:
-            normalized_ir = _normalize_legacy_studio_ir(body.ir)
-            canonical = DealDefinition.model_validate(migrate_deal_payload(normalized_ir))
-            save_canonical_deal(deal_id, canonical, version=int(meta.get("version", 0) or 0))
-        except Exception:
-            # Studio saves remain source-of-truth even if canonical conversion fails.
-            pass
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
-    return meta
-
-
 @router.get("/deals/{deal_id}/export")
 def export_endpoint(deal_id: str, sha: str = Query(...)) -> Response:
     """Export the canonical deal.json at a specific commit SHA."""
@@ -397,26 +275,19 @@ def export_endpoint(deal_id: str, sha: str = Query(...)) -> Response:
 
 
 def _ensure_canonical_deal(deal_id: str, version: int | None = None):
+    """Load the canonical DealDefinition from the git-backed deal store.
+
+    Raises HTTPException 404 if the deal does not exist. The legacy
+    studio-snapshot fallback path was removed in sdpm-5.
+    """
     try:
         result = load_deal(deal_id, version=version)
         if result is None:
             raise FileNotFoundError(f"No deal found with ID {deal_id}")
         # TODO(sdpm-2/m2): propagate sidecar diagnostics to API/run/solver responses
         return result[0]
-    except FileNotFoundError:
-        snapshot = load_studio_snapshot(deal_id, version=version)
-        raw_ir = snapshot.get("ir", {})
-        normalized_ir = _normalize_legacy_studio_ir(raw_ir)
-        try:
-            # Always validate the normalized view so legacy snapshots are transparently upgraded.
-            canonical = DealDefinition.model_validate(migrate_deal_payload(normalized_ir))
-        except Exception as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Cannot convert studio snapshot to canonical DealDefinition: {exc}",
-            ) from exc
-        save_canonical_deal(deal_id, canonical, version=version)
-        return canonical
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 def _normalize_legacy_studio_ir(raw_ir: Any) -> dict[str, Any]:
@@ -550,18 +421,12 @@ def _verify_or_raise(deal: DealDefinition, *, mode: str) -> dict[str, Any]:
 
 
 def _extract_collateral_risk_settings(deal_id: str, version: int | None) -> dict[str, Any]:
-    try:
-        snapshot = load_studio_snapshot(deal_id, version=version)
-    except FileNotFoundError:
-        return {}
-    ir = snapshot.get("ir", {}) if isinstance(snapshot, dict) else {}
-    if not isinstance(ir, dict):
-        return {}
-    presets = ir.get("solver_presets", {})
-    if not isinstance(presets, dict):
-        return {}
-    payload = presets.get("collateral_risk_settings", {})
-    return payload if isinstance(payload, dict) else {}
+    """Return collateral risk settings from the git-backed canonical deal.json.
+
+    DealDefinition does not carry solver_presets; returns an empty dict.
+    The legacy studio-snapshot fallback was removed in sdpm-5.
+    """
+    return {}
 
 
 @router.post("/deals/{deal_id}/runs")
@@ -795,28 +660,6 @@ async def instantiate_solver_template(
 async def verify_deal_structure(deal_id: str, version: int | None = Query(None)):
     canonical = _ensure_canonical_deal(deal_id, version=version)
     return verify_structure(canonical, scenario_context={"mode": "verify"})
-
-
-@router.get("/deals/{deal_id}/solver-presets")
-async def get_solver_presets(deal_id: str):
-    try:
-        return {"deal_id": deal_id, "presets": list_solver_presets(deal_id)}
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.post("/deals/{deal_id}/solver-presets")
-async def upsert_solver_preset(deal_id: str, body: SolverPresetUpsertBody):
-    try:
-        saved = save_solver_preset(
-            deal_id=deal_id,
-            preset_name=body.preset_name.strip(),
-            solver_spec=body.solver_spec,
-            notes=body.notes,
-        )
-        return {"deal_id": deal_id, "preset": saved}
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/deals/{deal_id}/run-sources")

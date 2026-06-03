@@ -44,7 +44,6 @@ sys.path.insert(0, str(ROOT))  # for tests/ namespace
 
 from bma_cfengine_app.orchestrator.deals.deal_store import (  # noqa: E402
     save_deal,
-    save_studio_ir,
 )
 from bma_cfengine_app.storage import run_store  # noqa: E402
 
@@ -296,9 +295,7 @@ def seed_deal(
         for p in deal_dir.glob("*.json"):
             p.unlink()
     canonical_meta = save_deal(DEAL_ID, deal, version=1)
-    studio_id, studio_meta = save_studio_ir(DEAL_ID, DEAL_NAME, payload)
-    assert studio_id == DEAL_ID
-    return {"canonical": canonical_meta, "studio": studio_meta}
+    return {"canonical": canonical_meta}
 
 
 def main() -> int:

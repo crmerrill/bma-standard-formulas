@@ -242,7 +242,12 @@ def _migrate_legacy_to_git(deal_id: str) -> None:
 
 
 def _collapse_manifest_post_migration(deal_id: str) -> None:
-    """Rewrite manifest.json to the AC-3 allowed field set after git migration."""
+    """Rewrite manifest.json to the AC-1 canonical field set after git migration.
+
+    Emits exactly: deal_id, deal_name, asset_class, schema_version_pin,
+    created_at, updated_at. Transitional fields (studio_current_version,
+    studio_versions, solver_presets_library) are explicitly excluded.
+    """
     d = deal_dir(deal_id)
     manifest_path = d / "manifest.json"
     legacy: dict[str, Any] = (
@@ -264,9 +269,6 @@ def _collapse_manifest_post_migration(deal_id: str) -> None:
         "schema_version_pin": final_payload.get("schema_version") or legacy.get("schema_version_pin"),
         "created_at": legacy.get("created_at") or datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        # FUTURE: studio-document-persistence-and-migration — migrate these transitional fields out
-        "studio_current_version": legacy.get("studio_current_version", 0),
-        "studio_versions": legacy.get("studio_versions", []),
     }
     manifest_path.write_text(json.dumps(new_manifest, indent=2))
 
@@ -353,8 +355,18 @@ def _load_sidecar_from_commit(
         return (StudioSidecar(), [diagnostic])
 
 
+_TRANSITIONAL_MANIFEST_KEYS: frozenset[str] = frozenset(
+    {"studio_current_version", "studio_versions", "solver_presets_library"}
+)
+
+
 def _update_manifest_on_save(deal_id: str, deal: DealDefinition) -> None:
-    """Update manifest after a git-backed save; preserves all existing fields."""
+    """Update manifest after a git-backed save.
+
+    Emits exactly the AC-1 canonical field set: deal_id, deal_name,
+    asset_class, schema_version_pin, created_at, updated_at.
+    Transitional studio fields are stripped on every write.
+    """
     d = deal_dir(deal_id)
     manifest_path = d / "manifest.json"
     if manifest_path.exists():
@@ -363,14 +375,15 @@ def _update_manifest_on_save(deal_id: str, deal: DealDefinition) -> None:
         manifest = {
             "deal_id": deal_id,
             "deal_name": deal.deal_name,
+            "asset_class": None,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            # FUTURE: studio-document-persistence-and-migration — migrate these transitional fields out
-            "studio_current_version": 0,
-            "studio_versions": [],
         }
     manifest["deal_name"] = deal.deal_name
+    manifest.setdefault("asset_class", None)
     manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
     manifest["schema_version_pin"] = deal.schema_version
+    for key in _TRANSITIONAL_MANIFEST_KEYS:
+        manifest.pop(key, None)
     manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
 
 
@@ -505,161 +518,6 @@ def list_deals() -> list[dict[str, Any]]:
             pass
     results.sort(key=lambda r: r.get("updated_at", ""), reverse=True)
     return results
-
-
-# ---------------------------------------------------------------------------
-# Structuring Studio — Blockly IR snapshots (no DealDefinition validation)
-# ---------------------------------------------------------------------------
-
-
-def save_studio_ir(
-    deal_id: str | None,
-    deal_name: str,
-    ir: dict[str, Any],
-) -> tuple[str, dict[str, Any]]:
-    """Append a versioned studio JSON snapshot. Safe alongside canonical save_deal."""
-    init_deals_workspace()
-    did = deal_id or new_deal_id()
-    d = deal_dir(did)
-    manifest_path = d / "manifest.json"
-    now = datetime.now(timezone.utc).isoformat()
-
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    else:
-        manifest = {"deal_id": did, "deal_name": deal_name, "created_at": now}
-
-    manifest["deal_id"] = did
-    manifest["deal_name"] = deal_name
-    manifest["updated_at"] = now
-
-    cur = int(manifest.get("studio_current_version", 0) or 0)
-    new_ver = cur + 1
-    manifest["studio_current_version"] = new_ver
-    manifest.setdefault("studio_versions", []).append(
-        {"version": new_ver, "created_at": now}
-    )
-
-    payload = {
-        "deal_id": did,
-        "deal_name": deal_name,
-        "schema_version": str(ir.get("schema_version", "studio")),
-        "saved_at": now,
-        "ir": ir,
-    }
-    (d / f"studio_v{new_ver}.json").write_text(
-        json.dumps(payload, indent=2, default=str)
-    )
-    manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
-
-    meta = {
-        "deal_id": did,
-        "deal_name": deal_name,
-        "version": new_ver,
-        "created_at": now,
-    }
-    return did, meta
-
-
-def load_studio_snapshot(deal_id: str, version: int | None = None) -> dict[str, Any]:
-    d = deal_dir(deal_id)
-    if (d / ".git").exists():
-        _fsck_guard(d)
-    manifest_path = d / "manifest.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"No deal {deal_id!r}")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    ver = version if version is not None else int(
-        manifest.get("studio_current_version", 0) or 0
-    )
-    if ver < 1:
-        raise FileNotFoundError(f"No Structuring Studio snapshots for {deal_id!r}")
-    path = d / f"studio_v{ver}.json"
-    if not path.exists():
-        raise FileNotFoundError(f"studio_v{ver}.json not found for {deal_id!r}")
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def list_studio_deals() -> list[dict[str, Any]]:
-    init_deals_workspace()
-    out: list[dict[str, Any]] = []
-    if not _DEALS_DIR.exists():
-        return out
-    for sub in sorted(_DEALS_DIR.iterdir(), key=lambda p: p.name):
-        if not sub.is_dir() or not sub.name.startswith("deal_"):
-            continue
-        mp = sub / "manifest.json"
-        if not mp.exists():
-            continue
-        try:
-            m = json.loads(mp.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        ver = int(m.get("studio_current_version", 0) or 0)
-        if ver < 1:
-            continue
-        out.append(
-            {
-                "deal_id": m.get("deal_id", sub.name),
-                "deal_name": m.get("deal_name", ""),
-                "current_version": ver,
-                "updated_at": m.get("updated_at", m.get("created_at", "")),
-            }
-        )
-    out.sort(key=lambda r: r.get("updated_at", ""), reverse=True)
-    return out
-
-
-def list_solver_presets(deal_id: str) -> list[dict[str, Any]]:
-    d = deal_dir(deal_id)
-    manifest_path = d / "manifest.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"No deal {deal_id!r}")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    presets = manifest.get("solver_presets_library", [])
-    if not isinstance(presets, list):
-        return []
-    return presets
-
-
-def save_solver_preset(
-    deal_id: str,
-    preset_name: str,
-    solver_spec: dict[str, Any],
-    notes: str | None = None,
-) -> dict[str, Any]:
-    d = deal_dir(deal_id)
-    manifest_path = d / "manifest.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"No deal {deal_id!r}")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    now = datetime.now(timezone.utc).isoformat()
-    presets = manifest.get("solver_presets_library", [])
-    if not isinstance(presets, list):
-        presets = []
-
-    existing_idx = None
-    for i, preset in enumerate(presets):
-        if isinstance(preset, dict) and preset.get("preset_name") == preset_name:
-            existing_idx = i
-            break
-    payload = {
-        "preset_name": preset_name,
-        "solver_spec": solver_spec,
-        "notes": notes or "",
-        "updated_at": now,
-    }
-    if existing_idx is None:
-        payload["created_at"] = now
-        presets.append(payload)
-    else:
-        payload["created_at"] = presets[existing_idx].get("created_at", now)
-        presets[existing_idx] = payload
-
-    manifest["solver_presets_library"] = presets
-    manifest["updated_at"] = now
-    manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
-    return payload
 
 
 # ---------------------------------------------------------------------------

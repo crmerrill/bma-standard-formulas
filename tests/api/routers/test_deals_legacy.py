@@ -120,8 +120,10 @@ def test_legacy_studio_endpoints_return_404(
             resp = client.get(path)
         else:
             resp = client.post(path, json=body)
-        assert resp.status_code == 404, (
-            f"{method} {path} should return 404 (legacy route retired) "
+        # 404 = route deleted; 405 = path prefix found but method not registered.
+        # Both indicate the legacy route is no longer available.
+        assert resp.status_code in {404, 405}, (
+            f"{method} {path} should return 404/405 (legacy route retired) "
             f"but got {resp.status_code}: {resp.text[:200]}"
         )
 

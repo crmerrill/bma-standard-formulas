@@ -49,14 +49,7 @@ def _build_minimal_deal(*, deal_name: str, coupon: float) -> DealDefinition:
 def _seed_git_backed_deal(
     *,
     deal_id: str,
-    include_studio_snapshot: bool = False,
 ) -> Path:
-    if include_studio_snapshot:
-        deal_store.save_studio_ir(
-            deal_id=deal_id,
-            deal_name=f"{deal_id}-studio",
-            ir={"schema_version": "studio", "deal_name": f"{deal_id}-studio"},
-        )
     deal_store.save_deal(
         deal_id,
         _build_minimal_deal(deal_name=f"{deal_id}-canonical", coupon=5.0),
@@ -129,18 +122,6 @@ def test_fsck_detects_corruption_via_load_deal_entry_point(
         and event.get("deal_id") == deal_id
         for event in events
     )
-
-
-def test_fsck_detects_corruption_via_load_studio_snapshot_entry_point(
-    redirected_deals_dir: Path,
-) -> None:
-    deal_id = "deal_fsck_studio_snapshot"
-    repo_dir = _seed_git_backed_deal(deal_id=deal_id, include_studio_snapshot=True)
-    _corrupt_first_loose_object(repo_dir)
-
-    with pytest.raises(Exception) as exc_info:
-        deal_store.load_studio_snapshot(deal_id)
-    _assert_repo_corrupt_diagnostic(exc_info.value)
 
 
 def test_fsck_detects_corruption_via_commit_deal_entry_point(
