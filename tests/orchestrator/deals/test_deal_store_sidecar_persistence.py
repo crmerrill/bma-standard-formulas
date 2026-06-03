@@ -354,3 +354,93 @@ def test_commit_request_omits_sidecar_payload_preserves_irvc4_behavior(
     assert service.show(body["sha"], "sidecar.json") == _canonical_sidecar_bytes(
         expected_sidecar_payload
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression: M1 — successful save removes sidecar.broken.json from working tree
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("use_cli", [False, True], ids=["pygit2", "cli"])
+def test_successful_save_removes_broken_sidecar(
+    tmp_path: Path,
+    use_cli: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a corrupted-sidecar load creates sidecar.broken.json, a subsequent
+    commit_deal with a valid sidecar_payload must remove sidecar.broken.json
+    from the working tree. (R1 M1 regression)"""
+    _force_backend(use_cli, monkeypatch)
+    monkeypatch.setattr(deal_store, "_DEALS_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(deal_store, "_POOLS_DIR", tmp_path / "pools", raising=False)
+    deal_store.init_deals_workspace()
+
+    deal_id = "deal_m1_broken_cleanup"
+    repo_path = deal_store.deal_dir(deal_id)
+    deal_payload = _build_minimal_deal_payload(deal_name="sdpm2-m1-cleanup", coupon=6.3)
+    malformed_sidecar = b'{"schema_version":"1.0.0","layout_overrides":'
+    parent_sha = _seed_commit_with_deal_and_optional_sidecar(
+        repo_path=repo_path,
+        deal_payload=deal_payload,
+        sidecar_bytes=malformed_sidecar,
+        message="seed malformed sidecar",
+    )
+
+    deal_store.load_deal(deal_id)
+    broken_path = repo_path / "sidecar.broken.json"
+    assert broken_path.exists(), "sidecar.broken.json should exist after loading corrupted sidecar"
+
+    service = GitService(repo_path=repo_path)
+    sidecar_payload = _build_sidecar_payload()
+    service.commit_deal(
+        deal_payload,
+        author="Tester <tester@example.com>",
+        message="repair: save valid sidecar",
+        parent_sha=parent_sha,
+        sidecar_payload=sidecar_payload,
+    )
+
+    assert not broken_path.exists(), (
+        "sidecar.broken.json must be removed from the working tree after a "
+        "successful commit_deal with a valid sidecar_payload"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression: M2 — staged sidecar.broken.json must not appear in commit tree
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("use_cli", [False, True], ids=["pygit2", "cli"])
+def test_staged_broken_sidecar_excluded_from_commit(
+    tmp_path: Path,
+    use_cli: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even if sidecar.broken.json was already staged (e.g. by manual git add),
+    the resulting commit_deal tree must NOT contain it. (R1 M2 regression)"""
+    _force_backend(use_cli, monkeypatch)
+
+    repo_path = tmp_path / "repo"
+    _init_empty_repo(repo_path)
+
+    broken_content = b'{"schema_version":"1.0.0","broken":true}'
+    (repo_path / "sidecar.broken.json").write_bytes(broken_content)
+    _run_git(repo_path, "add", "sidecar.broken.json")
+
+    service = GitService(repo_path=repo_path)
+    deal_payload = _build_minimal_deal_payload(deal_name="sdpm2-m2-staged", coupon=6.4)
+    sidecar_payload = _build_sidecar_payload()
+
+    sha = service.commit_deal(
+        deal_payload,
+        author="Tester <tester@example.com>",
+        message="commit with valid sidecar; staged broken must not be in tree",
+        parent_sha=None,
+        sidecar_payload=sidecar_payload,
+    )
+
+    with pytest.raises(Exception):
+        service.show(sha, "sidecar.broken.json")
+
+    assert service.show(sha, "sidecar.json") == _canonical_sidecar_bytes(sidecar_payload)

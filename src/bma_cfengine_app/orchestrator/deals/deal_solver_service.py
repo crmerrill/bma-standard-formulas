@@ -243,6 +243,7 @@ def execute_deal_solve(
             )
 
         _load_result = load_deal(deal_id, version=deal_version)
+        # TODO(sdpm-2/m2): propagate sidecar diagnostics to API/run/solver responses
         deal = _load_result[0] if _load_result else None
         solved_deal, solver_summary = solve_deal(
             deal,

@@ -401,6 +401,7 @@ def _ensure_canonical_deal(deal_id: str, version: int | None = None):
         result = load_deal(deal_id, version=version)
         if result is None:
             raise FileNotFoundError(f"No deal found with ID {deal_id}")
+        # TODO(sdpm-2/m2): propagate sidecar diagnostics to API/run/solver responses
         return result[0]
     except FileNotFoundError:
         snapshot = load_studio_snapshot(deal_id, version=version)

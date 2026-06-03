@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import subprocess
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -286,7 +287,14 @@ def _load_sidecar_from_commit(
         return (sidecar, [])
     except Exception:
         broken_path = repo_path / "sidecar.broken.json"
-        broken_path.write_bytes(raw_sidecar)
+        with service._write_lock():
+            fd, tmp = tempfile.mkstemp(dir=str(repo_path), suffix=".tmp")
+            try:
+                os.write(fd, raw_sidecar)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(tmp, str(broken_path))
         diagnostic = DiagnosticPayload(
             code="SIDECAR_LOAD_FAILED",
             severity=Severity.info,

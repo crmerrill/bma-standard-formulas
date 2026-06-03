@@ -39,6 +39,7 @@ def execute_deal_run(
 
     try:
         _load_result = load_deal(deal_id, version=deal_version)
+        # TODO(sdpm-2/m2): propagate sidecar diagnostics to API/run/solver responses
         deal = _load_result[0] if _load_result else None
 
         if run_inputs_by_scenario:

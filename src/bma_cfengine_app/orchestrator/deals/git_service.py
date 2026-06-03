@@ -423,6 +423,7 @@ class GitService:
                 os.close(fd2)
             os.replace(tmp2, str(sidecar_path))
             index.add("sidecar.json")
+            (self._repo_path / "sidecar.broken.json").unlink(missing_ok=True)
         index.write()
 
         return str(commit_oid)
@@ -533,6 +534,7 @@ class GitService:
             sidecar_path = self._repo_path / "sidecar.json"
             sidecar_path.write_bytes(sidecar_data)
             self._git_cli("add", "sidecar.json")
+            (self._repo_path / "sidecar.broken.json").unlink(missing_ok=True)
 
         author_name, author_email = _parse_author(author)
         env = {
@@ -549,6 +551,7 @@ class GitService:
             if sidecar_data is not None:
                 self._git_cli("add", "sidecar.json", env=env)
 
+        self._git_cli("rm", "--cached", "--ignore-unmatch", "sidecar.broken.json", env=env)
         self._git_cli("commit", "-m", message, "--allow-empty", env=env)
         result = self._git_cli("rev-parse", "HEAD")
         return result.stdout.strip()
