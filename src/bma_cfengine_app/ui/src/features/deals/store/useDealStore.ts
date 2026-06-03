@@ -11,6 +11,7 @@ import type {
 } from "./session";
 import { mkBranchName } from "./session";
 import { createLifecycleActions } from "./lifecycle";
+import type { MergeConflictPayload, CommitBody } from "./api";
 
 export type { DealState };
 
@@ -23,7 +24,7 @@ export type ConflictState = {
 
 export type ApplyConflict = {
   sessionId: string;
-  diagnostic: unknown;
+  diagnostic: MergeConflictPayload;
 } | null;
 
 export type DealStoreState = {
@@ -42,6 +43,11 @@ export type DealStoreState = {
   setActiveSession: (sessionId: string) => void;
   setDiagnostics: (sessionId: string, payloads: DiagnosticPayload[]) => void;
   deleteSession: (sessionId: string) => void;
+  commitWithConflictHandling: (
+    deal_id: string,
+    body: CommitBody,
+    sessionId: string,
+  ) => Promise<{ sha: string }>;
   previewEphemeralSession: (sessionId: string) => void;
   applyEphemeralSessionToMain: (sessionId: string) => Promise<void>;
   discardEphemeralSession: (sessionId: string) => Promise<void>;

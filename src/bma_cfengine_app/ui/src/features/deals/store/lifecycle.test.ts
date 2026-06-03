@@ -173,6 +173,8 @@ describe("sds-4 patch lifecycle and HTTP integration", () => {
     expect(after.sessions.main.base_sha).toBe(NEW_MAIN_SHA);
     expect(after.sessions.main.working_tree).toEqual(mergedMainTree);
     expect(after.sessions[sessionId]).toBeUndefined();
+    // Major #7: active session reset to main after deleting the applied session
+    expect(after.activeSessionId).toBe("main");
 
     const mergeCall = fetchSpy.mock.calls.find(([url]) =>
       String(url).includes(`/deals/${DEAL_ID}/merge`),
@@ -367,5 +369,101 @@ describe("sds-4 patch lifecycle and HTTP integration", () => {
 
     const after = useDealStore.getState();
     expect(after.sessions[sessionId]).toBeDefined();
+    // Major #2: failure must append a BRANCH_DELETE_FAILED diagnostic to the session
+    const diagnostics = after.sessions[sessionId].diagnostics;
+    expect(diagnostics.length).toBeGreaterThan(0);
+    expect(diagnostics[0].code).toBe("BRANCH_DELETE_FAILED");
+    expect(diagnostics[0].severity).toBe("error");
+  });
+
+  test("test_preview_main_session_throws", () => {
+    const previewEphemeralSession = getLifecycleAction("previewEphemeralSession");
+    expect(() => previewEphemeralSession("main")).toThrow();
+  });
+
+  test("test_apply_main_session_throws", async () => {
+    const applyEphemeralSessionToMain = getLifecycleAction(
+      "applyEphemeralSessionToMain",
+    );
+    await expect(applyEphemeralSessionToMain("main")).rejects.toThrow();
+  });
+
+  test("test_discard_main_session_throws", async () => {
+    const discardEphemeralSession = getLifecycleAction("discardEphemeralSession");
+    await expect(discardEphemeralSession("main")).rejects.toThrow();
+  });
+
+  test("test_show_500_on_apply_does_not_corrupt_main_state", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const branchName = mkBranchName("ai/turn-show-500-apply");
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    fetchSpy.mockResolvedValueOnce(jsonResponse(makeDealFixture("show-500-seed")));
+    // merge succeeds
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse({ status: "success", sha: NEW_MAIN_SHA }),
+    );
+    // /show returns 500
+    fetchSpy.mockResolvedValueOnce(new Response(null, { status: 500 }));
+
+    const sessionId = await createEphemeralSessionForTests(branchName, BASE_SHA);
+    const applyEphemeralSessionToMain = getLifecycleAction(
+      "applyEphemeralSessionToMain",
+    );
+
+    const mainBefore = useDealStore.getState().sessions.main;
+    const mainWorkingTreeBefore = mainBefore.working_tree;
+    const mainBaseShaBefore = mainBefore.base_sha;
+
+    await expect(applyEphemeralSessionToMain(sessionId)).rejects.toThrow();
+
+    const after = useDealStore.getState();
+    expect(after.sessions.main.working_tree).toBe(mainWorkingTreeBefore);
+    expect(after.sessions.main.base_sha).toBe(mainBaseShaBefore);
+  });
+
+  test("test_concurrent_apply_rejects_second_in_flight", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const branchName = mkBranchName("ai/turn-concurrent-apply");
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    fetchSpy.mockResolvedValueOnce(jsonResponse(makeDealFixture("concurrent-seed")));
+
+    const sessionId = await createEphemeralSessionForTests(branchName, BASE_SHA);
+    const applyEphemeralSessionToMain = getLifecycleAction(
+      "applyEphemeralSessionToMain",
+    );
+
+    // First merge call hangs indefinitely; second apply should reject synchronously.
+    let settleFirst!: (r: Response) => void;
+    fetchSpy.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          settleFirst = resolve;
+        }),
+    );
+
+    const firstApplyPromise = applyEphemeralSessionToMain(sessionId);
+
+    // Yield so the first apply registers in inFlightApplies before the second call.
+    await Promise.resolve();
+
+    await expect(applyEphemeralSessionToMain(sessionId)).rejects.toThrow(
+      /already in flight/,
+    );
+
+    // Clean up: resolve the first apply as a conflict (no /show needed).
+    settleFirst(
+      jsonResponse({
+        status: "conflict",
+        diagnostic: {
+          entity_kind: "bond",
+          entity_id: "X1",
+          field_path: "coupon",
+          ours_value: 0.05,
+          theirs_value: 0.06,
+          ancestor_value: 0.04,
+        },
+      }),
+    );
+    await firstApplyPromise;
   });
 });

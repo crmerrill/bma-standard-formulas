@@ -6,7 +6,21 @@ import type { BondDefIR, DealDefinitionIR } from "../ir-types";
 type DealState = DealDefinitionIR;
 type BondDef = BondDefIR;
 
+type CommitBody = {
+  author: string;
+  message: string;
+  parent_sha: string;
+  branch: string;
+  payload: DealState;
+  force?: boolean;
+};
+
 type Sds4ApiActions = {
+  commitWithConflictHandling: (
+    deal_id: string,
+    body: CommitBody,
+    sessionId: string,
+  ) => Promise<{ sha: string }>;
   forceCommit: (sessionId: string) => Promise<void>;
   reloadFromHead: (sessionId: string) => Promise<void>;
 };
@@ -210,6 +224,89 @@ describe("sds-4 API 409 conflict integration", () => {
     );
 
     expect(useDealStore.getState().conflictState).toBeNull();
+  });
+
+  test("test_initial_commit_409_creates_conflictState_without_preseed", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const attemptedPayload = makeDealFixture("initial-conflict-no-preseed");
+    seedMainSession(BASE_SHA, attemptedPayload);
+    // Explicitly verify no conflictState is pre-seeded
+    expect(useDealStore.getState().conflictState).toBeNull();
+
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          detail: {
+            code: "STALE_PARENT_SHA",
+            head_sha: HEAD_SHA,
+          },
+        },
+        409,
+      ),
+    );
+
+    const commitWithConflictHandling = getApiAction(
+      "commitWithConflictHandling",
+    );
+    try {
+      await commitWithConflictHandling(DEAL_ID, {
+        author: "test-author",
+        message: "initial commit attempt",
+        parent_sha: BASE_SHA,
+        branch: "main",
+        payload: attemptedPayload,
+      }, "main");
+    } catch {
+      // Expected to throw; assert state was written before throw.
+    }
+
+    const after = useDealStore.getState();
+    expect(after.conflictState).not.toBeNull();
+    expect(after.conflictState?.kind).toBe("STALE_PARENT_SHA");
+    expect(after.conflictState?.sessionId).toBe("main");
+    expect(after.conflictState?.head_sha).toBe(HEAD_SHA);
+    expect(after.conflictState?.attempted_commit.author).toBe("test-author");
+    expect(after.conflictState?.attempted_commit.message).toBe(
+      "initial commit attempt",
+    );
+    expect(after.conflictState?.attempted_commit.payload).toEqual(
+      attemptedPayload,
+    );
+  });
+
+  test("test_forceCommit_cross_session_mismatch_throws", async () => {
+    const attemptedPayload = makeDealFixture("cross-session-conflict");
+    seedMainSession(BASE_SHA, attemptedPayload);
+    // Seed conflict belonging to "main"
+    seedConflictState("main", attemptedPayload);
+
+    const forceCommit = getApiAction("forceCommit");
+    // Calling forceCommit with a different sessionId should throw
+    await expect(forceCommit("other-session-id")).rejects.toThrow(
+      "conflictState.sessionId mismatch",
+    );
+  });
+
+  test("test_reloadFromHead_cross_session_mismatch_throws", async () => {
+    const attemptedPayload = makeDealFixture("cross-session-reload");
+    seedMainSession(BASE_SHA, attemptedPayload);
+    useDealStore.setState({
+      conflictState: {
+        kind: "STALE_PARENT_SHA",
+        sessionId: "main",
+        head_sha: HEAD_SHA,
+        attempted_commit: {
+          author: "test-author",
+          message: "cross session reload",
+          payload: attemptedPayload,
+        },
+      },
+    });
+
+    const reloadFromHead = getApiAction("reloadFromHead");
+    await expect(reloadFromHead("other-session-id")).rejects.toThrow(
+      "conflictState.sessionId mismatch",
+    );
   });
 
   test("test_reloadFromHead_discards_pending_and_reseeds_working_tree_from_head_sha", async () => {

@@ -9,6 +9,14 @@ export type MergeConflictPayload = {
   ancestor_value: unknown;
 };
 
+export type MergeSuccess = { status: "success"; sha: string; diagnostic: null };
+export type MergeConflict = {
+  status: "conflict";
+  sha: null;
+  diagnostic: MergeConflictPayload;
+};
+export type MergeResult = MergeSuccess | MergeConflict;
+
 export type CommitBody = {
   author: string;
   message: string;
@@ -51,11 +59,7 @@ export async function commitToBranch(
 export async function mergeBranch(
   deal_id: string,
   body: { branch: string; into: string },
-): Promise<{
-  status: "success" | "conflict";
-  sha: string | null;
-  diagnostic: MergeConflictPayload | null;
-}> {
+): Promise<MergeResult> {
   const res = await fetch(`/deals/${deal_id}/merge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -64,11 +68,32 @@ export async function mergeBranch(
   if (!res.ok) {
     throw new Error(`mergeBranch failed: ${res.status}`);
   }
-  return res.json() as Promise<{
-    status: "success" | "conflict";
-    sha: string | null;
-    diagnostic: MergeConflictPayload | null;
-  }>;
+  const response = (await res.json()) as {
+    status: string;
+    sha: unknown;
+    diagnostic: unknown;
+  };
+  if (response.status === "success") {
+    if (typeof response.sha !== "string") {
+      throw new Error(
+        "Protocol violation: success response missing sha string",
+      );
+    }
+    return { status: "success", sha: response.sha, diagnostic: null };
+  }
+  if (response.status === "conflict") {
+    if (response.diagnostic == null) {
+      throw new Error(
+        "Protocol violation: conflict response missing diagnostic",
+      );
+    }
+    return {
+      status: "conflict",
+      sha: null,
+      diagnostic: response.diagnostic as MergeConflictPayload,
+    };
+  }
+  throw new Error(`mergeBranch: unexpected status "${response.status}"`);
 }
 
 export async function deleteBranch(
