@@ -26,6 +26,7 @@ from typing import Any
 
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
 from bma_standard_formulas.deals.schemas.migrations import migrate_deal_payload
+from bma_standard_formulas.deals.schemas.migrations.studio_migration import migrate_studio_payload
 from bma_standard_formulas.deals.schemas.studio_sidecar import StudioSidecar
 from bma_standard_formulas.diagnostics import DiagnosticPayload, Severity
 
@@ -211,12 +212,30 @@ def _migrate_legacy_to_git(deal_id: str) -> None:
             legacy_path = d / f"v{v}.json"
             legacy_payload = json.loads(legacy_path.read_text(encoding="utf-8"))
             canonical_payload = migrate_deal_payload(legacy_payload)
+
+            commit_message = f"Migrate v{v}"
+            sidecar_payload_bytes: bytes | None = None
+
+            studio_path = d / f"studio_v{v}.json"
+            if studio_path.exists():
+                studio_payload = json.loads(studio_path.read_text(encoding="utf-8"))
+                deal_for_migration = DealDefinition.model_validate(canonical_payload)
+                sidecar, deal_for_migration, provenance = migrate_studio_payload(
+                    studio_payload, deal_for_migration
+                )
+                canonical_payload = json.loads(deal_for_migration.model_dump_json())
+                sidecar_payload_bytes = sidecar.model_dump_json(indent=2).encode("utf-8")
+                if provenance:
+                    provenance_json = json.dumps(provenance, sort_keys=True, indent=2)
+                    commit_message = f"Migrate v{v}\n\nLegacy-Studio-Provenance:\n{provenance_json}"
+
             canonical_bytes = json.dumps(canonical_payload, indent=2, sort_keys=True).encode("utf-8")
             parent_sha = service.commit_deal(
                 canonical_bytes,
                 author="system:migration <migration@bma>",
-                message=f"Migrate v{v}",
+                message=commit_message,
                 parent_sha=parent_sha,
+                sidecar_payload=sidecar_payload_bytes,
             )
 
         _collapse_manifest_post_migration(deal_id)
