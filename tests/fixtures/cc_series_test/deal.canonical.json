@@ -1,0 +1,434 @@
+{
+  "schema_version": "2.0.0",
+  "deal_name": "CC Series 2024-A",
+  "description": "Representative CC master trust single series. Representative single-series CC master trust (composite model). TODO: cite specific COMET, Chase, Citi, Discover, or AmEx series supplement.",
+  "origination_date": null,
+  "settlement_date": null,
+  "series_id": "CC-MASTER-TRUST-2024-A",
+  "discount_factor_pct": 2.0,
+  "deal_state_trigger": null,
+  "initial_deal_state": "REVOLVING",
+  "bonds": [
+    {
+      "name": "A",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 6.0,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 500000000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": 20.0,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": 1,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "B",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 0.0,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 75000000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": 75000000.0,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": 2,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "C",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 0.0,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 25000000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": 25000000.0,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": 3,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "R",
+      "kind": "RESIDUAL",
+      "is_bond": false,
+      "is_pseudo": true,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": null,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": null,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    }
+  ],
+  "accounts": [
+    {
+      "name": "PFA",
+      "account_category": "PREFUNDING",
+      "starting_amount": 0.0,
+      "starting_pct": null,
+      "starting_basis": "FIXED_DOLLAR",
+      "minimum_amount": 0.0,
+      "minimum_pct": null,
+      "minimum_basis": "FIXED_DOLLAR",
+      "minimum_schedule": [
+        {
+          "period": 1,
+          "minimum_balance": 4166666.6666666665
+        },
+        {
+          "period": 2,
+          "minimum_balance": 8333333.333333333
+        },
+        {
+          "period": 3,
+          "minimum_balance": 12500000.0
+        },
+        {
+          "period": 4,
+          "minimum_balance": 16666666.666666666
+        },
+        {
+          "period": 5,
+          "minimum_balance": 20833333.333333332
+        },
+        {
+          "period": 6,
+          "minimum_balance": 25000000.0
+        },
+        {
+          "period": 7,
+          "minimum_balance": 29166666.666666668
+        },
+        {
+          "period": 8,
+          "minimum_balance": 33333333.333333332
+        },
+        {
+          "period": 9,
+          "minimum_balance": 37500000.0
+        },
+        {
+          "period": 10,
+          "minimum_balance": 41666666.666666664
+        },
+        {
+          "period": 11,
+          "minimum_balance": 45833333.333333336
+        },
+        {
+          "period": 12,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 13,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 14,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 15,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 16,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 17,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 18,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 19,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 20,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 21,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 22,
+          "minimum_balance": 50000000.0
+        },
+        {
+          "period": 23,
+          "minimum_balance": 50000000.0
+        }
+      ]
+    },
+    {
+      "name": "SPREAD_ACCT",
+      "account_category": "SPREAD_ACCOUNT",
+      "starting_amount": 5000000.0,
+      "starting_pct": null,
+      "starting_basis": "FIXED_DOLLAR",
+      "minimum_amount": 0.0,
+      "minimum_pct": null,
+      "minimum_basis": "FIXED_DOLLAR",
+      "minimum_schedule": null
+    }
+  ],
+  "fees": [],
+  "triggers": [],
+  "calculations": [],
+  "waterfall_rules": [
+    {
+      "rule_id": "a_int",
+      "rule_type": "PAY_INTEREST",
+      "order": 0,
+      "group_id": null,
+      "from_sources": [
+        "ACT_INT"
+      ],
+      "to_targets": [
+        "A"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "pfa_dep",
+      "rule_type": "PAY_TO_ACCOUNT",
+      "order": 1,
+      "group_id": null,
+      "from_sources": [
+        "ACT_PRIN"
+      ],
+      "to_targets": [
+        "PFA"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": 5000000.0,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "p_to_i",
+      "rule_type": "PAY_INTEREST",
+      "order": 2,
+      "group_id": null,
+      "from_sources": [
+        "B"
+      ],
+      "to_targets": [
+        "A"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": "A_available_subordination - A_required_subordination if A_available_subordination > A_required_subordination else 0",
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "INTEREST_SHORTFALL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "reimb_b",
+      "rule_type": "REIMBURSE_NLA",
+      "order": 3,
+      "group_id": null,
+      "from_sources": [
+        "SPREAD_ACCT"
+      ],
+      "to_targets": [
+        "B"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "resid",
+      "rule_type": "PAY_RESIDUAL",
+      "order": 4,
+      "group_id": null,
+      "from_sources": [
+        "ACT_INT"
+      ],
+      "to_targets": [
+        "R"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    }
+  ],
+  "collateral_groups": [],
+  "deal_knobs": {}
+}

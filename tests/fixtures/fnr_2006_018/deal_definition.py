@@ -350,6 +350,44 @@ def build_fnr_2006_018_group_1_deal(
     )
 
 
+def _build_fnr_deal_definition() -> DealDefinition:
+    """Build the canonical fixture form with fragmented support rules.
+
+    The support principal cascade is emitted as individual per-bond rules
+    (one rule per target) rather than a single multi-target rule. This is
+    the "as-authored" form a user might create in the Studio and exercises
+    the compiler's non-consolidation property.
+    """
+    deal = build_fnr_2006_018_group_1_deal()
+
+    fragmented_rules: list[RuleNode] = []
+    for rule in deal.waterfall_rules:
+        if rule.rule_id == "r_pay_wawg":
+            for i, target in enumerate(rule.to_targets):
+                fragmented_rules.append(RuleNode(
+                    rule_id=f"r_pay_{target.lower()}",
+                    rule_type=rule.rule_type,
+                    order=rule.order + i,
+                    from_sources=rule.from_sources,
+                    to_targets=[target],
+                    payment_style=rule.payment_style,
+                ))
+        else:
+            adjusted_order = rule.order
+            if rule.order > 5:
+                adjusted_order = rule.order + 5
+            fragmented_rules.append(rule.model_copy(update={"order": adjusted_order}))
+
+    return DealDefinition(
+        deal_name=deal.deal_name,
+        bonds=deal.bonds,
+        waterfall_rules=fragmented_rules,
+    )
+
+
+deal_definition = _build_fnr_deal_definition()
+
+
 def build_fnr_2006_018_group_2_deal(n_periods: int = 240) -> DealDefinition:
     """Construct the FNR 2006-018 Group 2 sub-deal DealDefinition.
 

@@ -1,0 +1,3187 @@
+{
+  "schema_version": "2.0.0",
+  "deal_name": "GNMA 2025-203",
+  "description": "Ginnie Mae REMIC Trust 2025-203 — structural fixture. TODO: Extract Exhibit A (decrement tables at 300/400/600 PSA) and Exhibit B (yield tables) from the offering circular and add as machine-readable arrays before marking this fixture complete.",
+  "origination_date": null,
+  "settlement_date": null,
+  "series_id": null,
+  "discount_factor_pct": 0.0,
+  "deal_state_trigger": null,
+  "initial_deal_state": "REVOLVING",
+  "bonds": [
+    {
+      "name": "PA",
+      "kind": "PAC",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 1000000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [
+        {
+          "period": 1,
+          "target_balance": 997000
+        },
+        {
+          "period": 2,
+          "target_balance": 994000
+        },
+        {
+          "period": 3,
+          "target_balance": 991000
+        },
+        {
+          "period": 4,
+          "target_balance": 988000
+        },
+        {
+          "period": 5,
+          "target_balance": 985000
+        },
+        {
+          "period": 6,
+          "target_balance": 982000
+        },
+        {
+          "period": 7,
+          "target_balance": 979000
+        },
+        {
+          "period": 8,
+          "target_balance": 976000
+        },
+        {
+          "period": 9,
+          "target_balance": 973000
+        },
+        {
+          "period": 10,
+          "target_balance": 970000
+        },
+        {
+          "period": 11,
+          "target_balance": 967000
+        },
+        {
+          "period": 12,
+          "target_balance": 964000
+        },
+        {
+          "period": 13,
+          "target_balance": 961000
+        },
+        {
+          "period": 14,
+          "target_balance": 958000
+        },
+        {
+          "period": 15,
+          "target_balance": 955000
+        },
+        {
+          "period": 16,
+          "target_balance": 952000
+        },
+        {
+          "period": 17,
+          "target_balance": 949000
+        },
+        {
+          "period": 18,
+          "target_balance": 946000
+        },
+        {
+          "period": 19,
+          "target_balance": 943000
+        },
+        {
+          "period": 20,
+          "target_balance": 940000
+        },
+        {
+          "period": 21,
+          "target_balance": 937000
+        },
+        {
+          "period": 22,
+          "target_balance": 934000
+        },
+        {
+          "period": 23,
+          "target_balance": 931000
+        },
+        {
+          "period": 24,
+          "target_balance": 928000
+        },
+        {
+          "period": 25,
+          "target_balance": 925000
+        },
+        {
+          "period": 26,
+          "target_balance": 922000
+        },
+        {
+          "period": 27,
+          "target_balance": 919000
+        },
+        {
+          "period": 28,
+          "target_balance": 916000
+        },
+        {
+          "period": 29,
+          "target_balance": 913000
+        },
+        {
+          "period": 30,
+          "target_balance": 910000
+        },
+        {
+          "period": 31,
+          "target_balance": 907000
+        },
+        {
+          "period": 32,
+          "target_balance": 904000
+        },
+        {
+          "period": 33,
+          "target_balance": 901000
+        },
+        {
+          "period": 34,
+          "target_balance": 898000
+        },
+        {
+          "period": 35,
+          "target_balance": 895000
+        },
+        {
+          "period": 36,
+          "target_balance": 892000
+        },
+        {
+          "period": 37,
+          "target_balance": 889000
+        },
+        {
+          "period": 38,
+          "target_balance": 886000
+        },
+        {
+          "period": 39,
+          "target_balance": 883000
+        },
+        {
+          "period": 40,
+          "target_balance": 880000
+        },
+        {
+          "period": 41,
+          "target_balance": 877000
+        },
+        {
+          "period": 42,
+          "target_balance": 874000
+        },
+        {
+          "period": 43,
+          "target_balance": 871000
+        },
+        {
+          "period": 44,
+          "target_balance": 868000
+        },
+        {
+          "period": 45,
+          "target_balance": 865000
+        },
+        {
+          "period": 46,
+          "target_balance": 862000
+        },
+        {
+          "period": 47,
+          "target_balance": 859000
+        },
+        {
+          "period": 48,
+          "target_balance": 856000
+        },
+        {
+          "period": 49,
+          "target_balance": 853000
+        },
+        {
+          "period": 50,
+          "target_balance": 850000
+        },
+        {
+          "period": 51,
+          "target_balance": 847000
+        },
+        {
+          "period": 52,
+          "target_balance": 844000
+        },
+        {
+          "period": 53,
+          "target_balance": 841000
+        },
+        {
+          "period": 54,
+          "target_balance": 838000
+        },
+        {
+          "period": 55,
+          "target_balance": 835000
+        },
+        {
+          "period": 56,
+          "target_balance": 832000
+        },
+        {
+          "period": 57,
+          "target_balance": 829000
+        },
+        {
+          "period": 58,
+          "target_balance": 826000
+        },
+        {
+          "period": 59,
+          "target_balance": 823000
+        },
+        {
+          "period": 60,
+          "target_balance": 820000
+        },
+        {
+          "period": 61,
+          "target_balance": 817000
+        },
+        {
+          "period": 62,
+          "target_balance": 814000
+        },
+        {
+          "period": 63,
+          "target_balance": 811000
+        },
+        {
+          "period": 64,
+          "target_balance": 808000
+        },
+        {
+          "period": 65,
+          "target_balance": 805000
+        },
+        {
+          "period": 66,
+          "target_balance": 802000
+        },
+        {
+          "period": 67,
+          "target_balance": 799000
+        },
+        {
+          "period": 68,
+          "target_balance": 796000
+        },
+        {
+          "period": 69,
+          "target_balance": 793000
+        },
+        {
+          "period": 70,
+          "target_balance": 790000
+        },
+        {
+          "period": 71,
+          "target_balance": 787000
+        },
+        {
+          "period": 72,
+          "target_balance": 784000
+        },
+        {
+          "period": 73,
+          "target_balance": 781000
+        },
+        {
+          "period": 74,
+          "target_balance": 778000
+        },
+        {
+          "period": 75,
+          "target_balance": 775000
+        },
+        {
+          "period": 76,
+          "target_balance": 772000
+        },
+        {
+          "period": 77,
+          "target_balance": 769000
+        },
+        {
+          "period": 78,
+          "target_balance": 766000
+        },
+        {
+          "period": 79,
+          "target_balance": 763000
+        },
+        {
+          "period": 80,
+          "target_balance": 760000
+        },
+        {
+          "period": 81,
+          "target_balance": 757000
+        },
+        {
+          "period": 82,
+          "target_balance": 754000
+        },
+        {
+          "period": 83,
+          "target_balance": 751000
+        },
+        {
+          "period": 84,
+          "target_balance": 748000
+        },
+        {
+          "period": 85,
+          "target_balance": 745000
+        },
+        {
+          "period": 86,
+          "target_balance": 742000
+        },
+        {
+          "period": 87,
+          "target_balance": 739000
+        },
+        {
+          "period": 88,
+          "target_balance": 736000
+        },
+        {
+          "period": 89,
+          "target_balance": 733000
+        },
+        {
+          "period": 90,
+          "target_balance": 730000
+        },
+        {
+          "period": 91,
+          "target_balance": 727000
+        },
+        {
+          "period": 92,
+          "target_balance": 724000
+        },
+        {
+          "period": 93,
+          "target_balance": 721000
+        },
+        {
+          "period": 94,
+          "target_balance": 718000
+        },
+        {
+          "period": 95,
+          "target_balance": 715000
+        },
+        {
+          "period": 96,
+          "target_balance": 712000
+        },
+        {
+          "period": 97,
+          "target_balance": 709000
+        },
+        {
+          "period": 98,
+          "target_balance": 706000
+        },
+        {
+          "period": 99,
+          "target_balance": 703000
+        },
+        {
+          "period": 100,
+          "target_balance": 700000
+        },
+        {
+          "period": 101,
+          "target_balance": 697000
+        },
+        {
+          "period": 102,
+          "target_balance": 694000
+        },
+        {
+          "period": 103,
+          "target_balance": 691000
+        },
+        {
+          "period": 104,
+          "target_balance": 688000
+        },
+        {
+          "period": 105,
+          "target_balance": 685000
+        },
+        {
+          "period": 106,
+          "target_balance": 682000
+        },
+        {
+          "period": 107,
+          "target_balance": 679000
+        },
+        {
+          "period": 108,
+          "target_balance": 676000
+        },
+        {
+          "period": 109,
+          "target_balance": 673000
+        },
+        {
+          "period": 110,
+          "target_balance": 670000
+        },
+        {
+          "period": 111,
+          "target_balance": 667000
+        },
+        {
+          "period": 112,
+          "target_balance": 664000
+        },
+        {
+          "period": 113,
+          "target_balance": 661000
+        },
+        {
+          "period": 114,
+          "target_balance": 658000
+        },
+        {
+          "period": 115,
+          "target_balance": 655000
+        },
+        {
+          "period": 116,
+          "target_balance": 652000
+        },
+        {
+          "period": 117,
+          "target_balance": 649000
+        },
+        {
+          "period": 118,
+          "target_balance": 646000
+        },
+        {
+          "period": 119,
+          "target_balance": 643000
+        },
+        {
+          "period": 120,
+          "target_balance": 640000
+        },
+        {
+          "period": 121,
+          "target_balance": 637000
+        },
+        {
+          "period": 122,
+          "target_balance": 634000
+        },
+        {
+          "period": 123,
+          "target_balance": 631000
+        },
+        {
+          "period": 124,
+          "target_balance": 628000
+        },
+        {
+          "period": 125,
+          "target_balance": 625000
+        },
+        {
+          "period": 126,
+          "target_balance": 622000
+        },
+        {
+          "period": 127,
+          "target_balance": 619000
+        },
+        {
+          "period": 128,
+          "target_balance": 616000
+        },
+        {
+          "period": 129,
+          "target_balance": 613000
+        },
+        {
+          "period": 130,
+          "target_balance": 610000
+        },
+        {
+          "period": 131,
+          "target_balance": 607000
+        },
+        {
+          "period": 132,
+          "target_balance": 604000
+        },
+        {
+          "period": 133,
+          "target_balance": 601000
+        },
+        {
+          "period": 134,
+          "target_balance": 598000
+        },
+        {
+          "period": 135,
+          "target_balance": 595000
+        },
+        {
+          "period": 136,
+          "target_balance": 592000
+        },
+        {
+          "period": 137,
+          "target_balance": 589000
+        },
+        {
+          "period": 138,
+          "target_balance": 586000
+        },
+        {
+          "period": 139,
+          "target_balance": 583000
+        },
+        {
+          "period": 140,
+          "target_balance": 580000
+        },
+        {
+          "period": 141,
+          "target_balance": 577000
+        },
+        {
+          "period": 142,
+          "target_balance": 574000
+        },
+        {
+          "period": 143,
+          "target_balance": 571000
+        },
+        {
+          "period": 144,
+          "target_balance": 568000
+        },
+        {
+          "period": 145,
+          "target_balance": 565000
+        },
+        {
+          "period": 146,
+          "target_balance": 562000
+        },
+        {
+          "period": 147,
+          "target_balance": 559000
+        },
+        {
+          "period": 148,
+          "target_balance": 556000
+        },
+        {
+          "period": 149,
+          "target_balance": 553000
+        },
+        {
+          "period": 150,
+          "target_balance": 550000
+        },
+        {
+          "period": 151,
+          "target_balance": 547000
+        },
+        {
+          "period": 152,
+          "target_balance": 544000
+        },
+        {
+          "period": 153,
+          "target_balance": 541000
+        },
+        {
+          "period": 154,
+          "target_balance": 538000
+        },
+        {
+          "period": 155,
+          "target_balance": 535000
+        },
+        {
+          "period": 156,
+          "target_balance": 532000
+        },
+        {
+          "period": 157,
+          "target_balance": 529000
+        },
+        {
+          "period": 158,
+          "target_balance": 526000
+        },
+        {
+          "period": 159,
+          "target_balance": 523000
+        },
+        {
+          "period": 160,
+          "target_balance": 520000
+        },
+        {
+          "period": 161,
+          "target_balance": 517000
+        },
+        {
+          "period": 162,
+          "target_balance": 514000
+        },
+        {
+          "period": 163,
+          "target_balance": 511000
+        },
+        {
+          "period": 164,
+          "target_balance": 508000
+        },
+        {
+          "period": 165,
+          "target_balance": 505000
+        },
+        {
+          "period": 166,
+          "target_balance": 502000
+        },
+        {
+          "period": 167,
+          "target_balance": 499000
+        },
+        {
+          "period": 168,
+          "target_balance": 496000
+        },
+        {
+          "period": 169,
+          "target_balance": 493000
+        },
+        {
+          "period": 170,
+          "target_balance": 490000
+        },
+        {
+          "period": 171,
+          "target_balance": 487000
+        },
+        {
+          "period": 172,
+          "target_balance": 484000
+        },
+        {
+          "period": 173,
+          "target_balance": 481000
+        },
+        {
+          "period": 174,
+          "target_balance": 478000
+        },
+        {
+          "period": 175,
+          "target_balance": 475000
+        },
+        {
+          "period": 176,
+          "target_balance": 472000
+        },
+        {
+          "period": 177,
+          "target_balance": 469000
+        },
+        {
+          "period": 178,
+          "target_balance": 466000
+        },
+        {
+          "period": 179,
+          "target_balance": 463000
+        },
+        {
+          "period": 180,
+          "target_balance": 460000
+        },
+        {
+          "period": 181,
+          "target_balance": 457000
+        },
+        {
+          "period": 182,
+          "target_balance": 454000
+        },
+        {
+          "period": 183,
+          "target_balance": 451000
+        },
+        {
+          "period": 184,
+          "target_balance": 448000
+        },
+        {
+          "period": 185,
+          "target_balance": 445000
+        },
+        {
+          "period": 186,
+          "target_balance": 442000
+        },
+        {
+          "period": 187,
+          "target_balance": 439000
+        },
+        {
+          "period": 188,
+          "target_balance": 436000
+        },
+        {
+          "period": 189,
+          "target_balance": 433000
+        },
+        {
+          "period": 190,
+          "target_balance": 430000
+        },
+        {
+          "period": 191,
+          "target_balance": 427000
+        },
+        {
+          "period": 192,
+          "target_balance": 424000
+        },
+        {
+          "period": 193,
+          "target_balance": 421000
+        },
+        {
+          "period": 194,
+          "target_balance": 418000
+        },
+        {
+          "period": 195,
+          "target_balance": 415000
+        },
+        {
+          "period": 196,
+          "target_balance": 412000
+        },
+        {
+          "period": 197,
+          "target_balance": 409000
+        },
+        {
+          "period": 198,
+          "target_balance": 406000
+        },
+        {
+          "period": 199,
+          "target_balance": 403000
+        },
+        {
+          "period": 200,
+          "target_balance": 400000
+        },
+        {
+          "period": 201,
+          "target_balance": 397000
+        },
+        {
+          "period": 202,
+          "target_balance": 394000
+        },
+        {
+          "period": 203,
+          "target_balance": 391000
+        },
+        {
+          "period": 204,
+          "target_balance": 388000
+        },
+        {
+          "period": 205,
+          "target_balance": 385000
+        },
+        {
+          "period": 206,
+          "target_balance": 382000
+        },
+        {
+          "period": 207,
+          "target_balance": 379000
+        },
+        {
+          "period": 208,
+          "target_balance": 376000
+        },
+        {
+          "period": 209,
+          "target_balance": 373000
+        },
+        {
+          "period": 210,
+          "target_balance": 370000
+        },
+        {
+          "period": 211,
+          "target_balance": 367000
+        },
+        {
+          "period": 212,
+          "target_balance": 364000
+        },
+        {
+          "period": 213,
+          "target_balance": 361000
+        },
+        {
+          "period": 214,
+          "target_balance": 358000
+        },
+        {
+          "period": 215,
+          "target_balance": 355000
+        },
+        {
+          "period": 216,
+          "target_balance": 352000
+        },
+        {
+          "period": 217,
+          "target_balance": 349000
+        },
+        {
+          "period": 218,
+          "target_balance": 346000
+        },
+        {
+          "period": 219,
+          "target_balance": 343000
+        },
+        {
+          "period": 220,
+          "target_balance": 340000
+        },
+        {
+          "period": 221,
+          "target_balance": 337000
+        },
+        {
+          "period": 222,
+          "target_balance": 334000
+        },
+        {
+          "period": 223,
+          "target_balance": 331000
+        },
+        {
+          "period": 224,
+          "target_balance": 328000
+        },
+        {
+          "period": 225,
+          "target_balance": 325000
+        },
+        {
+          "period": 226,
+          "target_balance": 322000
+        },
+        {
+          "period": 227,
+          "target_balance": 319000
+        },
+        {
+          "period": 228,
+          "target_balance": 316000
+        },
+        {
+          "period": 229,
+          "target_balance": 313000
+        },
+        {
+          "period": 230,
+          "target_balance": 310000
+        },
+        {
+          "period": 231,
+          "target_balance": 307000
+        },
+        {
+          "period": 232,
+          "target_balance": 304000
+        },
+        {
+          "period": 233,
+          "target_balance": 301000
+        },
+        {
+          "period": 234,
+          "target_balance": 298000
+        },
+        {
+          "period": 235,
+          "target_balance": 295000
+        },
+        {
+          "period": 236,
+          "target_balance": 292000
+        },
+        {
+          "period": 237,
+          "target_balance": 289000
+        },
+        {
+          "period": 238,
+          "target_balance": 286000
+        },
+        {
+          "period": 239,
+          "target_balance": 283000
+        },
+        {
+          "period": 240,
+          "target_balance": 280000
+        },
+        {
+          "period": 241,
+          "target_balance": 277000
+        },
+        {
+          "period": 242,
+          "target_balance": 274000
+        },
+        {
+          "period": 243,
+          "target_balance": 271000
+        },
+        {
+          "period": 244,
+          "target_balance": 268000
+        },
+        {
+          "period": 245,
+          "target_balance": 265000
+        },
+        {
+          "period": 246,
+          "target_balance": 262000
+        },
+        {
+          "period": 247,
+          "target_balance": 259000
+        },
+        {
+          "period": 248,
+          "target_balance": 256000
+        },
+        {
+          "period": 249,
+          "target_balance": 253000
+        },
+        {
+          "period": 250,
+          "target_balance": 250000
+        },
+        {
+          "period": 251,
+          "target_balance": 247000
+        },
+        {
+          "period": 252,
+          "target_balance": 244000
+        },
+        {
+          "period": 253,
+          "target_balance": 241000
+        },
+        {
+          "period": 254,
+          "target_balance": 238000
+        },
+        {
+          "period": 255,
+          "target_balance": 235000
+        },
+        {
+          "period": 256,
+          "target_balance": 232000
+        },
+        {
+          "period": 257,
+          "target_balance": 229000
+        },
+        {
+          "period": 258,
+          "target_balance": 226000
+        },
+        {
+          "period": 259,
+          "target_balance": 223000
+        },
+        {
+          "period": 260,
+          "target_balance": 220000
+        },
+        {
+          "period": 261,
+          "target_balance": 217000
+        },
+        {
+          "period": 262,
+          "target_balance": 214000
+        },
+        {
+          "period": 263,
+          "target_balance": 211000
+        },
+        {
+          "period": 264,
+          "target_balance": 208000
+        },
+        {
+          "period": 265,
+          "target_balance": 205000
+        },
+        {
+          "period": 266,
+          "target_balance": 202000
+        },
+        {
+          "period": 267,
+          "target_balance": 199000
+        },
+        {
+          "period": 268,
+          "target_balance": 196000
+        },
+        {
+          "period": 269,
+          "target_balance": 193000
+        },
+        {
+          "period": 270,
+          "target_balance": 190000
+        },
+        {
+          "period": 271,
+          "target_balance": 187000
+        },
+        {
+          "period": 272,
+          "target_balance": 184000
+        },
+        {
+          "period": 273,
+          "target_balance": 181000
+        },
+        {
+          "period": 274,
+          "target_balance": 178000
+        },
+        {
+          "period": 275,
+          "target_balance": 175000
+        },
+        {
+          "period": 276,
+          "target_balance": 172000
+        },
+        {
+          "period": 277,
+          "target_balance": 169000
+        },
+        {
+          "period": 278,
+          "target_balance": 166000
+        },
+        {
+          "period": 279,
+          "target_balance": 163000
+        },
+        {
+          "period": 280,
+          "target_balance": 160000
+        },
+        {
+          "period": 281,
+          "target_balance": 157000
+        },
+        {
+          "period": 282,
+          "target_balance": 154000
+        },
+        {
+          "period": 283,
+          "target_balance": 151000
+        },
+        {
+          "period": 284,
+          "target_balance": 148000
+        },
+        {
+          "period": 285,
+          "target_balance": 145000
+        },
+        {
+          "period": 286,
+          "target_balance": 142000
+        },
+        {
+          "period": 287,
+          "target_balance": 139000
+        },
+        {
+          "period": 288,
+          "target_balance": 136000
+        },
+        {
+          "period": 289,
+          "target_balance": 133000
+        },
+        {
+          "period": 290,
+          "target_balance": 130000
+        },
+        {
+          "period": 291,
+          "target_balance": 127000
+        },
+        {
+          "period": 292,
+          "target_balance": 124000
+        },
+        {
+          "period": 293,
+          "target_balance": 121000
+        },
+        {
+          "period": 294,
+          "target_balance": 118000
+        },
+        {
+          "period": 295,
+          "target_balance": 115000
+        },
+        {
+          "period": 296,
+          "target_balance": 112000
+        },
+        {
+          "period": 297,
+          "target_balance": 109000
+        },
+        {
+          "period": 298,
+          "target_balance": 106000
+        },
+        {
+          "period": 299,
+          "target_balance": 103000
+        },
+        {
+          "period": 300,
+          "target_balance": 100000
+        },
+        {
+          "period": 301,
+          "target_balance": 97000
+        },
+        {
+          "period": 302,
+          "target_balance": 94000
+        },
+        {
+          "period": 303,
+          "target_balance": 91000
+        },
+        {
+          "period": 304,
+          "target_balance": 88000
+        },
+        {
+          "period": 305,
+          "target_balance": 85000
+        },
+        {
+          "period": 306,
+          "target_balance": 82000
+        },
+        {
+          "period": 307,
+          "target_balance": 79000
+        },
+        {
+          "period": 308,
+          "target_balance": 76000
+        },
+        {
+          "period": 309,
+          "target_balance": 73000
+        },
+        {
+          "period": 310,
+          "target_balance": 70000
+        },
+        {
+          "period": 311,
+          "target_balance": 67000
+        },
+        {
+          "period": 312,
+          "target_balance": 64000
+        },
+        {
+          "period": 313,
+          "target_balance": 61000
+        },
+        {
+          "period": 314,
+          "target_balance": 58000
+        },
+        {
+          "period": 315,
+          "target_balance": 55000
+        },
+        {
+          "period": 316,
+          "target_balance": 52000
+        },
+        {
+          "period": 317,
+          "target_balance": 49000
+        },
+        {
+          "period": 318,
+          "target_balance": 46000
+        },
+        {
+          "period": 319,
+          "target_balance": 43000
+        },
+        {
+          "period": 320,
+          "target_balance": 40000
+        },
+        {
+          "period": 321,
+          "target_balance": 37000
+        },
+        {
+          "period": 322,
+          "target_balance": 34000
+        },
+        {
+          "period": 323,
+          "target_balance": 31000
+        },
+        {
+          "period": 324,
+          "target_balance": 28000
+        },
+        {
+          "period": 325,
+          "target_balance": 25000
+        },
+        {
+          "period": 326,
+          "target_balance": 22000
+        },
+        {
+          "period": 327,
+          "target_balance": 19000
+        },
+        {
+          "period": 328,
+          "target_balance": 16000
+        },
+        {
+          "period": 329,
+          "target_balance": 13000
+        },
+        {
+          "period": 330,
+          "target_balance": 10000
+        },
+        {
+          "period": 331,
+          "target_balance": 7000
+        },
+        {
+          "period": 332,
+          "target_balance": 4000
+        },
+        {
+          "period": 333,
+          "target_balance": 1000
+        }
+      ],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": 25.0,
+      "relations": [
+        {
+          "relation_type": "SUPPORTED_BY",
+          "targets": [
+            "WA",
+            "WB"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "PB",
+      "kind": "PAC",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 500000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [
+        {
+          "period": 1,
+          "target_balance": 498500
+        },
+        {
+          "period": 2,
+          "target_balance": 497000
+        },
+        {
+          "period": 3,
+          "target_balance": 495500
+        },
+        {
+          "period": 4,
+          "target_balance": 494000
+        },
+        {
+          "period": 5,
+          "target_balance": 492500
+        },
+        {
+          "period": 6,
+          "target_balance": 491000
+        },
+        {
+          "period": 7,
+          "target_balance": 489500
+        },
+        {
+          "period": 8,
+          "target_balance": 488000
+        },
+        {
+          "period": 9,
+          "target_balance": 486500
+        },
+        {
+          "period": 10,
+          "target_balance": 485000
+        },
+        {
+          "period": 11,
+          "target_balance": 483500
+        },
+        {
+          "period": 12,
+          "target_balance": 482000
+        },
+        {
+          "period": 13,
+          "target_balance": 480500
+        },
+        {
+          "period": 14,
+          "target_balance": 479000
+        },
+        {
+          "period": 15,
+          "target_balance": 477500
+        },
+        {
+          "period": 16,
+          "target_balance": 476000
+        },
+        {
+          "period": 17,
+          "target_balance": 474500
+        },
+        {
+          "period": 18,
+          "target_balance": 473000
+        },
+        {
+          "period": 19,
+          "target_balance": 471500
+        },
+        {
+          "period": 20,
+          "target_balance": 470000
+        },
+        {
+          "period": 21,
+          "target_balance": 468500
+        },
+        {
+          "period": 22,
+          "target_balance": 467000
+        },
+        {
+          "period": 23,
+          "target_balance": 465500
+        },
+        {
+          "period": 24,
+          "target_balance": 464000
+        },
+        {
+          "period": 25,
+          "target_balance": 462500
+        },
+        {
+          "period": 26,
+          "target_balance": 461000
+        },
+        {
+          "period": 27,
+          "target_balance": 459500
+        },
+        {
+          "period": 28,
+          "target_balance": 458000
+        },
+        {
+          "period": 29,
+          "target_balance": 456500
+        },
+        {
+          "period": 30,
+          "target_balance": 455000
+        },
+        {
+          "period": 31,
+          "target_balance": 453500
+        },
+        {
+          "period": 32,
+          "target_balance": 452000
+        },
+        {
+          "period": 33,
+          "target_balance": 450500
+        },
+        {
+          "period": 34,
+          "target_balance": 449000
+        },
+        {
+          "period": 35,
+          "target_balance": 447500
+        },
+        {
+          "period": 36,
+          "target_balance": 446000
+        },
+        {
+          "period": 37,
+          "target_balance": 444500
+        },
+        {
+          "period": 38,
+          "target_balance": 443000
+        },
+        {
+          "period": 39,
+          "target_balance": 441500
+        },
+        {
+          "period": 40,
+          "target_balance": 440000
+        },
+        {
+          "period": 41,
+          "target_balance": 438500
+        },
+        {
+          "period": 42,
+          "target_balance": 437000
+        },
+        {
+          "period": 43,
+          "target_balance": 435500
+        },
+        {
+          "period": 44,
+          "target_balance": 434000
+        },
+        {
+          "period": 45,
+          "target_balance": 432500
+        },
+        {
+          "period": 46,
+          "target_balance": 431000
+        },
+        {
+          "period": 47,
+          "target_balance": 429500
+        },
+        {
+          "period": 48,
+          "target_balance": 428000
+        },
+        {
+          "period": 49,
+          "target_balance": 426500
+        },
+        {
+          "period": 50,
+          "target_balance": 425000
+        },
+        {
+          "period": 51,
+          "target_balance": 423500
+        },
+        {
+          "period": 52,
+          "target_balance": 422000
+        },
+        {
+          "period": 53,
+          "target_balance": 420500
+        },
+        {
+          "period": 54,
+          "target_balance": 419000
+        },
+        {
+          "period": 55,
+          "target_balance": 417500
+        },
+        {
+          "period": 56,
+          "target_balance": 416000
+        },
+        {
+          "period": 57,
+          "target_balance": 414500
+        },
+        {
+          "period": 58,
+          "target_balance": 413000
+        },
+        {
+          "period": 59,
+          "target_balance": 411500
+        },
+        {
+          "period": 60,
+          "target_balance": 410000
+        },
+        {
+          "period": 61,
+          "target_balance": 408500
+        },
+        {
+          "period": 62,
+          "target_balance": 407000
+        },
+        {
+          "period": 63,
+          "target_balance": 405500
+        },
+        {
+          "period": 64,
+          "target_balance": 404000
+        },
+        {
+          "period": 65,
+          "target_balance": 402500
+        },
+        {
+          "period": 66,
+          "target_balance": 401000
+        },
+        {
+          "period": 67,
+          "target_balance": 399500
+        },
+        {
+          "period": 68,
+          "target_balance": 398000
+        },
+        {
+          "period": 69,
+          "target_balance": 396500
+        },
+        {
+          "period": 70,
+          "target_balance": 395000
+        },
+        {
+          "period": 71,
+          "target_balance": 393500
+        },
+        {
+          "period": 72,
+          "target_balance": 392000
+        },
+        {
+          "period": 73,
+          "target_balance": 390500
+        },
+        {
+          "period": 74,
+          "target_balance": 389000
+        },
+        {
+          "period": 75,
+          "target_balance": 387500
+        },
+        {
+          "period": 76,
+          "target_balance": 386000
+        },
+        {
+          "period": 77,
+          "target_balance": 384500
+        },
+        {
+          "period": 78,
+          "target_balance": 383000
+        },
+        {
+          "period": 79,
+          "target_balance": 381500
+        },
+        {
+          "period": 80,
+          "target_balance": 380000
+        },
+        {
+          "period": 81,
+          "target_balance": 378500
+        },
+        {
+          "period": 82,
+          "target_balance": 377000
+        },
+        {
+          "period": 83,
+          "target_balance": 375500
+        },
+        {
+          "period": 84,
+          "target_balance": 374000
+        },
+        {
+          "period": 85,
+          "target_balance": 372500
+        },
+        {
+          "period": 86,
+          "target_balance": 371000
+        },
+        {
+          "period": 87,
+          "target_balance": 369500
+        },
+        {
+          "period": 88,
+          "target_balance": 368000
+        },
+        {
+          "period": 89,
+          "target_balance": 366500
+        },
+        {
+          "period": 90,
+          "target_balance": 365000
+        },
+        {
+          "period": 91,
+          "target_balance": 363500
+        },
+        {
+          "period": 92,
+          "target_balance": 362000
+        },
+        {
+          "period": 93,
+          "target_balance": 360500
+        },
+        {
+          "period": 94,
+          "target_balance": 359000
+        },
+        {
+          "period": 95,
+          "target_balance": 357500
+        },
+        {
+          "period": 96,
+          "target_balance": 356000
+        },
+        {
+          "period": 97,
+          "target_balance": 354500
+        },
+        {
+          "period": 98,
+          "target_balance": 353000
+        },
+        {
+          "period": 99,
+          "target_balance": 351500
+        },
+        {
+          "period": 100,
+          "target_balance": 350000
+        },
+        {
+          "period": 101,
+          "target_balance": 348500
+        },
+        {
+          "period": 102,
+          "target_balance": 347000
+        },
+        {
+          "period": 103,
+          "target_balance": 345500
+        },
+        {
+          "period": 104,
+          "target_balance": 344000
+        },
+        {
+          "period": 105,
+          "target_balance": 342500
+        },
+        {
+          "period": 106,
+          "target_balance": 341000
+        },
+        {
+          "period": 107,
+          "target_balance": 339500
+        },
+        {
+          "period": 108,
+          "target_balance": 338000
+        },
+        {
+          "period": 109,
+          "target_balance": 336500
+        },
+        {
+          "period": 110,
+          "target_balance": 335000
+        },
+        {
+          "period": 111,
+          "target_balance": 333500
+        },
+        {
+          "period": 112,
+          "target_balance": 332000
+        },
+        {
+          "period": 113,
+          "target_balance": 330500
+        },
+        {
+          "period": 114,
+          "target_balance": 329000
+        },
+        {
+          "period": 115,
+          "target_balance": 327500
+        },
+        {
+          "period": 116,
+          "target_balance": 326000
+        },
+        {
+          "period": 117,
+          "target_balance": 324500
+        },
+        {
+          "period": 118,
+          "target_balance": 323000
+        },
+        {
+          "period": 119,
+          "target_balance": 321500
+        },
+        {
+          "period": 120,
+          "target_balance": 320000
+        },
+        {
+          "period": 121,
+          "target_balance": 318500
+        },
+        {
+          "period": 122,
+          "target_balance": 317000
+        },
+        {
+          "period": 123,
+          "target_balance": 315500
+        },
+        {
+          "period": 124,
+          "target_balance": 314000
+        },
+        {
+          "period": 125,
+          "target_balance": 312500
+        },
+        {
+          "period": 126,
+          "target_balance": 311000
+        },
+        {
+          "period": 127,
+          "target_balance": 309500
+        },
+        {
+          "period": 128,
+          "target_balance": 308000
+        },
+        {
+          "period": 129,
+          "target_balance": 306500
+        },
+        {
+          "period": 130,
+          "target_balance": 305000
+        },
+        {
+          "period": 131,
+          "target_balance": 303500
+        },
+        {
+          "period": 132,
+          "target_balance": 302000
+        },
+        {
+          "period": 133,
+          "target_balance": 300500
+        },
+        {
+          "period": 134,
+          "target_balance": 299000
+        },
+        {
+          "period": 135,
+          "target_balance": 297500
+        },
+        {
+          "period": 136,
+          "target_balance": 296000
+        },
+        {
+          "period": 137,
+          "target_balance": 294500
+        },
+        {
+          "period": 138,
+          "target_balance": 293000
+        },
+        {
+          "period": 139,
+          "target_balance": 291500
+        },
+        {
+          "period": 140,
+          "target_balance": 290000
+        },
+        {
+          "period": 141,
+          "target_balance": 288500
+        },
+        {
+          "period": 142,
+          "target_balance": 287000
+        },
+        {
+          "period": 143,
+          "target_balance": 285500
+        },
+        {
+          "period": 144,
+          "target_balance": 284000
+        },
+        {
+          "period": 145,
+          "target_balance": 282500
+        },
+        {
+          "period": 146,
+          "target_balance": 281000
+        },
+        {
+          "period": 147,
+          "target_balance": 279500
+        },
+        {
+          "period": 148,
+          "target_balance": 278000
+        },
+        {
+          "period": 149,
+          "target_balance": 276500
+        },
+        {
+          "period": 150,
+          "target_balance": 275000
+        },
+        {
+          "period": 151,
+          "target_balance": 273500
+        },
+        {
+          "period": 152,
+          "target_balance": 272000
+        },
+        {
+          "period": 153,
+          "target_balance": 270500
+        },
+        {
+          "period": 154,
+          "target_balance": 269000
+        },
+        {
+          "period": 155,
+          "target_balance": 267500
+        },
+        {
+          "period": 156,
+          "target_balance": 266000
+        },
+        {
+          "period": 157,
+          "target_balance": 264500
+        },
+        {
+          "period": 158,
+          "target_balance": 263000
+        },
+        {
+          "period": 159,
+          "target_balance": 261500
+        },
+        {
+          "period": 160,
+          "target_balance": 260000
+        },
+        {
+          "period": 161,
+          "target_balance": 258500
+        },
+        {
+          "period": 162,
+          "target_balance": 257000
+        },
+        {
+          "period": 163,
+          "target_balance": 255500
+        },
+        {
+          "period": 164,
+          "target_balance": 254000
+        },
+        {
+          "period": 165,
+          "target_balance": 252500
+        },
+        {
+          "period": 166,
+          "target_balance": 251000
+        },
+        {
+          "period": 167,
+          "target_balance": 249500
+        },
+        {
+          "period": 168,
+          "target_balance": 248000
+        },
+        {
+          "period": 169,
+          "target_balance": 246500
+        },
+        {
+          "period": 170,
+          "target_balance": 245000
+        },
+        {
+          "period": 171,
+          "target_balance": 243500
+        },
+        {
+          "period": 172,
+          "target_balance": 242000
+        },
+        {
+          "period": 173,
+          "target_balance": 240500
+        },
+        {
+          "period": 174,
+          "target_balance": 239000
+        },
+        {
+          "period": 175,
+          "target_balance": 237500
+        },
+        {
+          "period": 176,
+          "target_balance": 236000
+        },
+        {
+          "period": 177,
+          "target_balance": 234500
+        },
+        {
+          "period": 178,
+          "target_balance": 233000
+        },
+        {
+          "period": 179,
+          "target_balance": 231500
+        },
+        {
+          "period": 180,
+          "target_balance": 230000
+        },
+        {
+          "period": 181,
+          "target_balance": 228500
+        },
+        {
+          "period": 182,
+          "target_balance": 227000
+        },
+        {
+          "period": 183,
+          "target_balance": 225500
+        },
+        {
+          "period": 184,
+          "target_balance": 224000
+        },
+        {
+          "period": 185,
+          "target_balance": 222500
+        },
+        {
+          "period": 186,
+          "target_balance": 221000
+        },
+        {
+          "period": 187,
+          "target_balance": 219500
+        },
+        {
+          "period": 188,
+          "target_balance": 218000
+        },
+        {
+          "period": 189,
+          "target_balance": 216500
+        },
+        {
+          "period": 190,
+          "target_balance": 215000
+        },
+        {
+          "period": 191,
+          "target_balance": 213500
+        },
+        {
+          "period": 192,
+          "target_balance": 212000
+        },
+        {
+          "period": 193,
+          "target_balance": 210500
+        },
+        {
+          "period": 194,
+          "target_balance": 209000
+        },
+        {
+          "period": 195,
+          "target_balance": 207500
+        },
+        {
+          "period": 196,
+          "target_balance": 206000
+        },
+        {
+          "period": 197,
+          "target_balance": 204500
+        },
+        {
+          "period": 198,
+          "target_balance": 203000
+        },
+        {
+          "period": 199,
+          "target_balance": 201500
+        },
+        {
+          "period": 200,
+          "target_balance": 200000
+        },
+        {
+          "period": 201,
+          "target_balance": 198500
+        },
+        {
+          "period": 202,
+          "target_balance": 197000
+        },
+        {
+          "period": 203,
+          "target_balance": 195500
+        },
+        {
+          "period": 204,
+          "target_balance": 194000
+        },
+        {
+          "period": 205,
+          "target_balance": 192500
+        },
+        {
+          "period": 206,
+          "target_balance": 191000
+        },
+        {
+          "period": 207,
+          "target_balance": 189500
+        },
+        {
+          "period": 208,
+          "target_balance": 188000
+        },
+        {
+          "period": 209,
+          "target_balance": 186500
+        },
+        {
+          "period": 210,
+          "target_balance": 185000
+        },
+        {
+          "period": 211,
+          "target_balance": 183500
+        },
+        {
+          "period": 212,
+          "target_balance": 182000
+        },
+        {
+          "period": 213,
+          "target_balance": 180500
+        },
+        {
+          "period": 214,
+          "target_balance": 179000
+        },
+        {
+          "period": 215,
+          "target_balance": 177500
+        },
+        {
+          "period": 216,
+          "target_balance": 176000
+        },
+        {
+          "period": 217,
+          "target_balance": 174500
+        },
+        {
+          "period": 218,
+          "target_balance": 173000
+        },
+        {
+          "period": 219,
+          "target_balance": 171500
+        },
+        {
+          "period": 220,
+          "target_balance": 170000
+        },
+        {
+          "period": 221,
+          "target_balance": 168500
+        },
+        {
+          "period": 222,
+          "target_balance": 167000
+        },
+        {
+          "period": 223,
+          "target_balance": 165500
+        },
+        {
+          "period": 224,
+          "target_balance": 164000
+        },
+        {
+          "period": 225,
+          "target_balance": 162500
+        },
+        {
+          "period": 226,
+          "target_balance": 161000
+        },
+        {
+          "period": 227,
+          "target_balance": 159500
+        },
+        {
+          "period": 228,
+          "target_balance": 158000
+        },
+        {
+          "period": 229,
+          "target_balance": 156500
+        },
+        {
+          "period": 230,
+          "target_balance": 155000
+        },
+        {
+          "period": 231,
+          "target_balance": 153500
+        },
+        {
+          "period": 232,
+          "target_balance": 152000
+        },
+        {
+          "period": 233,
+          "target_balance": 150500
+        },
+        {
+          "period": 234,
+          "target_balance": 149000
+        },
+        {
+          "period": 235,
+          "target_balance": 147500
+        },
+        {
+          "period": 236,
+          "target_balance": 146000
+        },
+        {
+          "period": 237,
+          "target_balance": 144500
+        },
+        {
+          "period": 238,
+          "target_balance": 143000
+        },
+        {
+          "period": 239,
+          "target_balance": 141500
+        },
+        {
+          "period": 240,
+          "target_balance": 140000
+        },
+        {
+          "period": 241,
+          "target_balance": 138500
+        },
+        {
+          "period": 242,
+          "target_balance": 137000
+        },
+        {
+          "period": 243,
+          "target_balance": 135500
+        },
+        {
+          "period": 244,
+          "target_balance": 134000
+        },
+        {
+          "period": 245,
+          "target_balance": 132500
+        },
+        {
+          "period": 246,
+          "target_balance": 131000
+        },
+        {
+          "period": 247,
+          "target_balance": 129500
+        },
+        {
+          "period": 248,
+          "target_balance": 128000
+        },
+        {
+          "period": 249,
+          "target_balance": 126500
+        },
+        {
+          "period": 250,
+          "target_balance": 125000
+        },
+        {
+          "period": 251,
+          "target_balance": 123500
+        },
+        {
+          "period": 252,
+          "target_balance": 122000
+        },
+        {
+          "period": 253,
+          "target_balance": 120500
+        },
+        {
+          "period": 254,
+          "target_balance": 119000
+        },
+        {
+          "period": 255,
+          "target_balance": 117500
+        },
+        {
+          "period": 256,
+          "target_balance": 116000
+        },
+        {
+          "period": 257,
+          "target_balance": 114500
+        },
+        {
+          "period": 258,
+          "target_balance": 113000
+        },
+        {
+          "period": 259,
+          "target_balance": 111500
+        },
+        {
+          "period": 260,
+          "target_balance": 110000
+        },
+        {
+          "period": 261,
+          "target_balance": 108500
+        },
+        {
+          "period": 262,
+          "target_balance": 107000
+        },
+        {
+          "period": 263,
+          "target_balance": 105500
+        },
+        {
+          "period": 264,
+          "target_balance": 104000
+        },
+        {
+          "period": 265,
+          "target_balance": 102500
+        },
+        {
+          "period": 266,
+          "target_balance": 101000
+        },
+        {
+          "period": 267,
+          "target_balance": 99500
+        },
+        {
+          "period": 268,
+          "target_balance": 98000
+        },
+        {
+          "period": 269,
+          "target_balance": 96500
+        },
+        {
+          "period": 270,
+          "target_balance": 95000
+        },
+        {
+          "period": 271,
+          "target_balance": 93500
+        },
+        {
+          "period": 272,
+          "target_balance": 92000
+        },
+        {
+          "period": 273,
+          "target_balance": 90500
+        },
+        {
+          "period": 274,
+          "target_balance": 89000
+        },
+        {
+          "period": 275,
+          "target_balance": 87500
+        },
+        {
+          "period": 276,
+          "target_balance": 86000
+        },
+        {
+          "period": 277,
+          "target_balance": 84500
+        },
+        {
+          "period": 278,
+          "target_balance": 83000
+        },
+        {
+          "period": 279,
+          "target_balance": 81500
+        },
+        {
+          "period": 280,
+          "target_balance": 80000
+        },
+        {
+          "period": 281,
+          "target_balance": 78500
+        },
+        {
+          "period": 282,
+          "target_balance": 77000
+        },
+        {
+          "period": 283,
+          "target_balance": 75500
+        },
+        {
+          "period": 284,
+          "target_balance": 74000
+        },
+        {
+          "period": 285,
+          "target_balance": 72500
+        },
+        {
+          "period": 286,
+          "target_balance": 71000
+        },
+        {
+          "period": 287,
+          "target_balance": 69500
+        },
+        {
+          "period": 288,
+          "target_balance": 68000
+        },
+        {
+          "period": 289,
+          "target_balance": 66500
+        },
+        {
+          "period": 290,
+          "target_balance": 65000
+        },
+        {
+          "period": 291,
+          "target_balance": 63500
+        },
+        {
+          "period": 292,
+          "target_balance": 62000
+        },
+        {
+          "period": 293,
+          "target_balance": 60500
+        },
+        {
+          "period": 294,
+          "target_balance": 59000
+        },
+        {
+          "period": 295,
+          "target_balance": 57500
+        },
+        {
+          "period": 296,
+          "target_balance": 56000
+        },
+        {
+          "period": 297,
+          "target_balance": 54500
+        },
+        {
+          "period": 298,
+          "target_balance": 53000
+        },
+        {
+          "period": 299,
+          "target_balance": 51500
+        },
+        {
+          "period": 300,
+          "target_balance": 50000
+        },
+        {
+          "period": 301,
+          "target_balance": 48500
+        },
+        {
+          "period": 302,
+          "target_balance": 47000
+        },
+        {
+          "period": 303,
+          "target_balance": 45500
+        },
+        {
+          "period": 304,
+          "target_balance": 44000
+        },
+        {
+          "period": 305,
+          "target_balance": 42500
+        },
+        {
+          "period": 306,
+          "target_balance": 41000
+        },
+        {
+          "period": 307,
+          "target_balance": 39500
+        },
+        {
+          "period": 308,
+          "target_balance": 38000
+        },
+        {
+          "period": 309,
+          "target_balance": 36500
+        },
+        {
+          "period": 310,
+          "target_balance": 35000
+        },
+        {
+          "period": 311,
+          "target_balance": 33500
+        },
+        {
+          "period": 312,
+          "target_balance": 32000
+        },
+        {
+          "period": 313,
+          "target_balance": 30500
+        },
+        {
+          "period": 314,
+          "target_balance": 29000
+        },
+        {
+          "period": 315,
+          "target_balance": 27500
+        },
+        {
+          "period": 316,
+          "target_balance": 26000
+        },
+        {
+          "period": 317,
+          "target_balance": 24500
+        },
+        {
+          "period": 318,
+          "target_balance": 23000
+        },
+        {
+          "period": 319,
+          "target_balance": 21500
+        },
+        {
+          "period": 320,
+          "target_balance": 20000
+        },
+        {
+          "period": 321,
+          "target_balance": 18500
+        },
+        {
+          "period": 322,
+          "target_balance": 17000
+        },
+        {
+          "period": 323,
+          "target_balance": 15500
+        },
+        {
+          "period": 324,
+          "target_balance": 14000
+        },
+        {
+          "period": 325,
+          "target_balance": 12500
+        },
+        {
+          "period": 326,
+          "target_balance": 11000
+        },
+        {
+          "period": 327,
+          "target_balance": 9500
+        },
+        {
+          "period": 328,
+          "target_balance": 8000
+        },
+        {
+          "period": 329,
+          "target_balance": 6500
+        },
+        {
+          "period": 330,
+          "target_balance": 5000
+        },
+        {
+          "period": 331,
+          "target_balance": 3500
+        },
+        {
+          "period": 332,
+          "target_balance": 2000
+        },
+        {
+          "period": 333,
+          "target_balance": 500
+        }
+      ],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": 25.0,
+      "relations": [
+        {
+          "relation_type": "SUPPORTED_BY",
+          "targets": [
+            "WA",
+            "WB"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "Z",
+      "kind": "Z",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 200000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "PIK",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [
+        {
+          "relation_type": "ACCRETES_TO",
+          "targets": [
+            "WA",
+            "WB"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": true,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "WA",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 300000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "WB",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 200000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "R",
+      "kind": "RESIDUAL",
+      "is_bond": false,
+      "is_pseudo": true,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": null,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": null,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    }
+  ],
+  "accounts": [],
+  "fees": [],
+  "triggers": [],
+  "calculations": [],
+  "waterfall_rules": [
+    {
+      "rule_id": "int_pac",
+      "rule_type": "PAY_INTEREST",
+      "order": 0,
+      "group_id": null,
+      "from_sources": [
+        "CASH"
+      ],
+      "to_targets": [
+        "PA",
+        "PB"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "int_sup",
+      "rule_type": "PAY_INTEREST",
+      "order": 1,
+      "group_id": null,
+      "from_sources": [
+        "CASH"
+      ],
+      "to_targets": [
+        "WA",
+        "WB"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "prin_pac",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 2,
+      "group_id": null,
+      "from_sources": [
+        "CASH"
+      ],
+      "to_targets": [
+        "PA"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "prin_pac_b",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 3,
+      "group_id": null,
+      "from_sources": [
+        "CASH"
+      ],
+      "to_targets": [
+        "PB"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "prin_sup",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 4,
+      "group_id": null,
+      "from_sources": [
+        "CASH"
+      ],
+      "to_targets": [
+        "WA",
+        "WB"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "cleanup_pa",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 5,
+      "group_id": null,
+      "from_sources": [
+        "CASH"
+      ],
+      "to_targets": [
+        "PA"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": "NONE",
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "cleanup_pb",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 6,
+      "group_id": null,
+      "from_sources": [
+        "CASH"
+      ],
+      "to_targets": [
+        "PB"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": "NONE",
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "resid",
+      "rule_type": "PAY_RESIDUAL",
+      "order": 7,
+      "group_id": null,
+      "from_sources": [
+        "CASH"
+      ],
+      "to_targets": [
+        "R"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    }
+  ],
+  "collateral_groups": [],
+  "deal_knobs": {}
+}

@@ -1,0 +1,4127 @@
+{
+  "schema_version": "2.0.0",
+  "deal_name": "FNR 2006-018 Group 1",
+  "description": "",
+  "origination_date": null,
+  "settlement_date": null,
+  "series_id": null,
+  "discount_factor_pct": 0.0,
+  "deal_state_trigger": null,
+  "initial_deal_state": "REVOLVING",
+  "bonds": [
+    {
+      "name": "PA",
+      "kind": "PAC",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 33710000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": 1,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [
+        {
+          "period": 0,
+          "target_balance": 33710000.0
+        },
+        {
+          "period": 13,
+          "target_balance": 33073713.75
+        },
+        {
+          "period": 14,
+          "target_balance": 32417823.24
+        },
+        {
+          "period": 15,
+          "target_balance": 31742616.19
+        },
+        {
+          "period": 16,
+          "target_balance": 31048389.95
+        },
+        {
+          "period": 17,
+          "target_balance": 30335451.21
+        },
+        {
+          "period": 18,
+          "target_balance": 29604115.84
+        },
+        {
+          "period": 19,
+          "target_balance": 28854708.64
+        },
+        {
+          "period": 20,
+          "target_balance": 28087563.06
+        },
+        {
+          "period": 21,
+          "target_balance": 27318327.11
+        },
+        {
+          "period": 22,
+          "target_balance": 26553079.43
+        },
+        {
+          "period": 23,
+          "target_balance": 25791799.51
+        },
+        {
+          "period": 24,
+          "target_balance": 25034466.92
+        },
+        {
+          "period": 25,
+          "target_balance": 24281061.38
+        },
+        {
+          "period": 26,
+          "target_balance": 23531562.66
+        },
+        {
+          "period": 27,
+          "target_balance": 22785950.67
+        },
+        {
+          "period": 28,
+          "target_balance": 22044205.41
+        },
+        {
+          "period": 29,
+          "target_balance": 21306306.99
+        },
+        {
+          "period": 30,
+          "target_balance": 20572235.62
+        },
+        {
+          "period": 31,
+          "target_balance": 19841971.62
+        },
+        {
+          "period": 32,
+          "target_balance": 19115495.38
+        },
+        {
+          "period": 33,
+          "target_balance": 18392787.42
+        },
+        {
+          "period": 34,
+          "target_balance": 17673828.36
+        },
+        {
+          "period": 35,
+          "target_balance": 16958598.9
+        },
+        {
+          "period": 36,
+          "target_balance": 16247079.87
+        },
+        {
+          "period": 37,
+          "target_balance": 15539252.17
+        },
+        {
+          "period": 38,
+          "target_balance": 14835096.8
+        },
+        {
+          "period": 39,
+          "target_balance": 14134594.88
+        },
+        {
+          "period": 40,
+          "target_balance": 13437727.61
+        },
+        {
+          "period": 41,
+          "target_balance": 12744476.28
+        },
+        {
+          "period": 42,
+          "target_balance": 12054822.3
+        },
+        {
+          "period": 43,
+          "target_balance": 11368747.15
+        },
+        {
+          "period": 44,
+          "target_balance": 10686232.43
+        },
+        {
+          "period": 45,
+          "target_balance": 10007259.81
+        },
+        {
+          "period": 46,
+          "target_balance": 9331811.07
+        },
+        {
+          "period": 47,
+          "target_balance": 8659868.08
+        },
+        {
+          "period": 48,
+          "target_balance": 7991412.8
+        },
+        {
+          "period": 49,
+          "target_balance": 7326427.29
+        },
+        {
+          "period": 50,
+          "target_balance": 6664893.7
+        },
+        {
+          "period": 51,
+          "target_balance": 6006794.27
+        },
+        {
+          "period": 52,
+          "target_balance": 5352111.32
+        },
+        {
+          "period": 53,
+          "target_balance": 4700827.28
+        },
+        {
+          "period": 54,
+          "target_balance": 4052924.66
+        },
+        {
+          "period": 55,
+          "target_balance": 3408386.07
+        },
+        {
+          "period": 56,
+          "target_balance": 2767194.2
+        },
+        {
+          "period": 57,
+          "target_balance": 2129331.82
+        },
+        {
+          "period": 58,
+          "target_balance": 1494781.8
+        },
+        {
+          "period": 59,
+          "target_balance": 863527.11
+        },
+        {
+          "period": 60,
+          "target_balance": 235550.79
+        },
+        {
+          "period": 61,
+          "target_balance": 0.0
+        }
+      ],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [
+        {
+          "relation_type": "SUPPORTED_BY",
+          "targets": [
+            "WA",
+            "WB",
+            "WC",
+            "WD",
+            "WE",
+            "WG",
+            "PO"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "PB",
+      "kind": "PAC",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 13470000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": 1,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [
+        {
+          "period": 0,
+          "target_balance": 13470000.0
+        },
+        {
+          "period": 61,
+          "target_balance": 13080835.98
+        },
+        {
+          "period": 62,
+          "target_balance": 12459365.88
+        },
+        {
+          "period": 63,
+          "target_balance": 11841123.8
+        },
+        {
+          "period": 64,
+          "target_balance": 11226093.15
+        },
+        {
+          "period": 65,
+          "target_balance": 10614257.39
+        },
+        {
+          "period": 66,
+          "target_balance": 10005600.08
+        },
+        {
+          "period": 67,
+          "target_balance": 9400104.87
+        },
+        {
+          "period": 68,
+          "target_balance": 8797755.5
+        },
+        {
+          "period": 69,
+          "target_balance": 8198535.77
+        },
+        {
+          "period": 70,
+          "target_balance": 7602429.59
+        },
+        {
+          "period": 71,
+          "target_balance": 7009420.93
+        },
+        {
+          "period": 72,
+          "target_balance": 6419493.85
+        },
+        {
+          "period": 73,
+          "target_balance": 5832632.51
+        },
+        {
+          "period": 74,
+          "target_balance": 5248821.12
+        },
+        {
+          "period": 75,
+          "target_balance": 4668044.0
+        },
+        {
+          "period": 76,
+          "target_balance": 4090285.52
+        },
+        {
+          "period": 77,
+          "target_balance": 3515530.17
+        },
+        {
+          "period": 78,
+          "target_balance": 2943762.48
+        },
+        {
+          "period": 79,
+          "target_balance": 2374967.09
+        },
+        {
+          "period": 80,
+          "target_balance": 1809128.7
+        },
+        {
+          "period": 81,
+          "target_balance": 1246232.09
+        },
+        {
+          "period": 82,
+          "target_balance": 686262.14
+        },
+        {
+          "period": 83,
+          "target_balance": 129203.77
+        },
+        {
+          "period": 84,
+          "target_balance": 0.0
+        }
+      ],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [
+        {
+          "relation_type": "SUPPORTED_BY",
+          "targets": [
+            "WA",
+            "WB",
+            "WC",
+            "WD",
+            "WE",
+            "WG",
+            "PO"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "PC",
+      "kind": "PAC",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 13060000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": 1,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [
+        {
+          "period": 0,
+          "target_balance": 13060000.0
+        },
+        {
+          "period": 84,
+          "target_balance": 12635042.02
+        },
+        {
+          "period": 85,
+          "target_balance": 12083761.97
+        },
+        {
+          "period": 86,
+          "target_balance": 11535348.8
+        },
+        {
+          "period": 87,
+          "target_balance": 10989787.75
+        },
+        {
+          "period": 88,
+          "target_balance": 10447064.16
+        },
+        {
+          "period": 89,
+          "target_balance": 9907163.42
+        },
+        {
+          "period": 90,
+          "target_balance": 9370071.0
+        },
+        {
+          "period": 91,
+          "target_balance": 8835772.47
+        },
+        {
+          "period": 92,
+          "target_balance": 8304253.43
+        },
+        {
+          "period": 93,
+          "target_balance": 7775499.59
+        },
+        {
+          "period": 94,
+          "target_balance": 7249496.72
+        },
+        {
+          "period": 95,
+          "target_balance": 6726230.66
+        },
+        {
+          "period": 96,
+          "target_balance": 6205687.34
+        },
+        {
+          "period": 97,
+          "target_balance": 5687852.74
+        },
+        {
+          "period": 98,
+          "target_balance": 5172712.93
+        },
+        {
+          "period": 99,
+          "target_balance": 4660254.04
+        },
+        {
+          "period": 100,
+          "target_balance": 4152485.45
+        },
+        {
+          "period": 101,
+          "target_balance": 3652114.0
+        },
+        {
+          "period": 102,
+          "target_balance": 3159035.31
+        },
+        {
+          "period": 103,
+          "target_balance": 2673146.47
+        },
+        {
+          "period": 104,
+          "target_balance": 2194346.0
+        },
+        {
+          "period": 105,
+          "target_balance": 1722533.8
+        },
+        {
+          "period": 106,
+          "target_balance": 1257611.19
+        },
+        {
+          "period": 107,
+          "target_balance": 799480.82
+        },
+        {
+          "period": 108,
+          "target_balance": 348046.73
+        },
+        {
+          "period": 109,
+          "target_balance": 0.0
+        }
+      ],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [
+        {
+          "relation_type": "SUPPORTED_BY",
+          "targets": [
+            "WA",
+            "WB",
+            "WC",
+            "WD",
+            "WE",
+            "WG",
+            "PO"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "PD",
+      "kind": "PAC",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 16020000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": 1,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [
+        {
+          "period": 0,
+          "target_balance": 16020000.0
+        },
+        {
+          "period": 109,
+          "target_balance": 15923214.26
+        },
+        {
+          "period": 110,
+          "target_balance": 15484890.08
+        },
+        {
+          "period": 111,
+          "target_balance": 15052982.14
+        },
+        {
+          "period": 112,
+          "target_balance": 14627399.67
+        },
+        {
+          "period": 113,
+          "target_balance": 14208053.18
+        },
+        {
+          "period": 114,
+          "target_balance": 13794854.39
+        },
+        {
+          "period": 115,
+          "target_balance": 13387716.27
+        },
+        {
+          "period": 116,
+          "target_balance": 12986552.97
+        },
+        {
+          "period": 117,
+          "target_balance": 12591279.87
+        },
+        {
+          "period": 118,
+          "target_balance": 12201813.5
+        },
+        {
+          "period": 119,
+          "target_balance": 11818071.55
+        },
+        {
+          "period": 120,
+          "target_balance": 11439972.85
+        },
+        {
+          "period": 121,
+          "target_balance": 11067437.38
+        },
+        {
+          "period": 122,
+          "target_balance": 10700386.2
+        },
+        {
+          "period": 123,
+          "target_balance": 10338741.5
+        },
+        {
+          "period": 124,
+          "target_balance": 9982426.52
+        },
+        {
+          "period": 125,
+          "target_balance": 9631365.58
+        },
+        {
+          "period": 126,
+          "target_balance": 9285484.07
+        },
+        {
+          "period": 127,
+          "target_balance": 8944708.38
+        },
+        {
+          "period": 128,
+          "target_balance": 8608965.96
+        },
+        {
+          "period": 129,
+          "target_balance": 8278185.26
+        },
+        {
+          "period": 130,
+          "target_balance": 7952295.7
+        },
+        {
+          "period": 131,
+          "target_balance": 7631227.71
+        },
+        {
+          "period": 132,
+          "target_balance": 7314912.68
+        },
+        {
+          "period": 133,
+          "target_balance": 7003282.96
+        },
+        {
+          "period": 134,
+          "target_balance": 6696271.83
+        },
+        {
+          "period": 135,
+          "target_balance": 6393813.5
+        },
+        {
+          "period": 136,
+          "target_balance": 6095843.12
+        },
+        {
+          "period": 137,
+          "target_balance": 5802296.72
+        },
+        {
+          "period": 138,
+          "target_balance": 5513111.21
+        },
+        {
+          "period": 139,
+          "target_balance": 5228224.42
+        },
+        {
+          "period": 140,
+          "target_balance": 4947575.01
+        },
+        {
+          "period": 141,
+          "target_balance": 4671102.51
+        },
+        {
+          "period": 142,
+          "target_balance": 4398747.29
+        },
+        {
+          "period": 143,
+          "target_balance": 4130450.55
+        },
+        {
+          "period": 144,
+          "target_balance": 3866154.32
+        },
+        {
+          "period": 145,
+          "target_balance": 3605801.43
+        },
+        {
+          "period": 146,
+          "target_balance": 3349335.5
+        },
+        {
+          "period": 147,
+          "target_balance": 3096700.96
+        },
+        {
+          "period": 148,
+          "target_balance": 2847843.0
+        },
+        {
+          "period": 149,
+          "target_balance": 2602707.57
+        },
+        {
+          "period": 150,
+          "target_balance": 2361241.39
+        },
+        {
+          "period": 151,
+          "target_balance": 2123391.9
+        },
+        {
+          "period": 152,
+          "target_balance": 1889107.32
+        },
+        {
+          "period": 153,
+          "target_balance": 1658336.53
+        },
+        {
+          "period": 154,
+          "target_balance": 1431029.19
+        },
+        {
+          "period": 155,
+          "target_balance": 1207135.62
+        },
+        {
+          "period": 156,
+          "target_balance": 986606.84
+        },
+        {
+          "period": 157,
+          "target_balance": 769394.57
+        },
+        {
+          "period": 158,
+          "target_balance": 555451.2
+        },
+        {
+          "period": 159,
+          "target_balance": 344729.78
+        },
+        {
+          "period": 160,
+          "target_balance": 137184.02
+        },
+        {
+          "period": 161,
+          "target_balance": 0.0
+        }
+      ],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [
+        {
+          "relation_type": "SUPPORTED_BY",
+          "targets": [
+            "WA",
+            "WB",
+            "WC",
+            "WD",
+            "WE",
+            "WG",
+            "PO"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "EO",
+      "kind": "PAC",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "ZERO",
+      "coupon": null,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 12150000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": 1,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [
+        {
+          "period": 0,
+          "target_balance": 12150000.0
+        },
+        {
+          "period": 161,
+          "target_balance": 12082768.29
+        },
+        {
+          "period": 162,
+          "target_balance": 11881437.57
+        },
+        {
+          "period": 163,
+          "target_balance": 11683147.5
+        },
+        {
+          "period": 164,
+          "target_balance": 11487854.32
+        },
+        {
+          "period": 165,
+          "target_balance": 11295514.9
+        },
+        {
+          "period": 166,
+          "target_balance": 11106086.71
+        },
+        {
+          "period": 167,
+          "target_balance": 10919527.81
+        },
+        {
+          "period": 168,
+          "target_balance": 10735796.85
+        },
+        {
+          "period": 169,
+          "target_balance": 10554853.06
+        },
+        {
+          "period": 170,
+          "target_balance": 10376656.24
+        },
+        {
+          "period": 171,
+          "target_balance": 10201166.76
+        },
+        {
+          "period": 172,
+          "target_balance": 10028345.55
+        },
+        {
+          "period": 173,
+          "target_balance": 9858154.07
+        },
+        {
+          "period": 174,
+          "target_balance": 9690554.33
+        },
+        {
+          "period": 175,
+          "target_balance": 9525508.89
+        },
+        {
+          "period": 176,
+          "target_balance": 9362980.81
+        },
+        {
+          "period": 177,
+          "target_balance": 9202933.68
+        },
+        {
+          "period": 178,
+          "target_balance": 9045331.6
+        },
+        {
+          "period": 179,
+          "target_balance": 8890139.19
+        },
+        {
+          "period": 180,
+          "target_balance": 8737321.54
+        },
+        {
+          "period": 181,
+          "target_balance": 8586844.25
+        },
+        {
+          "period": 182,
+          "target_balance": 8438673.39
+        },
+        {
+          "period": 183,
+          "target_balance": 8292775.53
+        },
+        {
+          "period": 184,
+          "target_balance": 8149117.69
+        },
+        {
+          "period": 185,
+          "target_balance": 8007667.36
+        },
+        {
+          "period": 186,
+          "target_balance": 7868392.49
+        },
+        {
+          "period": 187,
+          "target_balance": 7731261.48
+        },
+        {
+          "period": 188,
+          "target_balance": 7596243.16
+        },
+        {
+          "period": 189,
+          "target_balance": 7463306.84
+        },
+        {
+          "period": 190,
+          "target_balance": 7332422.21
+        },
+        {
+          "period": 191,
+          "target_balance": 7203559.43
+        },
+        {
+          "period": 192,
+          "target_balance": 7076689.06
+        },
+        {
+          "period": 193,
+          "target_balance": 6951782.08
+        },
+        {
+          "period": 194,
+          "target_balance": 6828809.87
+        },
+        {
+          "period": 195,
+          "target_balance": 6707744.24
+        },
+        {
+          "period": 196,
+          "target_balance": 6588557.36
+        },
+        {
+          "period": 197,
+          "target_balance": 6471221.83
+        },
+        {
+          "period": 198,
+          "target_balance": 6355710.61
+        },
+        {
+          "period": 199,
+          "target_balance": 6241997.06
+        },
+        {
+          "period": 200,
+          "target_balance": 6130054.91
+        },
+        {
+          "period": 201,
+          "target_balance": 6019858.25
+        },
+        {
+          "period": 202,
+          "target_balance": 5911381.55
+        },
+        {
+          "period": 203,
+          "target_balance": 5804599.64
+        },
+        {
+          "period": 204,
+          "target_balance": 5699487.7
+        },
+        {
+          "period": 205,
+          "target_balance": 5596021.27
+        },
+        {
+          "period": 206,
+          "target_balance": 5494176.22
+        },
+        {
+          "period": 207,
+          "target_balance": 5393928.79
+        },
+        {
+          "period": 208,
+          "target_balance": 5295255.52
+        },
+        {
+          "period": 209,
+          "target_balance": 5198133.31
+        },
+        {
+          "period": 210,
+          "target_balance": 5102539.38
+        },
+        {
+          "period": 211,
+          "target_balance": 5008451.27
+        },
+        {
+          "period": 212,
+          "target_balance": 4915846.84
+        },
+        {
+          "period": 213,
+          "target_balance": 4824704.26
+        },
+        {
+          "period": 214,
+          "target_balance": 4735002.01
+        },
+        {
+          "period": 215,
+          "target_balance": 4646718.89
+        },
+        {
+          "period": 216,
+          "target_balance": 4559833.98
+        },
+        {
+          "period": 217,
+          "target_balance": 4474326.67
+        },
+        {
+          "period": 218,
+          "target_balance": 4390176.64
+        },
+        {
+          "period": 219,
+          "target_balance": 4307363.85
+        },
+        {
+          "period": 220,
+          "target_balance": 4225868.57
+        },
+        {
+          "period": 221,
+          "target_balance": 4145671.32
+        },
+        {
+          "period": 222,
+          "target_balance": 4066752.91
+        },
+        {
+          "period": 223,
+          "target_balance": 3989094.43
+        },
+        {
+          "period": 224,
+          "target_balance": 3912677.23
+        },
+        {
+          "period": 225,
+          "target_balance": 3837482.92
+        },
+        {
+          "period": 226,
+          "target_balance": 3763493.39
+        },
+        {
+          "period": 227,
+          "target_balance": 3690690.77
+        },
+        {
+          "period": 228,
+          "target_balance": 3619057.45
+        },
+        {
+          "period": 229,
+          "target_balance": 3548576.09
+        },
+        {
+          "period": 230,
+          "target_balance": 3479229.56
+        },
+        {
+          "period": 231,
+          "target_balance": 3411001.0
+        },
+        {
+          "period": 232,
+          "target_balance": 3343873.79
+        },
+        {
+          "period": 233,
+          "target_balance": 3277831.54
+        },
+        {
+          "period": 234,
+          "target_balance": 3212858.09
+        },
+        {
+          "period": 235,
+          "target_balance": 3148937.53
+        },
+        {
+          "period": 236,
+          "target_balance": 3086054.15
+        },
+        {
+          "period": 237,
+          "target_balance": 3024192.48
+        },
+        {
+          "period": 238,
+          "target_balance": 2963337.28
+        },
+        {
+          "period": 239,
+          "target_balance": 2903473.51
+        },
+        {
+          "period": 240,
+          "target_balance": 2844586.35
+        },
+        {
+          "period": 241,
+          "target_balance": 2786661.2
+        },
+        {
+          "period": 242,
+          "target_balance": 2729683.67
+        },
+        {
+          "period": 243,
+          "target_balance": 2673639.55
+        },
+        {
+          "period": 244,
+          "target_balance": 2618514.87
+        },
+        {
+          "period": 245,
+          "target_balance": 2564295.84
+        },
+        {
+          "period": 246,
+          "target_balance": 2510968.87
+        },
+        {
+          "period": 247,
+          "target_balance": 2458520.56
+        },
+        {
+          "period": 248,
+          "target_balance": 2406937.72
+        },
+        {
+          "period": 249,
+          "target_balance": 2356207.32
+        },
+        {
+          "period": 250,
+          "target_balance": 2306316.56
+        },
+        {
+          "period": 251,
+          "target_balance": 2257252.77
+        },
+        {
+          "period": 252,
+          "target_balance": 2209003.51
+        },
+        {
+          "period": 253,
+          "target_balance": 2161556.49
+        },
+        {
+          "period": 254,
+          "target_balance": 2114899.61
+        },
+        {
+          "period": 255,
+          "target_balance": 2069020.94
+        },
+        {
+          "period": 256,
+          "target_balance": 2023908.71
+        },
+        {
+          "period": 257,
+          "target_balance": 1979551.35
+        },
+        {
+          "period": 258,
+          "target_balance": 1935937.42
+        },
+        {
+          "period": 259,
+          "target_balance": 1893055.67
+        },
+        {
+          "period": 260,
+          "target_balance": 1850895.0
+        },
+        {
+          "period": 261,
+          "target_balance": 1809444.49
+        },
+        {
+          "period": 262,
+          "target_balance": 1768693.34
+        },
+        {
+          "period": 263,
+          "target_balance": 1728630.93
+        },
+        {
+          "period": 264,
+          "target_balance": 1689246.81
+        },
+        {
+          "period": 265,
+          "target_balance": 1650530.64
+        },
+        {
+          "period": 266,
+          "target_balance": 1612472.26
+        },
+        {
+          "period": 267,
+          "target_balance": 1575061.65
+        },
+        {
+          "period": 268,
+          "target_balance": 1538288.93
+        },
+        {
+          "period": 269,
+          "target_balance": 1502144.36
+        },
+        {
+          "period": 270,
+          "target_balance": 1466618.36
+        },
+        {
+          "period": 271,
+          "target_balance": 1431701.46
+        },
+        {
+          "period": 272,
+          "target_balance": 1397384.35
+        },
+        {
+          "period": 273,
+          "target_balance": 1363657.85
+        },
+        {
+          "period": 274,
+          "target_balance": 1330512.9
+        },
+        {
+          "period": 275,
+          "target_balance": 1297940.59
+        },
+        {
+          "period": 276,
+          "target_balance": 1265932.13
+        },
+        {
+          "period": 277,
+          "target_balance": 1234478.85
+        },
+        {
+          "period": 278,
+          "target_balance": 1203572.22
+        },
+        {
+          "period": 279,
+          "target_balance": 1173203.83
+        },
+        {
+          "period": 280,
+          "target_balance": 1143365.39
+        },
+        {
+          "period": 281,
+          "target_balance": 1114048.73
+        },
+        {
+          "period": 282,
+          "target_balance": 1085245.79
+        },
+        {
+          "period": 283,
+          "target_balance": 1056948.65
+        },
+        {
+          "period": 284,
+          "target_balance": 1029149.49
+        },
+        {
+          "period": 285,
+          "target_balance": 1001840.6
+        },
+        {
+          "period": 286,
+          "target_balance": 975014.39
+        },
+        {
+          "period": 287,
+          "target_balance": 948663.37
+        },
+        {
+          "period": 288,
+          "target_balance": 922780.19
+        },
+        {
+          "period": 289,
+          "target_balance": 897357.57
+        },
+        {
+          "period": 290,
+          "target_balance": 872388.36
+        },
+        {
+          "period": 291,
+          "target_balance": 847865.49
+        },
+        {
+          "period": 292,
+          "target_balance": 823782.03
+        },
+        {
+          "period": 293,
+          "target_balance": 800131.11
+        },
+        {
+          "period": 294,
+          "target_balance": 776906.0
+        },
+        {
+          "period": 295,
+          "target_balance": 754100.04
+        },
+        {
+          "period": 296,
+          "target_balance": 731706.68
+        },
+        {
+          "period": 297,
+          "target_balance": 709719.46
+        },
+        {
+          "period": 298,
+          "target_balance": 688132.02
+        },
+        {
+          "period": 299,
+          "target_balance": 666938.09
+        },
+        {
+          "period": 300,
+          "target_balance": 646131.49
+        },
+        {
+          "period": 301,
+          "target_balance": 625706.14
+        },
+        {
+          "period": 302,
+          "target_balance": 605656.04
+        },
+        {
+          "period": 303,
+          "target_balance": 585975.28
+        },
+        {
+          "period": 304,
+          "target_balance": 566658.04
+        },
+        {
+          "period": 305,
+          "target_balance": 547698.59
+        },
+        {
+          "period": 306,
+          "target_balance": 529091.26
+        },
+        {
+          "period": 307,
+          "target_balance": 510830.49
+        },
+        {
+          "period": 308,
+          "target_balance": 492910.8
+        },
+        {
+          "period": 309,
+          "target_balance": 475326.78
+        },
+        {
+          "period": 310,
+          "target_balance": 458073.11
+        },
+        {
+          "period": 311,
+          "target_balance": 441144.53
+        },
+        {
+          "period": 312,
+          "target_balance": 424535.87
+        },
+        {
+          "period": 313,
+          "target_balance": 408242.05
+        },
+        {
+          "period": 314,
+          "target_balance": 392258.04
+        },
+        {
+          "period": 315,
+          "target_balance": 376578.89
+        },
+        {
+          "period": 316,
+          "target_balance": 361199.75
+        },
+        {
+          "period": 317,
+          "target_balance": 346115.81
+        },
+        {
+          "period": 318,
+          "target_balance": 331322.34
+        },
+        {
+          "period": 319,
+          "target_balance": 316814.68
+        },
+        {
+          "period": 320,
+          "target_balance": 302588.25
+        },
+        {
+          "period": 321,
+          "target_balance": 288638.52
+        },
+        {
+          "period": 322,
+          "target_balance": 274961.05
+        },
+        {
+          "period": 323,
+          "target_balance": 261551.44
+        },
+        {
+          "period": 324,
+          "target_balance": 248405.37
+        },
+        {
+          "period": 325,
+          "target_balance": 235518.59
+        },
+        {
+          "period": 326,
+          "target_balance": 222886.89
+        },
+        {
+          "period": 327,
+          "target_balance": 210506.16
+        },
+        {
+          "period": 328,
+          "target_balance": 198372.31
+        },
+        {
+          "period": 329,
+          "target_balance": 186481.35
+        },
+        {
+          "period": 330,
+          "target_balance": 174829.31
+        },
+        {
+          "period": 331,
+          "target_balance": 163412.31
+        },
+        {
+          "period": 332,
+          "target_balance": 152226.51
+        },
+        {
+          "period": 333,
+          "target_balance": 141268.15
+        },
+        {
+          "period": 334,
+          "target_balance": 130533.49
+        },
+        {
+          "period": 335,
+          "target_balance": 120018.89
+        },
+        {
+          "period": 336,
+          "target_balance": 109720.73
+        },
+        {
+          "period": 337,
+          "target_balance": 99635.45
+        },
+        {
+          "period": 338,
+          "target_balance": 89759.55
+        },
+        {
+          "period": 339,
+          "target_balance": 80089.6
+        },
+        {
+          "period": 340,
+          "target_balance": 70622.18
+        },
+        {
+          "period": 341,
+          "target_balance": 61353.96
+        },
+        {
+          "period": 342,
+          "target_balance": 52281.64
+        },
+        {
+          "period": 343,
+          "target_balance": 43401.97
+        },
+        {
+          "period": 344,
+          "target_balance": 34711.76
+        },
+        {
+          "period": 345,
+          "target_balance": 26207.86
+        },
+        {
+          "period": 346,
+          "target_balance": 17887.17
+        },
+        {
+          "period": 347,
+          "target_balance": 9746.63
+        },
+        {
+          "period": 348,
+          "target_balance": 1783.24
+        },
+        {
+          "period": 349,
+          "target_balance": 0.0
+        }
+      ],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [
+        {
+          "relation_type": "SUPPORTED_BY",
+          "targets": [
+            "WA",
+            "WB",
+            "WC",
+            "WD",
+            "WE",
+            "WG",
+            "PO"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "TA",
+      "kind": "PAC",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 25000000.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": 2,
+      "schedule_depends_on": "PA",
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [
+        {
+          "period": 0,
+          "target_balance": 25000000.0
+        },
+        {
+          "period": 1,
+          "target_balance": 24495836.46
+        },
+        {
+          "period": 2,
+          "target_balance": 23967114.47
+        },
+        {
+          "period": 3,
+          "target_balance": 23406335.54
+        },
+        {
+          "period": 4,
+          "target_balance": 22813820.41
+        },
+        {
+          "period": 5,
+          "target_balance": 22189914.02
+        },
+        {
+          "period": 6,
+          "target_balance": 21534985.17
+        },
+        {
+          "period": 7,
+          "target_balance": 20849426.18
+        },
+        {
+          "period": 8,
+          "target_balance": 20133652.57
+        },
+        {
+          "period": 9,
+          "target_balance": 19388102.6
+        },
+        {
+          "period": 10,
+          "target_balance": 18613236.88
+        },
+        {
+          "period": 11,
+          "target_balance": 17809537.88
+        },
+        {
+          "period": 12,
+          "target_balance": 16977509.48
+        },
+        {
+          "period": 13,
+          "target_balance": 16753962.69
+        },
+        {
+          "period": 14,
+          "target_balance": 16522760.59
+        },
+        {
+          "period": 15,
+          "target_balance": 16284180.33
+        },
+        {
+          "period": 16,
+          "target_balance": 16038508.58
+        },
+        {
+          "period": 17,
+          "target_balance": 15786041.22
+        },
+        {
+          "period": 18,
+          "target_balance": 15527082.87
+        },
+        {
+          "period": 19,
+          "target_balance": 15261946.46
+        },
+        {
+          "period": 20,
+          "target_balance": 14990952.82
+        },
+        {
+          "period": 21,
+          "target_balance": 14721499.34
+        },
+        {
+          "period": 22,
+          "target_balance": 14456409.15
+        },
+        {
+          "period": 23,
+          "target_balance": 14195637.67
+        },
+        {
+          "period": 24,
+          "target_balance": 13939140.74
+        },
+        {
+          "period": 25,
+          "target_balance": 13686874.55
+        },
+        {
+          "period": 26,
+          "target_balance": 13438795.73
+        },
+        {
+          "period": 27,
+          "target_balance": 13194861.28
+        },
+        {
+          "period": 28,
+          "target_balance": 12955028.57
+        },
+        {
+          "period": 29,
+          "target_balance": 12719255.36
+        },
+        {
+          "period": 30,
+          "target_balance": 12487499.79
+        },
+        {
+          "period": 31,
+          "target_balance": 12259720.35
+        },
+        {
+          "period": 32,
+          "target_balance": 12035875.95
+        },
+        {
+          "period": 33,
+          "target_balance": 11815925.83
+        },
+        {
+          "period": 34,
+          "target_balance": 11599829.59
+        },
+        {
+          "period": 35,
+          "target_balance": 11387547.22
+        },
+        {
+          "period": 36,
+          "target_balance": 11179039.03
+        },
+        {
+          "period": 37,
+          "target_balance": 10974265.72
+        },
+        {
+          "period": 38,
+          "target_balance": 10773188.33
+        },
+        {
+          "period": 39,
+          "target_balance": 10575768.25
+        },
+        {
+          "period": 40,
+          "target_balance": 10381967.2
+        },
+        {
+          "period": 41,
+          "target_balance": 10191747.29
+        },
+        {
+          "period": 42,
+          "target_balance": 10005070.91
+        },
+        {
+          "period": 43,
+          "target_balance": 9821900.83
+        },
+        {
+          "period": 44,
+          "target_balance": 9642200.13
+        },
+        {
+          "period": 45,
+          "target_balance": 9465932.25
+        },
+        {
+          "period": 46,
+          "target_balance": 9293060.94
+        },
+        {
+          "period": 47,
+          "target_balance": 9123550.28
+        },
+        {
+          "period": 48,
+          "target_balance": 8957364.67
+        },
+        {
+          "period": 49,
+          "target_balance": 8794468.84
+        },
+        {
+          "period": 50,
+          "target_balance": 8634827.82
+        },
+        {
+          "period": 51,
+          "target_balance": 8478406.98
+        },
+        {
+          "period": 52,
+          "target_balance": 8325171.99
+        },
+        {
+          "period": 53,
+          "target_balance": 8175088.84
+        },
+        {
+          "period": 54,
+          "target_balance": 8028123.81
+        },
+        {
+          "period": 55,
+          "target_balance": 7884243.5
+        },
+        {
+          "period": 56,
+          "target_balance": 7743414.8
+        },
+        {
+          "period": 57,
+          "target_balance": 7605604.92
+        },
+        {
+          "period": 58,
+          "target_balance": 7470781.36
+        },
+        {
+          "period": 59,
+          "target_balance": 7338911.9
+        },
+        {
+          "period": 60,
+          "target_balance": 7209964.62
+        },
+        {
+          "period": 61,
+          "target_balance": 7083907.89
+        },
+        {
+          "period": 62,
+          "target_balance": 6960710.4
+        },
+        {
+          "period": 63,
+          "target_balance": 6840341.07
+        },
+        {
+          "period": 64,
+          "target_balance": 6722769.13
+        },
+        {
+          "period": 65,
+          "target_balance": 6607964.09
+        },
+        {
+          "period": 66,
+          "target_balance": 6495895.75
+        },
+        {
+          "period": 67,
+          "target_balance": 6386534.17
+        },
+        {
+          "period": 68,
+          "target_balance": 6279849.68
+        },
+        {
+          "period": 69,
+          "target_balance": 6175812.89
+        },
+        {
+          "period": 70,
+          "target_balance": 6074394.66
+        },
+        {
+          "period": 71,
+          "target_balance": 5975566.16
+        },
+        {
+          "period": 72,
+          "target_balance": 5879298.79
+        },
+        {
+          "period": 73,
+          "target_balance": 5785564.2
+        },
+        {
+          "period": 74,
+          "target_balance": 5694334.34
+        },
+        {
+          "period": 75,
+          "target_balance": 5605581.38
+        },
+        {
+          "period": 76,
+          "target_balance": 5519277.78
+        },
+        {
+          "period": 77,
+          "target_balance": 5435396.22
+        },
+        {
+          "period": 78,
+          "target_balance": 5353909.65
+        },
+        {
+          "period": 79,
+          "target_balance": 5274791.25
+        },
+        {
+          "period": 80,
+          "target_balance": 5198014.49
+        },
+        {
+          "period": 81,
+          "target_balance": 5123553.04
+        },
+        {
+          "period": 82,
+          "target_balance": 5051380.82
+        },
+        {
+          "period": 83,
+          "target_balance": 4981472.01
+        },
+        {
+          "period": 84,
+          "target_balance": 4913801.01
+        },
+        {
+          "period": 85,
+          "target_balance": 4848342.48
+        },
+        {
+          "period": 86,
+          "target_balance": 4785071.28
+        },
+        {
+          "period": 87,
+          "target_balance": 4723962.53
+        },
+        {
+          "period": 88,
+          "target_balance": 4664991.57
+        },
+        {
+          "period": 89,
+          "target_balance": 4608133.96
+        },
+        {
+          "period": 90,
+          "target_balance": 4553365.51
+        },
+        {
+          "period": 91,
+          "target_balance": 4500662.23
+        },
+        {
+          "period": 92,
+          "target_balance": 4450000.38
+        },
+        {
+          "period": 93,
+          "target_balance": 4402496.03
+        },
+        {
+          "period": 94,
+          "target_balance": 4359799.46
+        },
+        {
+          "period": 95,
+          "target_balance": 4321829.02
+        },
+        {
+          "period": 96,
+          "target_balance": 4288504.18
+        },
+        {
+          "period": 97,
+          "target_balance": 4259745.54
+        },
+        {
+          "period": 98,
+          "target_balance": 4235474.76
+        },
+        {
+          "period": 99,
+          "target_balance": 4215614.6
+        },
+        {
+          "period": 100,
+          "target_balance": 4198065.7
+        },
+        {
+          "period": 101,
+          "target_balance": 4180032.36
+        },
+        {
+          "period": 102,
+          "target_balance": 4161531.21
+        },
+        {
+          "period": 103,
+          "target_balance": 4142578.49
+        },
+        {
+          "period": 104,
+          "target_balance": 4123190.1
+        },
+        {
+          "period": 105,
+          "target_balance": 4103381.63
+        },
+        {
+          "period": 106,
+          "target_balance": 4083168.28
+        },
+        {
+          "period": 107,
+          "target_balance": 4062564.99
+        },
+        {
+          "period": 108,
+          "target_balance": 4041586.33
+        },
+        {
+          "period": 109,
+          "target_balance": 4020246.55
+        },
+        {
+          "period": 110,
+          "target_balance": 3998559.63
+        },
+        {
+          "period": 111,
+          "target_balance": 3976539.2
+        },
+        {
+          "period": 112,
+          "target_balance": 3954198.64
+        },
+        {
+          "period": 113,
+          "target_balance": 3931550.98
+        },
+        {
+          "period": 114,
+          "target_balance": 3908609.0
+        },
+        {
+          "period": 115,
+          "target_balance": 3885385.18
+        },
+        {
+          "period": 116,
+          "target_balance": 3861891.75
+        },
+        {
+          "period": 117,
+          "target_balance": 3838140.61
+        },
+        {
+          "period": 118,
+          "target_balance": 3814143.45
+        },
+        {
+          "period": 119,
+          "target_balance": 3789911.67
+        },
+        {
+          "period": 120,
+          "target_balance": 3765456.42
+        },
+        {
+          "period": 121,
+          "target_balance": 3740788.57
+        },
+        {
+          "period": 122,
+          "target_balance": 3715918.79
+        },
+        {
+          "period": 123,
+          "target_balance": 3690857.46
+        },
+        {
+          "period": 124,
+          "target_balance": 3665614.75
+        },
+        {
+          "period": 125,
+          "target_balance": 3640200.6
+        },
+        {
+          "period": 126,
+          "target_balance": 3614624.66
+        },
+        {
+          "period": 127,
+          "target_balance": 3588896.45
+        },
+        {
+          "period": 128,
+          "target_balance": 3563025.17
+        },
+        {
+          "period": 129,
+          "target_balance": 3537019.87
+        },
+        {
+          "period": 130,
+          "target_balance": 3510889.36
+        },
+        {
+          "period": 131,
+          "target_balance": 3484642.25
+        },
+        {
+          "period": 132,
+          "target_balance": 3458286.92
+        },
+        {
+          "period": 133,
+          "target_balance": 3431831.58
+        },
+        {
+          "period": 134,
+          "target_balance": 3405284.23
+        },
+        {
+          "period": 135,
+          "target_balance": 3378652.66
+        },
+        {
+          "period": 136,
+          "target_balance": 3351944.49
+        },
+        {
+          "period": 137,
+          "target_balance": 3325167.14
+        },
+        {
+          "period": 138,
+          "target_balance": 3298327.86
+        },
+        {
+          "period": 139,
+          "target_balance": 3271433.7
+        },
+        {
+          "period": 140,
+          "target_balance": 3244491.55
+        },
+        {
+          "period": 141,
+          "target_balance": 3217508.13
+        },
+        {
+          "period": 142,
+          "target_balance": 3190489.96
+        },
+        {
+          "period": 143,
+          "target_balance": 3163443.44
+        },
+        {
+          "period": 144,
+          "target_balance": 3136374.77
+        },
+        {
+          "period": 145,
+          "target_balance": 3109290.0
+        },
+        {
+          "period": 146,
+          "target_balance": 3082195.03
+        },
+        {
+          "period": 147,
+          "target_balance": 3055095.59
+        },
+        {
+          "period": 148,
+          "target_balance": 3027997.27
+        },
+        {
+          "period": 149,
+          "target_balance": 3000905.53
+        },
+        {
+          "period": 150,
+          "target_balance": 2973825.64
+        },
+        {
+          "period": 151,
+          "target_balance": 2946762.79
+        },
+        {
+          "period": 152,
+          "target_balance": 2919721.95
+        },
+        {
+          "period": 153,
+          "target_balance": 2892708.03
+        },
+        {
+          "period": 154,
+          "target_balance": 2865725.76
+        },
+        {
+          "period": 155,
+          "target_balance": 2838779.75
+        },
+        {
+          "period": 156,
+          "target_balance": 2811874.49
+        },
+        {
+          "period": 157,
+          "target_balance": 2785014.34
+        },
+        {
+          "period": 158,
+          "target_balance": 2758203.53
+        },
+        {
+          "period": 159,
+          "target_balance": 2731446.16
+        },
+        {
+          "period": 160,
+          "target_balance": 2704746.25
+        },
+        {
+          "period": 161,
+          "target_balance": 2678107.64
+        },
+        {
+          "period": 162,
+          "target_balance": 2651534.13
+        },
+        {
+          "period": 163,
+          "target_balance": 2625029.35
+        },
+        {
+          "period": 164,
+          "target_balance": 2598596.86
+        },
+        {
+          "period": 165,
+          "target_balance": 2572240.07
+        },
+        {
+          "period": 166,
+          "target_balance": 2545962.32
+        },
+        {
+          "period": 167,
+          "target_balance": 2519766.84
+        },
+        {
+          "period": 168,
+          "target_balance": 2493656.76
+        },
+        {
+          "period": 169,
+          "target_balance": 2467635.09
+        },
+        {
+          "period": 170,
+          "target_balance": 2441704.79
+        },
+        {
+          "period": 171,
+          "target_balance": 2415868.67
+        },
+        {
+          "period": 172,
+          "target_balance": 2390129.47
+        },
+        {
+          "period": 173,
+          "target_balance": 2364489.86
+        },
+        {
+          "period": 174,
+          "target_balance": 2338952.41
+        },
+        {
+          "period": 175,
+          "target_balance": 2313519.57
+        },
+        {
+          "period": 176,
+          "target_balance": 2288193.75
+        },
+        {
+          "period": 177,
+          "target_balance": 2262977.26
+        },
+        {
+          "period": 178,
+          "target_balance": 2237872.32
+        },
+        {
+          "period": 179,
+          "target_balance": 2212881.08
+        },
+        {
+          "period": 180,
+          "target_balance": 2188005.6
+        },
+        {
+          "period": 181,
+          "target_balance": 2163247.88
+        },
+        {
+          "period": 182,
+          "target_balance": 2138609.85
+        },
+        {
+          "period": 183,
+          "target_balance": 2114093.32
+        },
+        {
+          "period": 184,
+          "target_balance": 2089700.1
+        },
+        {
+          "period": 185,
+          "target_balance": 2065431.86
+        },
+        {
+          "period": 186,
+          "target_balance": 2041290.26
+        },
+        {
+          "period": 187,
+          "target_balance": 2017276.84
+        },
+        {
+          "period": 188,
+          "target_balance": 1993393.14
+        },
+        {
+          "period": 189,
+          "target_balance": 1969640.56
+        },
+        {
+          "period": 190,
+          "target_balance": 1946020.5
+        },
+        {
+          "period": 191,
+          "target_balance": 1922534.25
+        },
+        {
+          "period": 192,
+          "target_balance": 1899183.08
+        },
+        {
+          "period": 193,
+          "target_balance": 1875968.18
+        },
+        {
+          "period": 194,
+          "target_balance": 1852890.7
+        },
+        {
+          "period": 195,
+          "target_balance": 1829951.69
+        },
+        {
+          "period": 196,
+          "target_balance": 1807152.21
+        },
+        {
+          "period": 197,
+          "target_balance": 1784493.21
+        },
+        {
+          "period": 198,
+          "target_balance": 1761975.62
+        },
+        {
+          "period": 199,
+          "target_balance": 1739600.31
+        },
+        {
+          "period": 200,
+          "target_balance": 1717368.1
+        },
+        {
+          "period": 201,
+          "target_balance": 1695279.75
+        },
+        {
+          "period": 202,
+          "target_balance": 1673336.01
+        },
+        {
+          "period": 203,
+          "target_balance": 1651537.53
+        },
+        {
+          "period": 204,
+          "target_balance": 1629884.96
+        },
+        {
+          "period": 205,
+          "target_balance": 1608378.88
+        },
+        {
+          "period": 206,
+          "target_balance": 1587019.83
+        },
+        {
+          "period": 207,
+          "target_balance": 1565808.32
+        },
+        {
+          "period": 208,
+          "target_balance": 1544744.81
+        },
+        {
+          "period": 209,
+          "target_balance": 1523829.71
+        },
+        {
+          "period": 210,
+          "target_balance": 1503063.41
+        },
+        {
+          "period": 211,
+          "target_balance": 1482446.26
+        },
+        {
+          "period": 212,
+          "target_balance": 1461978.55
+        },
+        {
+          "period": 213,
+          "target_balance": 1441660.56
+        },
+        {
+          "period": 214,
+          "target_balance": 1421492.53
+        },
+        {
+          "period": 215,
+          "target_balance": 1401474.64
+        },
+        {
+          "period": 216,
+          "target_balance": 1381607.07
+        },
+        {
+          "period": 217,
+          "target_balance": 1361889.95
+        },
+        {
+          "period": 218,
+          "target_balance": 1342323.38
+        },
+        {
+          "period": 219,
+          "target_balance": 1322907.44
+        },
+        {
+          "period": 220,
+          "target_balance": 1303642.14
+        },
+        {
+          "period": 221,
+          "target_balance": 1284527.51
+        },
+        {
+          "period": 222,
+          "target_balance": 1265563.53
+        },
+        {
+          "period": 223,
+          "target_balance": 1246750.15
+        },
+        {
+          "period": 224,
+          "target_balance": 1228087.29
+        },
+        {
+          "period": 225,
+          "target_balance": 1209574.85
+        },
+        {
+          "period": 226,
+          "target_balance": 1191212.71
+        },
+        {
+          "period": 227,
+          "target_balance": 1173000.71
+        },
+        {
+          "period": 228,
+          "target_balance": 1154938.68
+        },
+        {
+          "period": 229,
+          "target_balance": 1137026.4
+        },
+        {
+          "period": 230,
+          "target_balance": 1119263.66
+        },
+        {
+          "period": 231,
+          "target_balance": 1101650.21
+        },
+        {
+          "period": 232,
+          "target_balance": 1084185.79
+        },
+        {
+          "period": 233,
+          "target_balance": 1066870.09
+        },
+        {
+          "period": 234,
+          "target_balance": 1049702.82
+        },
+        {
+          "period": 235,
+          "target_balance": 1032683.62
+        },
+        {
+          "period": 236,
+          "target_balance": 1015812.17
+        },
+        {
+          "period": 237,
+          "target_balance": 999088.1
+        },
+        {
+          "period": 238,
+          "target_balance": 982510.99
+        },
+        {
+          "period": 239,
+          "target_balance": 966080.46
+        },
+        {
+          "period": 240,
+          "target_balance": 949796.08
+        },
+        {
+          "period": 241,
+          "target_balance": 933657.42
+        },
+        {
+          "period": 242,
+          "target_balance": 917663.99
+        },
+        {
+          "period": 243,
+          "target_balance": 901815.37
+        },
+        {
+          "period": 244,
+          "target_balance": 886111.03
+        },
+        {
+          "period": 245,
+          "target_balance": 870550.48
+        },
+        {
+          "period": 246,
+          "target_balance": 855133.21
+        },
+        {
+          "period": 247,
+          "target_balance": 839858.69
+        },
+        {
+          "period": 248,
+          "target_balance": 824726.36
+        },
+        {
+          "period": 249,
+          "target_balance": 809735.7
+        },
+        {
+          "period": 250,
+          "target_balance": 794886.09
+        },
+        {
+          "period": 251,
+          "target_balance": 780177.0
+        },
+        {
+          "period": 252,
+          "target_balance": 765607.8
+        },
+        {
+          "period": 253,
+          "target_balance": 751177.91
+        },
+        {
+          "period": 254,
+          "target_balance": 736886.7
+        },
+        {
+          "period": 255,
+          "target_balance": 722733.55
+        },
+        {
+          "period": 256,
+          "target_balance": 708717.83
+        },
+        {
+          "period": 257,
+          "target_balance": 694838.89
+        },
+        {
+          "period": 258,
+          "target_balance": 681096.08
+        },
+        {
+          "period": 259,
+          "target_balance": 667488.73
+        },
+        {
+          "period": 260,
+          "target_balance": 654016.18
+        },
+        {
+          "period": 261,
+          "target_balance": 640677.74
+        },
+        {
+          "period": 262,
+          "target_balance": 627472.72
+        },
+        {
+          "period": 263,
+          "target_balance": 614400.45
+        },
+        {
+          "period": 264,
+          "target_balance": 601460.18
+        },
+        {
+          "period": 265,
+          "target_balance": 588651.25
+        },
+        {
+          "period": 266,
+          "target_balance": 575972.92
+        },
+        {
+          "period": 267,
+          "target_balance": 563424.47
+        },
+        {
+          "period": 268,
+          "target_balance": 551005.17
+        },
+        {
+          "period": 269,
+          "target_balance": 538714.29
+        },
+        {
+          "period": 270,
+          "target_balance": 526551.09
+        },
+        {
+          "period": 271,
+          "target_balance": 514514.83
+        },
+        {
+          "period": 272,
+          "target_balance": 502604.75
+        },
+        {
+          "period": 273,
+          "target_balance": 490820.1
+        },
+        {
+          "period": 274,
+          "target_balance": 479160.13
+        },
+        {
+          "period": 275,
+          "target_balance": 467624.07
+        },
+        {
+          "period": 276,
+          "target_balance": 456211.15
+        },
+        {
+          "period": 277,
+          "target_balance": 444920.61
+        },
+        {
+          "period": 278,
+          "target_balance": 433751.67
+        },
+        {
+          "period": 279,
+          "target_balance": 422703.55
+        },
+        {
+          "period": 280,
+          "target_balance": 411775.48
+        },
+        {
+          "period": 281,
+          "target_balance": 400966.66
+        },
+        {
+          "period": 282,
+          "target_balance": 390276.33
+        },
+        {
+          "period": 283,
+          "target_balance": 379703.69
+        },
+        {
+          "period": 284,
+          "target_balance": 369247.94
+        },
+        {
+          "period": 285,
+          "target_balance": 358908.31
+        },
+        {
+          "period": 286,
+          "target_balance": 348684.0
+        },
+        {
+          "period": 287,
+          "target_balance": 338574.21
+        },
+        {
+          "period": 288,
+          "target_balance": 328578.15
+        },
+        {
+          "period": 289,
+          "target_balance": 318695.01
+        },
+        {
+          "period": 290,
+          "target_balance": 308924.01
+        },
+        {
+          "period": 291,
+          "target_balance": 299264.35
+        },
+        {
+          "period": 292,
+          "target_balance": 289715.21
+        },
+        {
+          "period": 293,
+          "target_balance": 280275.82
+        },
+        {
+          "period": 294,
+          "target_balance": 270945.35
+        },
+        {
+          "period": 295,
+          "target_balance": 261723.03
+        },
+        {
+          "period": 296,
+          "target_balance": 252608.03
+        },
+        {
+          "period": 297,
+          "target_balance": 243599.57
+        },
+        {
+          "period": 298,
+          "target_balance": 234696.84
+        },
+        {
+          "period": 299,
+          "target_balance": 225899.05
+        },
+        {
+          "period": 300,
+          "target_balance": 217205.4
+        },
+        {
+          "period": 301,
+          "target_balance": 208615.08
+        },
+        {
+          "period": 302,
+          "target_balance": 200127.3
+        },
+        {
+          "period": 303,
+          "target_balance": 191741.27
+        },
+        {
+          "period": 304,
+          "target_balance": 183456.18
+        },
+        {
+          "period": 305,
+          "target_balance": 175271.24
+        },
+        {
+          "period": 306,
+          "target_balance": 167185.67
+        },
+        {
+          "period": 307,
+          "target_balance": 159198.67
+        },
+        {
+          "period": 308,
+          "target_balance": 151309.44
+        },
+        {
+          "period": 309,
+          "target_balance": 143517.21
+        },
+        {
+          "period": 310,
+          "target_balance": 135821.17
+        },
+        {
+          "period": 311,
+          "target_balance": 128220.55
+        },
+        {
+          "period": 312,
+          "target_balance": 120714.58
+        },
+        {
+          "period": 313,
+          "target_balance": 113302.45
+        },
+        {
+          "period": 314,
+          "target_balance": 105983.4
+        },
+        {
+          "period": 315,
+          "target_balance": 98756.65
+        },
+        {
+          "period": 316,
+          "target_balance": 91621.42
+        },
+        {
+          "period": 317,
+          "target_balance": 84576.94
+        },
+        {
+          "period": 318,
+          "target_balance": 77622.44
+        },
+        {
+          "period": 319,
+          "target_balance": 70757.16
+        },
+        {
+          "period": 320,
+          "target_balance": 63980.33
+        },
+        {
+          "period": 321,
+          "target_balance": 57291.18
+        },
+        {
+          "period": 322,
+          "target_balance": 50688.96
+        },
+        {
+          "period": 323,
+          "target_balance": 44172.91
+        },
+        {
+          "period": 324,
+          "target_balance": 37742.28
+        },
+        {
+          "period": 325,
+          "target_balance": 31396.31
+        },
+        {
+          "period": 326,
+          "target_balance": 25134.28
+        },
+        {
+          "period": 327,
+          "target_balance": 18955.4
+        },
+        {
+          "period": 328,
+          "target_balance": 12858.96
+        },
+        {
+          "period": 329,
+          "target_balance": 6844.21
+        },
+        {
+          "period": 330,
+          "target_balance": 910.42
+        },
+        {
+          "period": 331,
+          "target_balance": 0.0
+        }
+      ],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [
+        {
+          "relation_type": "SUPPORTED_BY",
+          "targets": [
+            "WA",
+            "WB",
+            "WC",
+            "WD",
+            "WE",
+            "WG",
+            "PO"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "TB",
+      "kind": "PAC",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 94599.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": 2,
+      "schedule_depends_on": "PA",
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [
+        {
+          "period": 0,
+          "target_balance": 94599.0
+        },
+        {
+          "period": 331,
+          "target_balance": 89655.86
+        },
+        {
+          "period": 332,
+          "target_balance": 83881.8
+        },
+        {
+          "period": 333,
+          "target_balance": 78186.5
+        },
+        {
+          "period": 334,
+          "target_balance": 72569.26
+        },
+        {
+          "period": 335,
+          "target_balance": 67029.34
+        },
+        {
+          "period": 336,
+          "target_balance": 61566.04
+        },
+        {
+          "period": 337,
+          "target_balance": 56178.65
+        },
+        {
+          "period": 338,
+          "target_balance": 50866.46
+        },
+        {
+          "period": 339,
+          "target_balance": 45628.75
+        },
+        {
+          "period": 340,
+          "target_balance": 40464.84
+        },
+        {
+          "period": 341,
+          "target_balance": 35374.02
+        },
+        {
+          "period": 342,
+          "target_balance": 30355.6
+        },
+        {
+          "period": 343,
+          "target_balance": 25408.89
+        },
+        {
+          "period": 344,
+          "target_balance": 20533.21
+        },
+        {
+          "period": 345,
+          "target_balance": 15727.87
+        },
+        {
+          "period": 346,
+          "target_balance": 10992.19
+        },
+        {
+          "period": 347,
+          "target_balance": 6325.51
+        },
+        {
+          "period": 348,
+          "target_balance": 1727.14
+        }
+      ],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [
+        {
+          "relation_type": "SUPPORTED_BY",
+          "targets": [
+            "WA",
+            "WB",
+            "WC",
+            "WD",
+            "WE",
+            "WG",
+            "PO"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "Z",
+      "kind": "Z",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.5,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 1700680.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "PIK",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [
+        {
+          "relation_type": "ACCRETES_TO",
+          "targets": [
+            "TA",
+            "TB"
+          ],
+          "weights": null,
+          "leverage": null,
+          "cap": null,
+          "floor": null,
+          "description": ""
+        }
+      ],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": true,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "PO",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "ZERO",
+      "coupon": null,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 758600.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "WA",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.75,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 4748972.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "WB",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.75,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 1688013.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "WC",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.75,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 3518626.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "WD",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.75,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 2165180.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "WE",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.75,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 1687590.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "WG",
+      "kind": "CASH_PAY",
+      "is_bond": true,
+      "is_pseudo": false,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": 5.75,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": 2880801.0,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    },
+    {
+      "name": "R",
+      "kind": "RESIDUAL",
+      "is_bond": false,
+      "is_pseudo": true,
+      "group_id": null,
+      "coupon_type": "FIXED",
+      "coupon": null,
+      "margin": null,
+      "index_name": null,
+      "cap": null,
+      "floor": null,
+      "inverse_multiplier": null,
+      "notional": null,
+      "notional_pct_of_collateral": null,
+      "nla_starting_balance": null,
+      "required_subordination_pct": null,
+      "maturity_date": null,
+      "day_count": "30/360",
+      "accrual_period": "MONTHLY",
+      "seniority": null,
+      "pay_mode": "CASH_PAY",
+      "schedule_type": null,
+      "schedule_model_type": null,
+      "schedule_priority_tier": null,
+      "schedule_depends_on": null,
+      "schedule_speed_low": null,
+      "schedule_speed_high": null,
+      "schedule_custom_vector": null,
+      "pac_lower_psa": null,
+      "pac_upper_psa": null,
+      "tac_pricing_psa": null,
+      "schedule_contract": [],
+      "schedule_derivation": null,
+      "schedule_tolerance_bps": null,
+      "relations": [],
+      "accrual_start_period": null,
+      "accrual_end_period": null,
+      "z_accrual_enabled": false,
+      "z_release_trigger": null,
+      "solver_knob_coupon": false,
+      "solver_knob_size": false
+    }
+  ],
+  "accounts": [],
+  "fees": [],
+  "triggers": [],
+  "calculations": [],
+  "waterfall_rules": [
+    {
+      "rule_id": "r_int_all",
+      "rule_type": "PAY_INTEREST",
+      "order": 0,
+      "group_id": null,
+      "from_sources": [
+        "ACT_INT"
+      ],
+      "to_targets": [
+        "PA",
+        "PB",
+        "PC",
+        "PD",
+        "TA",
+        "TB",
+        "WA",
+        "WB",
+        "WC",
+        "WD",
+        "WE",
+        "WG"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_prin_pac_i",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 1,
+      "group_id": null,
+      "from_sources": [
+        "ACT_PRIN"
+      ],
+      "to_targets": [
+        "PA",
+        "PB",
+        "PC",
+        "PD",
+        "EO"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_prin_pac_ii",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 2,
+      "group_id": null,
+      "from_sources": [
+        "ACT_PRIN"
+      ],
+      "to_targets": [
+        "TA",
+        "TB"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_prin_Z",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 3,
+      "group_id": null,
+      "from_sources": [
+        "ACT_PRIN"
+      ],
+      "to_targets": [
+        "Z"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_supp_split",
+      "rule_type": "SPLIT_CASH",
+      "order": 4,
+      "group_id": null,
+      "from_sources": [
+        "ACT_PRIN"
+      ],
+      "to_targets": [
+        "WAWG_BUCKET",
+        "PO_BUCKET"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": [
+        0.956521694276,
+        0.043478305724
+      ],
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_pay_wa",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 5,
+      "group_id": null,
+      "from_sources": [
+        "WAWG_BUCKET"
+      ],
+      "to_targets": [
+        "WA"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_pay_wb",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 6,
+      "group_id": null,
+      "from_sources": [
+        "WAWG_BUCKET"
+      ],
+      "to_targets": [
+        "WB"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_pay_wc",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 7,
+      "group_id": null,
+      "from_sources": [
+        "WAWG_BUCKET"
+      ],
+      "to_targets": [
+        "WC"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_pay_wd",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 8,
+      "group_id": null,
+      "from_sources": [
+        "WAWG_BUCKET"
+      ],
+      "to_targets": [
+        "WD"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_pay_we",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 9,
+      "group_id": null,
+      "from_sources": [
+        "WAWG_BUCKET"
+      ],
+      "to_targets": [
+        "WE"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_pay_wg",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 10,
+      "group_id": null,
+      "from_sources": [
+        "WAWG_BUCKET"
+      ],
+      "to_targets": [
+        "WG"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_prin_PO",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 11,
+      "group_id": null,
+      "from_sources": [
+        "PO_BUCKET"
+      ],
+      "to_targets": [
+        "PO"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_supp_sweep_back",
+      "rule_type": "SPLIT_CASH",
+      "order": 12,
+      "group_id": null,
+      "from_sources": [
+        "WAWG_BUCKET",
+        "PO_BUCKET"
+      ],
+      "to_targets": [
+        "ACT_PRIN"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": [
+        1.0
+      ],
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_prin_pac_ii_cleanup",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 13,
+      "group_id": null,
+      "from_sources": [
+        "ACT_PRIN"
+      ],
+      "to_targets": [
+        "TA",
+        "TB"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": "NONE",
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_prin_pac_i_cleanup",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 14,
+      "group_id": null,
+      "from_sources": [
+        "ACT_PRIN"
+      ],
+      "to_targets": [
+        "PA",
+        "PB",
+        "PC",
+        "PD",
+        "EO"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": "NONE",
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_prin_sup_cleanup",
+      "rule_type": "PAY_PRINCIPAL",
+      "order": 15,
+      "group_id": null,
+      "from_sources": [
+        "ACT_PRIN"
+      ],
+      "to_targets": [
+        "WA",
+        "WB",
+        "WC",
+        "WD",
+        "WE",
+        "WG",
+        "PO"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": "NONE",
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_resid_int",
+      "rule_type": "PAY_RESIDUAL",
+      "order": 16,
+      "group_id": null,
+      "from_sources": [
+        "ACT_INT"
+      ],
+      "to_targets": [
+        "R"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    },
+    {
+      "rule_id": "r_resid_prin",
+      "rule_type": "PAY_RESIDUAL",
+      "order": 17,
+      "group_id": null,
+      "from_sources": [
+        "ACT_PRIN"
+      ],
+      "to_targets": [
+        "R"
+      ],
+      "reserve_account": null,
+      "payment_style": "SEQUENTIAL",
+      "max_amount_expr": null,
+      "max_amount_fixed": null,
+      "target_weights": null,
+      "condition_trigger": null,
+      "condition_invert": false,
+      "condition_expr": null,
+      "allow_negative_source": false,
+      "coverage_mode": "NORMAL",
+      "cap_mode": null,
+      "ignore_schedule_cap": false,
+      "description": ""
+    }
+  ],
+  "collateral_groups": [],
+  "deal_knobs": {}
+}
