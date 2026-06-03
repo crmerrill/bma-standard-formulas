@@ -242,7 +242,8 @@ def execute_deal_solve(
                 },
             )
 
-        deal = load_deal(deal_id, version=deal_version)
+        _load_result = load_deal(deal_id, version=deal_version)
+        deal = _load_result[0] if _load_result else None
         solved_deal, solver_summary = solve_deal(
             deal,
             run_input,

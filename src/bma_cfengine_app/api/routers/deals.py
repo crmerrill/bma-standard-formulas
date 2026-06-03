@@ -398,7 +398,10 @@ def export_endpoint(deal_id: str, sha: str = Query(...)) -> Response:
 
 def _ensure_canonical_deal(deal_id: str, version: int | None = None):
     try:
-        return load_deal(deal_id, version=version)
+        result = load_deal(deal_id, version=version)
+        if result is None:
+            raise FileNotFoundError(f"No deal found with ID {deal_id}")
+        return result[0]
     except FileNotFoundError:
         snapshot = load_studio_snapshot(deal_id, version=version)
         raw_ir = snapshot.get("ir", {})
@@ -900,6 +903,7 @@ class CommitRequest(BaseModel):
     force: bool = False
     payload: dict[str, Any] | None = None
     branch: str = "main"
+    sidecar_payload: dict[str, Any] | None = None
 
 
 class CommitResponse(BaseModel):
@@ -1045,6 +1049,7 @@ def commit_deal_endpoint(deal_id: str, body: CommitRequest) -> CommitResponse:
             message=body.message,
             parent_sha=head_sha,
             commit_target=body.branch,
+            sidecar_payload=body.sidecar_payload,
         )
     except InvalidBranchNameError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

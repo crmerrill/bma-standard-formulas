@@ -25,6 +25,8 @@ from typing import Any
 
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
 from bma_standard_formulas.deals.schemas.migrations import migrate_deal_payload
+from bma_standard_formulas.deals.schemas.studio_sidecar import StudioSidecar
+from bma_standard_formulas.diagnostics import DiagnosticPayload, Severity
 
 from ...storage.run_store import APP_HOME
 from .git_service import GitService
@@ -247,8 +249,8 @@ def _resolve_version_to_sha(service: GitService, version: int | None) -> str | N
     return commits[len(commits) - version].sha
 
 
-def _load_from_git(deal_id: str, version: int | None = None) -> DealDefinition | None:
-    """Load a deal definition from the git-backed repo."""
+def _load_from_git(deal_id: str, version: int | None = None) -> tuple[DealDefinition, StudioSidecar, list[DiagnosticPayload]] | None:
+    """Load a deal definition + sidecar from the git-backed repo."""
     d = deal_dir(deal_id)
     service = GitService(repo_path=d)
 
@@ -259,7 +261,40 @@ def _load_from_git(deal_id: str, version: int | None = None) -> DealDefinition |
     raw = service.show(sha, "deal.json")
     payload = json.loads(raw)
     payload = migrate_deal_payload(payload)
-    return DealDefinition.model_validate(payload)
+    deal = DealDefinition.model_validate(payload)
+
+    sidecar, diagnostics = _load_sidecar_from_commit(service, sha, d)
+    return (deal, sidecar, diagnostics)
+
+
+def _load_sidecar_from_commit(
+    service: GitService, sha: str, repo_path: Path
+) -> tuple[StudioSidecar, list[DiagnosticPayload]]:
+    """Attempt to load sidecar.json from the given commit.
+
+    Returns (StudioSidecar, diagnostics). On parse failure, archives
+    the broken file locally and returns a default empty sidecar with
+    an INFO diagnostic.
+    """
+    try:
+        raw_sidecar = service.show(sha, "sidecar.json")
+    except Exception:
+        return (StudioSidecar(), [])
+
+    try:
+        sidecar = StudioSidecar.model_validate_json(raw_sidecar)
+        return (sidecar, [])
+    except Exception:
+        broken_path = repo_path / "sidecar.broken.json"
+        broken_path.write_bytes(raw_sidecar)
+        diagnostic = DiagnosticPayload(
+            code="SIDECAR_LOAD_FAILED",
+            severity=Severity.info,
+            path="$",
+            message="Sidecar could not be loaded; falling back to defaults. No deal data was lost.",
+            payload={},
+        )
+        return (StudioSidecar(), [diagnostic])
 
 
 def _update_manifest_on_save(deal_id: str, deal: DealDefinition) -> None:
@@ -336,9 +371,10 @@ def save_deal(
     return {"sha": new_sha, "version": _commit_count(deal_id)}
 
 
-def load_deal(deal_id: str, version: int | None = None) -> DealDefinition | None:
-    """Load a deal definition; triggers legacy migration on first open.
+def load_deal(deal_id: str, version: int | None = None) -> tuple[DealDefinition, StudioSidecar, list[DiagnosticPayload]] | None:
+    """Load a deal definition + sidecar; triggers legacy migration on first open.
 
+    Returns a tuple of (DealDefinition, StudioSidecar, diagnostics).
     Migration is idempotent: skipped if .git/ already exists.
     Falls back to legacy flat-file behavior for deals without legacy snapshots.
     """
@@ -351,7 +387,10 @@ def load_deal(deal_id: str, version: int | None = None) -> DealDefinition | None
         _fsck_guard(d)
         return _load_from_git(deal_id, version=version)
 
-    return _load_legacy(deal_id, version=version)
+    legacy_deal = _load_legacy(deal_id, version=version)
+    if legacy_deal is None:
+        return None
+    return (legacy_deal, StudioSidecar(), [])
 
 
 def _load_legacy(deal_id: str, version: int | None = None) -> DealDefinition | None:

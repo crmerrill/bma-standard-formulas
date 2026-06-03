@@ -125,7 +125,7 @@ def test_save_load_routes_to_git_and_applies_schema_migration_first(
     assert last_author_name != "system:migration"
 
     loaded = deal_store.load_deal(deal_id)
-    assert loaded.model_dump(mode="json") == new_deal.model_dump(mode="json")
+    assert loaded[0].model_dump(mode="json") == new_deal.model_dump(mode="json")
 
 
 def build_minimal_deal_definition(*, deal_name: str) -> DealDefinition:
@@ -155,20 +155,20 @@ def test_load_deal_versioned_lookup_works_for_save_commits(
     # Round-trip each version
     loaded_v1 = deal_store.load_deal(deal_id, version=save_result_1["version"])
     assert loaded_v1 is not None
-    assert loaded_v1.deal_name == "v1"
+    assert loaded_v1[0].deal_name == "v1"
 
     loaded_v2 = deal_store.load_deal(deal_id, version=save_result_2["version"])
     assert loaded_v2 is not None
-    assert loaded_v2.deal_name == "v2"
+    assert loaded_v2[0].deal_name == "v2"
 
     loaded_v3 = deal_store.load_deal(deal_id, version=save_result_3["version"])
     assert loaded_v3 is not None
-    assert loaded_v3.deal_name == "v3"
+    assert loaded_v3[0].deal_name == "v3"
 
     # version=None returns HEAD (latest = v3)
     loaded_head = deal_store.load_deal(deal_id, version=None)
     assert loaded_head is not None
-    assert loaded_head.deal_name == "v3"
+    assert loaded_head[0].deal_name == "v3"
 
 
 def test_schema_migration_runs_before_pydantic_validation_negative_case(
@@ -189,7 +189,7 @@ def test_schema_migration_runs_before_pydantic_validation_negative_case(
     assert migrated_deal.bonds[0].kind.value == "Z"
 
     loaded = deal_store.load_deal(deal_id)
-    assert loaded.bonds[0].kind.value == "Z"
+    assert loaded[0].bonds[0].kind.value == "Z"
     assert (deal_path / ".git").exists()
 
     head_payload = json.loads(_run_git(deal_path, "show", "HEAD:deal.json"))

@@ -38,7 +38,8 @@ def execute_deal_run(
     created_at = datetime.now(timezone.utc).isoformat()
 
     try:
-        deal = load_deal(deal_id, version=deal_version)
+        _load_result = load_deal(deal_id, version=deal_version)
+        deal = _load_result[0] if _load_result else None
 
         if run_inputs_by_scenario:
             scenario_names = list(run_inputs_by_scenario.keys())

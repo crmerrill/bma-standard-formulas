@@ -132,7 +132,7 @@ def test_legacy_migration_creates_linear_history_with_exact_metadata(
     _redirect_deal_dirs(monkeypatch, tmp_path)
 
     loaded = deal_store.load_deal(deal_id)
-    assert loaded.bonds[0].coupon == pytest.approx(6.0)
+    assert loaded[0].bonds[0].coupon == pytest.approx(6.0)
 
     assert (deal_path / ".git").exists()
 

@@ -246,7 +246,7 @@ def test_restore_cli_locates_latest_bundle_and_unbundles(
 
     restored = deal_store.load_deal(deal_id)
     assert restored is not None
-    assert restored.deal_name == "restore-cli-roundtrip"
+    assert restored[0].deal_name == "restore-cli-roundtrip"
 
     events = _read_audit_log_events(deal_id)
     assert any(event.get("event_type") == "restore_attempt" for event in events)

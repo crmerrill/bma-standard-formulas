@@ -279,6 +279,7 @@ class GitService:
         message: str,
         parent_sha: str | None = None,
         commit_target: str = "main",
+        sidecar_payload: dict[str, Any] | bytes | None = None,
     ) -> str:
         self._validate_branch_name(commit_target)
         with self._write_lock():
@@ -289,6 +290,7 @@ class GitService:
                     message=message,
                     parent_sha=parent_sha,
                     commit_target=commit_target,
+                    sidecar_payload=sidecar_payload,
                 )
             return self._commit_deal_cli(
                 deal_payload,
@@ -296,6 +298,7 @@ class GitService:
                 message=message,
                 parent_sha=parent_sha,
                 commit_target=commit_target,
+                sidecar_payload=sidecar_payload,
             )
 
     @_wrap_pygit2
@@ -307,8 +310,16 @@ class GitService:
         message: str,
         parent_sha: str | None,
         commit_target: str,
+        sidecar_payload: dict[str, Any] | bytes | None = None,
     ) -> str:
         data = deal_payload if isinstance(deal_payload, bytes) else json.dumps(deal_payload, indent=2).encode("utf-8")
+        sidecar_data: bytes | None = None
+        if sidecar_payload is not None:
+            if isinstance(sidecar_payload, bytes):
+                sidecar_data = sidecar_payload
+            else:
+                from bma_standard_formulas.deals.schemas.studio_sidecar import StudioSidecar
+                sidecar_data = StudioSidecar.model_validate(sidecar_payload).model_dump_json(indent=2).encode("utf-8")
 
         repo = pygit2.Repository(str(self._repo_path / ".git"))
 
@@ -326,6 +337,9 @@ class GitService:
             else:
                 tb = repo.TreeBuilder()
             tb.insert("deal.json", blob_id, pygit2.GIT_FILEMODE_BLOB)
+            if sidecar_data is not None:
+                sidecar_blob_id = repo.create_blob(sidecar_data)
+                tb.insert("sidecar.json", sidecar_blob_id, pygit2.GIT_FILEMODE_BLOB)
             tree_id = tb.write()
 
             author_name, author_email = _parse_author(author)
@@ -350,6 +364,9 @@ class GitService:
         else:
             tb = repo.TreeBuilder()
         tb.insert("deal.json", blob_id, pygit2.GIT_FILEMODE_BLOB)
+        if sidecar_data is not None:
+            sidecar_blob_id = repo.create_blob(sidecar_data)
+            tb.insert("sidecar.json", sidecar_blob_id, pygit2.GIT_FILEMODE_BLOB)
         tree_id = tb.write()
 
         author_name, author_email = _parse_author(author)
@@ -396,6 +413,16 @@ class GitService:
         index = repo.index
         index.read()
         index.add("deal.json")
+        if sidecar_data is not None:
+            sidecar_path = self._repo_path / "sidecar.json"
+            fd2, tmp2 = tempfile.mkstemp(dir=str(self._repo_path), suffix=".tmp")
+            try:
+                os.write(fd2, sidecar_data)
+                os.fsync(fd2)
+            finally:
+                os.close(fd2)
+            os.replace(tmp2, str(sidecar_path))
+            index.add("sidecar.json")
         index.write()
 
         return str(commit_oid)
@@ -408,8 +435,16 @@ class GitService:
         message: str,
         parent_sha: str | None,
         commit_target: str,
+        sidecar_payload: dict[str, Any] | bytes | None = None,
     ) -> str:
         data = deal_payload if isinstance(deal_payload, bytes) else json.dumps(deal_payload, indent=2).encode("utf-8")
+        sidecar_data: bytes | None = None
+        if sidecar_payload is not None:
+            if isinstance(sidecar_payload, bytes):
+                sidecar_data = sidecar_payload
+            else:
+                from bma_standard_formulas.deals.schemas.studio_sidecar import StudioSidecar
+                sidecar_data = StudioSidecar.model_validate(sidecar_payload).model_dump_json(indent=2).encode("utf-8")
 
         # Non-main branch: validate parent_sha against the target branch tip and use
         # low-level plumbing commands (commit-tree + update-ref) to avoid touching HEAD.
@@ -429,6 +464,13 @@ class GitService:
                 input=data.decode("utf-8"),
             ).stdout.strip()
 
+            sidecar_blob_sha: str | None = None
+            if sidecar_data is not None:
+                sidecar_blob_sha = self._git_cli(
+                    "hash-object", "-w", "--stdin",
+                    input=sidecar_data.decode("utf-8"),
+                ).stdout.strip()
+
             if parent_sha:
                 fd, tmp_idx = tempfile.mkstemp(prefix="bma_commit_idx_")
                 os.close(fd)
@@ -440,13 +482,22 @@ class GitService:
                         f"100644,{blob_sha},deal.json",
                         env=idx_env,
                     )
+                    if sidecar_blob_sha is not None:
+                        self._git_cli(
+                            "update-index", "--add", "--cacheinfo",
+                            f"100644,{sidecar_blob_sha},sidecar.json",
+                            env=idx_env,
+                        )
                     tree_sha = self._git_cli("write-tree", env=idx_env).stdout.strip()
                 finally:
                     Path(tmp_idx).unlink(missing_ok=True)
             else:
+                mktree_input = f"100644 blob {blob_sha}\tdeal.json\n"
+                if sidecar_blob_sha is not None:
+                    mktree_input += f"100644 blob {sidecar_blob_sha}\tsidecar.json\n"
                 tree_sha = self._git_cli(
                     "mktree",
-                    input=f"100644 blob {blob_sha}\tdeal.json\n",
+                    input=mktree_input,
                 ).stdout.strip()
 
             author_name, author_email = _parse_author(author)
@@ -478,6 +529,11 @@ class GitService:
 
         self._git_cli("add", "deal.json")
 
+        if sidecar_data is not None:
+            sidecar_path = self._repo_path / "sidecar.json"
+            sidecar_path.write_bytes(sidecar_data)
+            self._git_cli("add", "sidecar.json")
+
         author_name, author_email = _parse_author(author)
         env = {
             **os.environ,
@@ -490,6 +546,8 @@ class GitService:
         if parent_sha:
             self._git_cli("reset", "--soft", parent_sha, env=env)
             self._git_cli("add", "deal.json", env=env)
+            if sidecar_data is not None:
+                self._git_cli("add", "sidecar.json", env=env)
 
         self._git_cli("commit", "-m", message, "--allow-empty", env=env)
         result = self._git_cli("rev-parse", "HEAD")

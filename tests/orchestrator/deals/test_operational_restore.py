@@ -140,7 +140,7 @@ def test_repo_corrupt_diagnostic_invokes_restore_from_bundle_end_to_end(
 
     loaded = deal_store.load_deal(deal_id)
     assert loaded is not None
-    assert loaded.deal_name == f"{deal_id}-canonical"
+    assert loaded[0].deal_name == f"{deal_id}-canonical"
 
     events = [
         event
