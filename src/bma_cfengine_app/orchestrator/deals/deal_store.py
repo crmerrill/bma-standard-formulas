@@ -149,6 +149,35 @@ def _commit_count(deal_id: str) -> int:
         return 0
 
 
+def _migrate_deal_json_to_git(deal_id: str) -> None:
+    """sdpm-3: first-open migration for deal directories with deal.json but no .git/.
+
+    Runs git init and creates a single migration commit authored by system:migration
+    with message 'Migrate deal.json'. Idempotent; wrapped in the advisory migration lock.
+    """
+    d = deal_dir(deal_id)
+    if (d / ".git").exists():
+        return
+
+    deal_json_path = d / "deal.json"
+    if not deal_json_path.exists():
+        return
+
+    with _migration_lock(d):
+        if (d / ".git").exists():
+            return
+
+        _git_init_main(d)
+        service = GitService(repo_path=d, _verified_clean=True)
+        deal_bytes = deal_json_path.read_bytes()
+        service.commit_deal(
+            deal_bytes,
+            author="system:migration <migration@bma>",
+            message="Migrate deal.json",
+            parent_sha=None,
+        )
+
+
 def _migrate_legacy_to_git(deal_id: str) -> None:
     """Idempotent: migrate legacy v{N}.json files into a linear git history.
 
@@ -390,6 +419,10 @@ def load_deal(deal_id: str, version: int | None = None) -> tuple[DealDefinition,
 
     if not (d / ".git").exists() and _has_legacy_snapshots(d):
         _migrate_legacy_to_git(deal_id)
+
+    # sdpm-3: first-open for plain deal.json directories that have never been git-backed
+    if not (d / ".git").exists() and (d / "deal.json").exists():
+        _migrate_deal_json_to_git(deal_id)
 
     if (d / ".git").exists():
         _fsck_guard(d)
