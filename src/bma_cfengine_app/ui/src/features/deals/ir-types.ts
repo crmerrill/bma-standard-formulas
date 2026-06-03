@@ -119,11 +119,14 @@ export interface RuleNodeIR {
   to_targets: string[];
   payment_style: string;
   max_amount_fixed: number | null;
+  max_amount_expr?: string | null;
   condition_trigger: string | null;
   condition_invert: boolean;
+  condition_expr?: string | null;
   group_id?: string | null;
   cap_mode?: string | null;
   coverage_mode?: string | null;
+  allow_negative_source?: boolean;
   target_weights?: number[] | null;
 }
 

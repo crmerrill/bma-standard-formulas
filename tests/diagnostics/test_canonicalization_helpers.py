@@ -22,7 +22,7 @@ def _base_rule(**overrides) -> RuleNode:
     """Minimal valid RuleNode with all AC-2 predicate fields at fixed defaults."""
     defaults: dict = {
         "rule_id": "r1",
-        "rule_type": "PAY",
+        "rule_type": "PAY_INTEREST",
         "order": 0,
         "from_sources": ["CASH"],
         "to_targets": ["CLASS_A"],
