@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from datetime import datetime, timezone
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Iterator, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
@@ -58,6 +59,10 @@ from ...orchestrator.deals.solver_templates import (
 )
 from ...orchestrator.deals.psa_schedule_overlay import PoolDerivationInputs, build_psa_schedule_overlay
 from ...orchestrator.deals.structuring_verification import verify_structure
+from ...orchestrator.deals.validation_service import (
+    ValidationStreamEvent,
+    stream_validation,
+)
 from bma_standard_formulas.deals.schemas.solver_template import (
     TemplateInstantiationRequest,
     TemplateInstantiationResponse,
@@ -66,6 +71,8 @@ from ...orchestrator.run_service import get_cashflow_preview, list_all_runs
 from ...storage import run_store
 
 router = APIRouter(tags=["deals"])
+
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 _LEGACY_FEE_BASIS_MAP = {
     "PCT_POOL": "COLLATERAL_BALANCE",
@@ -1094,5 +1101,40 @@ def merge_stream_endpoint(deal_id: str, branch: str) -> StreamingResponse:
                 diagnostic={"code": "MERGE_INTERNAL_ERROR", "message": str(exc)},
             )
         yield f"data: {terminal.model_dump_json()}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.get("/deals/{deal_id}/validate/stream")
+def validate_stream_endpoint(deal_id: str, sha: str) -> StreamingResponse:
+    """SSE endpoint streaming static backend diagnostics for a committed deal SHA.
+
+    Returns 422 if the SHA is malformed; 404 if the deal or SHA is not found.
+    Streams ``ValidationStreamEvent`` JSON payloads framed as
+    ``data: <JSON>\\n\\n`` SSE events, terminating in exactly one
+    ``validation_complete`` (success) or ``validation_failed`` (error) event.
+    Runtime/output-dependent checks (carry tie-out, etc.) are excluded.
+    """
+    if not _SHA_RE.fullmatch(sha):
+        raise HTTPException(
+            status_code=422,
+            detail="Malformed SHA: must be exactly 40 lowercase hex characters.",
+        )
+
+    d = deal_dir(deal_id)
+    if not (d / ".git").exists():
+        raise HTTPException(status_code=404, detail=f"Deal {deal_id!r} not found.")
+
+    svc = GitService(repo_path=d)
+    try:
+        raw = svc.show(sha, "deal.json")
+    except GitServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    deal_dict = migrate_deal_payload(json.loads(raw))
+
+    def event_stream() -> Iterator[bytes]:
+        for event in stream_validation(deal_dict):
+            yield f"data: {event.model_dump_json()}\n\n".encode("utf-8")
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
