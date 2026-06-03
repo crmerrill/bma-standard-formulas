@@ -61,6 +61,18 @@ registerDiagnosticValidator({
           path: `deal.bonds[${i}].name`,
           message: `Bond '${name}' at index ${i} duplicates bond at index ${seen.get(name)}.`,
           payload: { index: i, first_index: seen.get(name), name },
+          // ve-5 QuickFix: manual_resolve_* signals that user judgment is needed
+          // (we don't auto-rename without context). Phase 2 Problems Panel
+          // renders the hint and surfaces a rename UI.
+          fix: {
+            action_id: "manual_resolve_duplicate_bond_name",
+            params: {
+              duplicate_index: i,
+              first_index: seen.get(name),
+              name,
+              hint: `Rename one of the bonds named '${name}'.`,
+            },
+          },
         });
       } else {
         seen.set(name, i);

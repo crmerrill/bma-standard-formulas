@@ -18,7 +18,8 @@ def test_payload_and_enums_conform_to_schema() -> None:
     assert issubclass(DiagnosticPayload, pydantic.BaseModel)
 
     fields = DiagnosticPayload.model_fields
-    assert set(fields) == {"code", "severity", "path", "message", "payload"}
+    # ve-5 added optional `fix: QuickFix | None`; the original five fields remain.
+    assert set(fields) == {"code", "severity", "path", "message", "payload", "fix"}
     assert fields["code"].annotation is str
     assert fields["severity"].annotation is Severity
     assert fields["path"].annotation is str
@@ -42,6 +43,7 @@ def test_payload_and_enums_conform_to_schema() -> None:
         "path": "deal.bonds[0].coupon",
         "message": "bad",
         "payload": {"k": "v"},
+        "fix": None,
     }
 
     with pytest.raises(pydantic.ValidationError):
