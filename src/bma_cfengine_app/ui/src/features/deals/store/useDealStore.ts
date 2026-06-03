@@ -248,56 +248,38 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
 
   promoteLocalDraft: async () => {
     const state = get();
-    const oldDealId = state.deal_id;
 
-    const res = await fetch("/deals", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        working_tree: state.sessions.main?.working_tree,
-      }),
-    });
-    if (!res.ok) {
-      throw new Error(`promoteLocalDraft failed: ${res.status}`);
-    }
-    const data = (await res.json()) as {
-      deal_id?: string;
-      id?: string;
-      initial_sha?: string;
-      sha?: string;
-    };
-    const realDealId = (data.deal_id ?? data.id ?? "") as string;
-    const realSha = (data.initial_sha ?? data.sha ?? "") as string;
-
-    const currentState = get();
-    for (const sessionId of Object.keys(currentState.sessions)) {
-      const oldKey = `bma:draft:${oldDealId}:${sessionId}`;
-      let value: string | null = null;
-      try {
-        value = sessionStorage.getItem(oldKey);
-      } catch {
-        // sessionStorage unavailable
-      }
-      if (value !== null) {
-        const newKey = `bma:draft:${realDealId}:${sessionId}`;
-        try {
-          sessionStorage.setItem(newKey, value);
-          sessionStorage.removeItem(oldKey);
-        } catch {
-          // sessionStorage unavailable
-        }
-      }
+    // Minor #2: guard against non-local deal_id
+    if (!state.deal_id.startsWith("local_draft_")) {
+      throw new Error("promoteLocalDraft: deal_id is not a local draft");
     }
 
-    set((s) => {
-      const updatedSessions = Object.fromEntries(
-        Object.entries(s.sessions).map(([id, session]) => [
-          id,
-          { ...session, base_sha: realSha },
-        ]),
-      );
-      return { deal_id: realDealId, sessions: updatedSessions };
-    });
+    // Blocking #1: the required backend create-deal endpoint (git-init shape with
+    // initial_sha) does not yet exist. Surface BLOCKED_ON_BACKEND and abort.
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        main: {
+          ...s.sessions.main,
+          diagnostics: [
+            ...s.sessions.main.diagnostics,
+            {
+              code: "BLOCKED_ON_BACKEND",
+              severity: "error" as const,
+              path: "$",
+              message:
+                "Local draft promotion requires a backend create-deal endpoint that does not yet exist. Track this in a follow-on ticket.",
+              payload: {
+                feature: "promoteLocalDraft",
+                current_deal_id: state.deal_id,
+              },
+            },
+          ],
+        },
+      },
+    }));
+
+    throw new Error("promoteLocalDraft: BLOCKED_ON_BACKEND — see diagnostic");
   },
 
   ...createLifecycleActions(set, get),

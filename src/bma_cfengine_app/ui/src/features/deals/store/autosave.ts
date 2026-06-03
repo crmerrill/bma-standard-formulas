@@ -100,6 +100,13 @@ export function subscribeAutosave(store: Store): () => void {
     restoreFromSessionStorage(store, initState.deal_id, sessionId);
   }
 
+  // Major #1: capture prev tracking values AFTER restores so the restored
+  // working_tree doesn't look like a typed dispatch to the subscription.
+  const postRestoreState = store.getState();
+  let prevActiveSessionId: string = postRestoreState.activeSessionId;
+  let prevWorkingTree: unknown =
+    postRestoreState.sessions[prevActiveSessionId]?.working_tree;
+
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   const unsubscribe = store.subscribe((state: DealStoreState) => {
@@ -107,7 +114,19 @@ export function subscribeAutosave(store: Store): () => void {
     const session = sessions[activeSessionId];
     if (!session) return;
 
-    // Synchronously persist working tree to sessionStorage on every action.
+    const currentWorkingTree = session.working_tree;
+    const workingTreeChanged = currentWorkingTree !== prevWorkingTree;
+    const sameSession = activeSessionId === prevActiveSessionId;
+
+    // Always advance prev values so future comparisons are correct.
+    prevWorkingTree = currentWorkingTree;
+    prevActiveSessionId = activeSessionId;
+
+    // Major #1: only react when the active session's working_tree mutated.
+    // setDealId, setActiveSession, setDiagnostics, etc. don't trigger.
+    if (!workingTreeChanged || !sameSession) return;
+
+    // Synchronously persist working tree to sessionStorage on every typed dispatch.
     const key = `bma:draft:${deal_id}:${activeSessionId}`;
     try {
       sessionStorage.setItem(
@@ -118,11 +137,32 @@ export function subscribeAutosave(store: Store): () => void {
           saved_at: new Date().toISOString(),
         }),
       );
-    } catch {
-      // sessionStorage unavailable
+    } catch (err) {
+      // Major #2: QuotaExceededError or sessionStorage unavailable — surface a
+      // warning diagnostic so the UI can inform the user that crash recovery is
+      // degraded. Backend autosave remains the durable path.
+      store.setState((s) => ({
+        sessions: {
+          ...s.sessions,
+          [activeSessionId]: {
+            ...s.sessions[activeSessionId],
+            diagnostics: [
+              ...s.sessions[activeSessionId].diagnostics,
+              {
+                code: "SESSIONSTORAGE_WRITE_FAILED",
+                severity: "warning" as const,
+                path: "$",
+                message:
+                  "Crash recovery is degraded; backend autosave still durable.",
+                payload: { error: String(err) },
+              },
+            ],
+          },
+        },
+      }));
     }
 
-    // Debounced backend commit: reset timer on every subsequent action.
+    // Debounced backend commit: reset timer on every subsequent typed dispatch.
     if (debounceTimer !== null) {
       clearTimeout(debounceTimer);
     }
@@ -148,6 +188,19 @@ export function subscribeAutosave(store: Store): () => void {
 
       current
         .commitWithConflictHandling(current.deal_id, body, activeSessionId)
+        .then((result) => {
+          // Critical #1: advance base_sha so the next autosave sends the correct
+          // parent_sha and does not generate a spurious self-conflict.
+          store.setState((s) => ({
+            sessions: {
+              ...s.sessions,
+              [activeSessionId]: {
+                ...s.sessions[activeSessionId],
+                base_sha: result.sha,
+              },
+            },
+          }));
+        })
         .catch(() => {
           // Conflict written to conflictState by commitWithConflictHandling.
         });

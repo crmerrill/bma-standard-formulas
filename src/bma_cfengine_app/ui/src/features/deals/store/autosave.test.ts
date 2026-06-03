@@ -341,40 +341,139 @@ describe("sds-5 autosave and draft persistence", () => {
     );
   });
 
-  test("test_promote_local_draft_rewrites_state_deal_id_and_migrates_sessionStorage_keys", async () => {
+  test("test_promote_local_draft_emits_blocked_on_backend_until_endpoint_exists", async () => {
     await subscribeAutosaveForTests();
     useDealStore.getState().setDealId(LOCAL_DRAFT_ID);
 
-    const oldKey = `bma:draft:${LOCAL_DRAFT_ID}:main`;
-    const currentTree = useDealStore.getState().sessions.main.working_tree;
-    sessionStorageMock.setItem(
-      oldKey,
-      JSON.stringify({
-        working_tree: currentTree,
-        base_sha: BASE_SHA,
-        saved_at: new Date().toISOString(),
-      }),
+    const stateBefore = useDealStore.getState();
+    const dealIdBefore = stateBefore.deal_id;
+    const baseShasBefore = Object.fromEntries(
+      Object.entries(stateBefore.sessions).map(([id, s]) => [id, s.base_sha]),
     );
-
-    fetchSpy.mockResolvedValueOnce(
-      jsonResponse({
-        deal_id: REAL_DEAL_ID,
-        id: REAL_DEAL_ID,
-        initial_sha: REAL_SHA,
-        sha: REAL_SHA,
-      }),
+    const workingTreesBefore = Object.fromEntries(
+      Object.entries(stateBefore.sessions).map(([id, s]) => [id, s.working_tree]),
     );
 
     const promoteLocalDraft = getPromoteLocalDraftAction();
-    await promoteLocalDraft();
+
+    // (a) the action throws with BLOCKED_ON_BACKEND
+    await expect(promoteLocalDraft()).rejects.toThrow("BLOCKED_ON_BACKEND");
 
     const after = useDealStore.getState();
-    expect(after.deal_id).toBe(REAL_DEAL_ID);
-    expect(after.sessions.main.base_sha).toBe(REAL_SHA);
-    expect(sessionStorageMock.getItem(oldKey)).toBeNull();
+
+    // (b) BLOCKED_ON_BACKEND ERROR diagnostic is appended to main session
     expect(
-      sessionStorageMock.getItem(`bma:draft:${REAL_DEAL_ID}:main`),
-    ).not.toBeNull();
+      after.sessions.main.diagnostics.some(
+        (d) =>
+          d.code === "BLOCKED_ON_BACKEND" &&
+          d.severity === "error" &&
+          d.path === "$" &&
+          String(d.message).includes("follow-on ticket"),
+      ),
+    ).toBe(true);
+
+    // (c) state is unchanged: deal_id, base_sha, working_tree untouched
+    expect(after.deal_id).toBe(dealIdBefore);
+    for (const [id, sha] of Object.entries(baseShasBefore)) {
+      expect(after.sessions[id]?.base_sha).toBe(sha);
+    }
+    for (const [id, tree] of Object.entries(workingTreesBefore)) {
+      expect(after.sessions[id]?.working_tree).toEqual(tree);
+    }
+
+    // No backend fetch was attempted
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test("test_sequential_autosaves_advance_base_sha_without_self_conflict", async () => {
+    await subscribeAutosaveForTests();
+
+    const SHA1 = "1".repeat(40);
+    const SHA2 = "2".repeat(40);
+
+    // First autosave: mock fetch returns SHA1
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ status: "ok", sha: SHA1 }));
+    useDealStore.getState().dispatch({
+      type: "addBond",
+      payload: makeBond("SEQ_AUTOSAVE_1"),
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(useDealStore.getState().sessions.main.base_sha).toBe(SHA1);
+
+    // Second autosave: mock fetch returns SHA2
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ status: "ok", sha: SHA2 }));
+    useDealStore.getState().dispatch({
+      type: "addBond",
+      payload: makeBond("SEQ_AUTOSAVE_2"),
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const commitCalls = getCommitCalls(fetchSpy);
+    expect(commitCalls).toHaveLength(2);
+
+    const secondBody = JSON.parse(
+      String((commitCalls[1][1] as RequestInit).body),
+    ) as { parent_sha: string };
+    expect(secondBody.parent_sha).toBe(SHA1);
+
+    expect(useDealStore.getState().sessions.main.base_sha).toBe(SHA2);
+  });
+
+  test("test_autosave_does_not_fire_on_setActiveSession_or_setDealId_or_setDiagnostics", async () => {
+    await subscribeAutosaveForTests();
+
+    // Seed state with one dispatch, then consume its debounce so the fetchSpy
+    // accumulates no calls from the seed itself.
+    useDealStore.getState().dispatch({
+      type: "addBond",
+      payload: makeBond("SEED_FOR_NO_DISPATCH_TEST"),
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    fetchSpy.mockClear();
+
+    // These mutations change store state but NOT the active session's working_tree.
+    useDealStore.getState().setDealId("deal_changed_no_dispatch_test");
+    useDealStore.getState().setDiagnostics("main", [
+      {
+        code: "NOOP_DIAG",
+        severity: "info" as const,
+        path: "",
+        message: "no-op diagnostic",
+        payload: {},
+      },
+    ]);
+    useDealStore.getState().setActiveSession("main");
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // No backend commit should have been scheduled or fired.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test("test_sessionstorage_quota_error_surfaces_warning_diagnostic", async () => {
+    await subscribeAutosaveForTests();
+
+    // Override setItem to simulate a QuotaExceededError after subscription is live.
+    sessionStorageMock.setItem.mockImplementation(() => {
+      throw new DOMException("QuotaExceededError", "QuotaExceededError");
+    });
+
+    useDealStore.getState().dispatch({
+      type: "addBond",
+      payload: makeBond("QUOTA_EXCEEDED_BOND"),
+    });
+
+    const after = useDealStore.getState();
+    expect(
+      after.sessions.main.diagnostics.some(
+        (d) =>
+          d.code === "SESSIONSTORAGE_WRITE_FAILED" &&
+          d.severity === "warning" &&
+          d.path === "$" &&
+          String(d.message).includes("durable"),
+      ),
+    ).toBe(true);
   });
 
   test("test_autosave_is_suppressed_when_conflictState_is_set", async () => {
