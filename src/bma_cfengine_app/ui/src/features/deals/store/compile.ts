@@ -1,72 +1,13 @@
+// Vendored from src/bma_standard_formulas/deals/schemas/field_order.json
+// Sync command: npm run sync:field-order
 import fieldOrder from "../field_order.json";
 import type { DealState } from "./useDealStore";
 
-type Manifest = Record<string, string[]>;
+type FieldEntry = { name: string; type: string };
+type ModelEntry = { fields: FieldEntry[] };
+type Manifest = Record<string, ModelEntry>;
 
 const manifest = fieldOrder as Manifest;
-
-const FLOAT_FIELDS: Record<string, Set<string>> = {
-  DealDefinition: new Set(["discount_factor_pct"]),
-  BondDef: new Set([
-    "coupon",
-    "margin",
-    "notional",
-    "notional_pct_of_collateral",
-    "nla_starting_balance",
-    "required_subordination_pct",
-    "cap",
-    "floor",
-    "inverse_multiplier",
-    "schedule_speed_low",
-    "schedule_speed_high",
-    "pac_lower_psa",
-    "pac_upper_psa",
-    "tac_pricing_psa",
-    "schedule_tolerance_bps",
-  ]),
-  AccountDef: new Set([
-    "starting_amount",
-    "starting_pct",
-    "minimum_amount",
-    "minimum_pct",
-  ]),
-  FeeDef: new Set(["amount", "rate", "minimum"]),
-  TriggerNode: new Set(["threshold_value"]),
-  RuleNode: new Set(["max_amount_fixed"]),
-  TrancheRelation: new Set(["leverage", "cap", "floor"]),
-  RateScheduleEntry: new Set(["rate"]),
-  AccountMinimumScheduleEntry: new Set(["minimum_balance"]),
-};
-
-const LIST_CHILD_MODEL: Record<string, Record<string, string>> = {
-  DealDefinition: {
-    bonds: "BondDef",
-    accounts: "AccountDef",
-    fees: "FeeDef",
-    triggers: "TriggerNode",
-    calculations: "CalculationNode",
-    waterfall_rules: "RuleNode",
-    collateral_groups: "CollateralGroupDef",
-  },
-  BondDef: {
-    relations: "TrancheRelation",
-  },
-  AccountDef: {
-    minimum_schedule: "AccountMinimumScheduleEntry",
-  },
-  TriggerNode: {
-    threshold_schedule: "RateScheduleEntry",
-  },
-};
-
-const RATE_OR_SCHEDULE_FIELDS = new Set(["coupon", "margin", "cap", "floor"]);
-
-const FLOAT_ARRAY_FIELDS: Record<string, Set<string>> = {
-  RuleNode: new Set(["target_weights"]),
-  TrancheRelation: new Set(["weights"]),
-};
-
-const RAW_DICT_INT_KEYS = new Set(["period"]);
 
 function formatFloat(n: number): string {
   if (Number.isInteger(n) && Number.isFinite(n)) {
@@ -75,23 +16,74 @@ function formatFloat(n: number): string {
   return JSON.stringify(n);
 }
 
+function getFieldNames(modelName: string): string[] {
+  const entry = manifest[modelName];
+  if (!entry) throw new Error(`Field order manifest missing model: ${modelName}`);
+  return entry.fields.map((f) => f.name);
+}
+
+function getFieldType(modelName: string, fieldName: string): string | null {
+  const entry = manifest[modelName];
+  if (!entry) return null;
+  const field = entry.fields.find((f) => f.name === fieldName);
+  return field ? field.type : null;
+}
+
+function isFloatType(typeStr: string): boolean {
+  return typeStr === "float" || typeStr === "Optional[float]";
+}
+
+function isListOfFloat(typeStr: string): boolean {
+  return (
+    typeStr === "list[float]" ||
+    typeStr === "Optional[list[float]]"
+  );
+}
+
+function getListChildModel(typeStr: string): string | null {
+  const m = typeStr.match(/^(?:Optional\[)?list\[(\w+)\](?:\])?$/);
+  if (m && m[1][0] === m[1][0].toUpperCase() && m[1][0] !== m[1][0].toLowerCase()) {
+    return m[1];
+  }
+  return null;
+}
+
+function isRateOrScheduleType(typeStr: string): boolean {
+  return typeStr === "Union[float, list[RateScheduleEntry], None]";
+}
+
+function isScheduleContractType(typeStr: string): boolean {
+  return typeStr === "list[dict[str, Union[float, int]]]";
+}
+
+function isDictType(typeStr: string): boolean {
+  return typeStr.startsWith("dict[") || typeStr.startsWith("Optional[dict[");
+}
+
+const SCHEDULE_CONTRACT_INT_KEYS = new Set(["period"]);
+
 function serializeModel(
   obj: Record<string, unknown>,
   indent: number,
   modelName: string,
 ): string {
-  const fields = manifest[modelName];
-  if (!fields) {
-    throw new Error(`Field order manifest missing model: ${modelName}`);
+  const fieldNames = getFieldNames(modelName);
+  const fieldNameSet = new Set(fieldNames);
+
+  const present = Object.keys(obj);
+  for (const key of present) {
+    if (!fieldNameSet.has(key)) {
+      throw new Error(
+        `compileToIR: model "${modelName}" has field "${key}" not present in manifest. ` +
+          `Manifest may be stale — regenerate with: python scripts/emit_field_order.py`,
+      );
+    }
   }
 
-  const present = new Set(Object.keys(obj));
   const orderedKeys: string[] = [];
-  for (const key of fields) {
-    if (present.has(key)) orderedKeys.push(key);
-  }
-  for (const key of Object.keys(obj)) {
-    if (!fields.includes(key)) orderedKeys.push(key);
+  const presentSet = new Set(present);
+  for (const key of fieldNames) {
+    if (presentSet.has(key)) orderedKeys.push(key);
   }
 
   if (orderedKeys.length === 0) return "{}";
@@ -119,16 +111,23 @@ function serializeFieldValue(
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "string") return JSON.stringify(value);
 
+  const typeStr = getFieldType(parentModel, fieldName) ?? "";
+
   if (typeof value === "number") {
-    const isFloat = FLOAT_FIELDS[parentModel]?.has(fieldName) ?? false;
-    return isFloat ? formatFloat(value) : JSON.stringify(value);
+    if (isFloatType(typeStr) || isRateOrScheduleType(typeStr)) {
+      return formatFloat(value);
+    }
+    return JSON.stringify(value);
   }
 
   if (Array.isArray(value)) {
-    return serializeFieldArray(value, indent, parentModel, fieldName);
+    return serializeFieldArray(value, indent, parentModel, fieldName, typeStr);
   }
 
   if (typeof value === "object") {
+    if (isDictType(typeStr)) {
+      return serializeGenericObject(value as Record<string, unknown>, indent);
+    }
     return serializeGenericObject(value as Record<string, unknown>, indent);
   }
 
@@ -140,6 +139,7 @@ function serializeFieldArray(
   indent: number,
   parentModel: string,
   fieldName: string,
+  typeStr: string,
 ): string {
   if (arr.length === 0) return "[]";
 
@@ -147,18 +147,23 @@ function serializeFieldArray(
   const pad = " ".repeat(ci);
   const cp = " ".repeat(indent);
 
-  const childModel = LIST_CHILD_MODEL[parentModel]?.[fieldName] ?? null;
-  const isFloatArr = FLOAT_ARRAY_FIELDS[parentModel]?.has(fieldName) ?? false;
-  const isRateOrSchedule = RATE_OR_SCHEDULE_FIELDS.has(fieldName);
-  const isScheduleContract = fieldName === "schedule_contract";
+  const childModel = getListChildModel(typeStr);
+  const isFloatArr = isListOfFloat(typeStr);
+  const isRateOrSchedule = isRateOrScheduleType(typeStr);
+  const isSchedContract = isScheduleContractType(typeStr);
 
+  // CONTRACT: schedule_contract is typed as list[dict[str, float | int]].
+  // After JSON.parse, TS cannot distinguish 100 from 100.0. We use a
+  // heuristic: if ANY non-period value in the array has a fractional part,
+  // treat all non-period values as float. This is the ONLY allowed heuristic
+  // in the serializer; all other type dispatch is manifest-driven.
   let scUsesFloat = false;
-  if (isScheduleContract) {
+  if (isSchedContract) {
     for (const item of arr) {
       if (typeof item === "object" && item !== null) {
         for (const [k, v] of Object.entries(item as Record<string, unknown>)) {
           if (
-            !RAW_DICT_INT_KEYS.has(k) &&
+            !SCHEDULE_CONTRACT_INT_KEYS.has(k) &&
             typeof v === "number" &&
             !Number.isInteger(v)
           ) {
@@ -192,7 +197,7 @@ function serializeFieldArray(
         ci,
         "RateScheduleEntry",
       );
-    } else if (isScheduleContract && typeof item === "object" && item !== null) {
+    } else if (isSchedContract && typeof item === "object" && item !== null) {
       s = serializeScheduleContractEntry(
         item as Record<string, unknown>,
         ci,
@@ -236,7 +241,7 @@ function serializeScheduleContractEntry(
     if (val === null) {
       vs = "null";
     } else if (typeof val === "number") {
-      if (RAW_DICT_INT_KEYS.has(key)) {
+      if (SCHEDULE_CONTRACT_INT_KEYS.has(key)) {
         vs = JSON.stringify(val);
       } else {
         vs = useFloat ? formatFloat(val) : JSON.stringify(val);

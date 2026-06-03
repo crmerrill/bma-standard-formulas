@@ -1,146 +1,534 @@
 {
-  "DealDefinition": [
-    "schema_version",
-    "deal_name",
-    "description",
-    "origination_date",
-    "settlement_date",
-    "series_id",
-    "discount_factor_pct",
-    "deal_state_trigger",
-    "initial_deal_state",
-    "bonds",
-    "accounts",
-    "fees",
-    "triggers",
-    "calculations",
-    "waterfall_rules",
-    "collateral_groups",
-    "deal_knobs"
-  ],
-  "BondDef": [
-    "name",
-    "kind",
-    "is_bond",
-    "is_pseudo",
-    "group_id",
-    "coupon_type",
-    "coupon",
-    "margin",
-    "index_name",
-    "cap",
-    "floor",
-    "inverse_multiplier",
-    "notional",
-    "notional_pct_of_collateral",
-    "nla_starting_balance",
-    "required_subordination_pct",
-    "maturity_date",
-    "day_count",
-    "accrual_period",
-    "seniority",
-    "pay_mode",
-    "schedule_type",
-    "schedule_model_type",
-    "schedule_priority_tier",
-    "schedule_depends_on",
-    "schedule_speed_low",
-    "schedule_speed_high",
-    "schedule_custom_vector",
-    "pac_lower_psa",
-    "pac_upper_psa",
-    "tac_pricing_psa",
-    "schedule_contract",
-    "schedule_derivation",
-    "schedule_tolerance_bps",
-    "relations",
-    "accrual_start_period",
-    "accrual_end_period",
-    "z_accrual_enabled",
-    "z_release_trigger",
-    "solver_knob_coupon",
-    "solver_knob_size"
-  ],
-  "AccountDef": [
-    "name",
-    "account_category",
-    "starting_amount",
-    "starting_pct",
-    "starting_basis",
-    "minimum_amount",
-    "minimum_pct",
-    "minimum_basis",
-    "minimum_schedule"
-  ],
-  "FeeDef": [
-    "name",
-    "basis_type",
-    "amount",
-    "amount_expr",
-    "rate",
-    "rate_expr",
-    "minimum",
-    "frequency",
-    "cumulative"
-  ],
-  "TriggerNode": [
-    "name",
-    "metric_type",
-    "description",
-    "threshold_schedule",
-    "threshold_value",
-    "calculation_ref",
-    "comparison_ref",
-    "cure_periods",
-    "window_periods",
-    "comparison"
-  ],
-  "CalculationNode": [
-    "name",
-    "expression",
-    "description"
-  ],
-  "RuleNode": [
-    "rule_id",
-    "rule_type",
-    "order",
-    "group_id",
-    "from_sources",
-    "to_targets",
-    "reserve_account",
-    "payment_style",
-    "max_amount_expr",
-    "max_amount_fixed",
-    "target_weights",
-    "condition_trigger",
-    "condition_invert",
-    "condition_expr",
-    "allow_negative_source",
-    "coverage_mode",
-    "cap_mode",
-    "ignore_schedule_cap",
-    "description"
-  ],
-  "CollateralGroupDef": [
-    "group_id",
-    "label",
-    "description"
-  ],
-  "RateScheduleEntry": [
-    "from_period",
-    "rate"
-  ],
-  "TrancheRelation": [
-    "relation_type",
-    "targets",
-    "weights",
-    "leverage",
-    "cap",
-    "floor",
-    "description"
-  ],
-  "AccountMinimumScheduleEntry": [
-    "period",
-    "minimum_balance"
-  ]
+  "DealDefinition": {
+    "fields": [
+      {
+        "name": "schema_version",
+        "type": "str"
+      },
+      {
+        "name": "deal_name",
+        "type": "str"
+      },
+      {
+        "name": "description",
+        "type": "str"
+      },
+      {
+        "name": "origination_date",
+        "type": "Optional[date]"
+      },
+      {
+        "name": "settlement_date",
+        "type": "Optional[date]"
+      },
+      {
+        "name": "series_id",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "discount_factor_pct",
+        "type": "float"
+      },
+      {
+        "name": "deal_state_trigger",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "initial_deal_state",
+        "type": "str"
+      },
+      {
+        "name": "bonds",
+        "type": "list[BondDef]"
+      },
+      {
+        "name": "accounts",
+        "type": "list[AccountDef]"
+      },
+      {
+        "name": "fees",
+        "type": "list[FeeDef]"
+      },
+      {
+        "name": "triggers",
+        "type": "list[TriggerNode]"
+      },
+      {
+        "name": "calculations",
+        "type": "list[CalculationNode]"
+      },
+      {
+        "name": "waterfall_rules",
+        "type": "list[RuleNode]"
+      },
+      {
+        "name": "collateral_groups",
+        "type": "list[CollateralGroupDef]"
+      },
+      {
+        "name": "deal_knobs",
+        "type": "dict[str, Any]"
+      }
+    ]
+  },
+  "BondDef": {
+    "fields": [
+      {
+        "name": "name",
+        "type": "str"
+      },
+      {
+        "name": "kind",
+        "type": "str"
+      },
+      {
+        "name": "is_bond",
+        "type": "bool"
+      },
+      {
+        "name": "is_pseudo",
+        "type": "bool"
+      },
+      {
+        "name": "group_id",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "coupon_type",
+        "type": "str"
+      },
+      {
+        "name": "coupon",
+        "type": "Union[float, list[RateScheduleEntry], None]"
+      },
+      {
+        "name": "margin",
+        "type": "Union[float, list[RateScheduleEntry], None]"
+      },
+      {
+        "name": "index_name",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "cap",
+        "type": "Union[float, list[RateScheduleEntry], None]"
+      },
+      {
+        "name": "floor",
+        "type": "Union[float, list[RateScheduleEntry], None]"
+      },
+      {
+        "name": "inverse_multiplier",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "notional",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "notional_pct_of_collateral",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "nla_starting_balance",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "required_subordination_pct",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "maturity_date",
+        "type": "Optional[date]"
+      },
+      {
+        "name": "day_count",
+        "type": "str"
+      },
+      {
+        "name": "accrual_period",
+        "type": "str"
+      },
+      {
+        "name": "seniority",
+        "type": "Optional[int]"
+      },
+      {
+        "name": "pay_mode",
+        "type": "str"
+      },
+      {
+        "name": "schedule_type",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "schedule_model_type",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "schedule_priority_tier",
+        "type": "Optional[int]"
+      },
+      {
+        "name": "schedule_depends_on",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "schedule_speed_low",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "schedule_speed_high",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "schedule_custom_vector",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "pac_lower_psa",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "pac_upper_psa",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "tac_pricing_psa",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "schedule_contract",
+        "type": "list[dict[str, Union[float, int]]]"
+      },
+      {
+        "name": "schedule_derivation",
+        "type": "Optional[dict[str, Any]]"
+      },
+      {
+        "name": "schedule_tolerance_bps",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "relations",
+        "type": "list[TrancheRelation]"
+      },
+      {
+        "name": "accrual_start_period",
+        "type": "Optional[int]"
+      },
+      {
+        "name": "accrual_end_period",
+        "type": "Optional[int]"
+      },
+      {
+        "name": "z_accrual_enabled",
+        "type": "bool"
+      },
+      {
+        "name": "z_release_trigger",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "solver_knob_coupon",
+        "type": "bool"
+      },
+      {
+        "name": "solver_knob_size",
+        "type": "bool"
+      }
+    ]
+  },
+  "AccountDef": {
+    "fields": [
+      {
+        "name": "name",
+        "type": "str"
+      },
+      {
+        "name": "account_category",
+        "type": "str"
+      },
+      {
+        "name": "starting_amount",
+        "type": "float"
+      },
+      {
+        "name": "starting_pct",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "starting_basis",
+        "type": "str"
+      },
+      {
+        "name": "minimum_amount",
+        "type": "float"
+      },
+      {
+        "name": "minimum_pct",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "minimum_basis",
+        "type": "str"
+      },
+      {
+        "name": "minimum_schedule",
+        "type": "Optional[list[AccountMinimumScheduleEntry]]"
+      }
+    ]
+  },
+  "FeeDef": {
+    "fields": [
+      {
+        "name": "name",
+        "type": "str"
+      },
+      {
+        "name": "basis_type",
+        "type": "str"
+      },
+      {
+        "name": "amount",
+        "type": "float"
+      },
+      {
+        "name": "amount_expr",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "rate",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "rate_expr",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "minimum",
+        "type": "float"
+      },
+      {
+        "name": "frequency",
+        "type": "str"
+      },
+      {
+        "name": "cumulative",
+        "type": "bool"
+      }
+    ]
+  },
+  "TriggerNode": {
+    "fields": [
+      {
+        "name": "name",
+        "type": "str"
+      },
+      {
+        "name": "metric_type",
+        "type": "str"
+      },
+      {
+        "name": "description",
+        "type": "str"
+      },
+      {
+        "name": "threshold_schedule",
+        "type": "Optional[list[float]]"
+      },
+      {
+        "name": "threshold_value",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "calculation_ref",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "comparison_ref",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "cure_periods",
+        "type": "Optional[int]"
+      },
+      {
+        "name": "window_periods",
+        "type": "Optional[int]"
+      },
+      {
+        "name": "comparison",
+        "type": "str"
+      }
+    ]
+  },
+  "CalculationNode": {
+    "fields": [
+      {
+        "name": "name",
+        "type": "str"
+      },
+      {
+        "name": "expression",
+        "type": "str"
+      },
+      {
+        "name": "description",
+        "type": "str"
+      }
+    ]
+  },
+  "RuleNode": {
+    "fields": [
+      {
+        "name": "rule_id",
+        "type": "str"
+      },
+      {
+        "name": "rule_type",
+        "type": "str"
+      },
+      {
+        "name": "order",
+        "type": "int"
+      },
+      {
+        "name": "group_id",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "from_sources",
+        "type": "list[str]"
+      },
+      {
+        "name": "to_targets",
+        "type": "list[str]"
+      },
+      {
+        "name": "reserve_account",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "payment_style",
+        "type": "str"
+      },
+      {
+        "name": "max_amount_expr",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "max_amount_fixed",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "target_weights",
+        "type": "Optional[list[float]]"
+      },
+      {
+        "name": "condition_trigger",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "condition_invert",
+        "type": "bool"
+      },
+      {
+        "name": "condition_expr",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "allow_negative_source",
+        "type": "bool"
+      },
+      {
+        "name": "coverage_mode",
+        "type": "str"
+      },
+      {
+        "name": "cap_mode",
+        "type": "Optional[str]"
+      },
+      {
+        "name": "ignore_schedule_cap",
+        "type": "bool"
+      },
+      {
+        "name": "description",
+        "type": "str"
+      }
+    ]
+  },
+  "CollateralGroupDef": {
+    "fields": [
+      {
+        "name": "group_id",
+        "type": "str"
+      },
+      {
+        "name": "label",
+        "type": "str"
+      },
+      {
+        "name": "description",
+        "type": "str"
+      }
+    ]
+  },
+  "RateScheduleEntry": {
+    "fields": [
+      {
+        "name": "from_period",
+        "type": "int"
+      },
+      {
+        "name": "rate",
+        "type": "float"
+      }
+    ]
+  },
+  "TrancheRelation": {
+    "fields": [
+      {
+        "name": "relation_type",
+        "type": "str"
+      },
+      {
+        "name": "targets",
+        "type": "list[str]"
+      },
+      {
+        "name": "weights",
+        "type": "Optional[list[float]]"
+      },
+      {
+        "name": "leverage",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "cap",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "floor",
+        "type": "Optional[float]"
+      },
+      {
+        "name": "description",
+        "type": "str"
+      }
+    ]
+  },
+  "AccountMinimumScheduleEntry": {
+    "fields": [
+      {
+        "name": "period",
+        "type": "int"
+      },
+      {
+        "name": "minimum_balance",
+        "type": "float"
+      }
+    ]
+  }
 }

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -14,14 +14,23 @@ type CompileModule = {
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(THIS_DIR, "../../../../../../..");
+const FIXTURES_ROOT = resolve(REPO_ROOT, "tests", "fixtures");
 
-const FIXTURES_UNDER_TEST = [
+const REQUIRED_FIXTURES = [
   "fnr_2006_018",
   "ginniemae_2025_203",
   "verus_2024_9",
   "cc_series_test",
   "ford_2024_c",
 ] as const;
+
+function discoverFixtures(): string[] {
+  const entries = readdirSync(FIXTURES_ROOT, { withFileTypes: true });
+  return entries
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .filter((name) => existsSync(resolve(FIXTURES_ROOT, name, "deal.json")));
+}
 
 async function loadCompileModule(): Promise<CompileModule> {
   const mod = (await import("./compile")) as Partial<CompileModule>;
@@ -30,17 +39,11 @@ async function loadCompileModule(): Promise<CompileModule> {
 }
 
 function fixtureDirectory(name: string): string {
-  return resolve(REPO_ROOT, "tests", "fixtures", name);
+  return resolve(FIXTURES_ROOT, name);
 }
 
 function fixturePath(name: string, fileName: string): string {
   return resolve(fixtureDirectory(name), fileName);
-}
-
-function shouldIncludeFixture(name: string): boolean {
-  const hasBuilder = existsSync(fixturePath(name, "deal_definition.py"));
-  const hasDealJson = existsSync(fixturePath(name, "deal.json"));
-  return hasBuilder || hasDealJson;
 }
 
 function loadThroughStore(dealPayload: DealState): DealState {
@@ -59,9 +62,20 @@ function loadThroughStore(dealPayload: DealState): DealState {
 }
 
 describe("sds-3 canonical roundtrip", () => {
+  test("test_required_fixtures_are_discoverable", () => {
+    const discovered = discoverFixtures();
+    for (const required of REQUIRED_FIXTURES) {
+      expect(
+        discovered,
+        `Required fixture "${required}" not found under tests/fixtures/. ` +
+          `Discovered: [${discovered.join(", ")}]`,
+      ).toContain(required);
+    }
+  });
+
   test("test_canonical_post_migration_round_trip_byte_identity_for_every_fixture", async () => {
     const { compileToIR } = await loadCompileModule();
-    const fixtureNames = FIXTURES_UNDER_TEST.filter(shouldIncludeFixture);
+    const fixtureNames = discoverFixtures();
     expect(fixtureNames.length).toBeGreaterThan(0);
 
     for (const fixtureName of fixtureNames) {
@@ -82,7 +96,7 @@ describe("sds-3 canonical roundtrip", () => {
 
   test("test_second_compile_is_byte_identical_idempotency", async () => {
     const { compileToIR } = await loadCompileModule();
-    const fixtureNames = FIXTURES_UNDER_TEST.filter(shouldIncludeFixture);
+    const fixtureNames = discoverFixtures();
     expect(fixtureNames.length).toBeGreaterThan(0);
 
     for (const fixtureName of fixtureNames) {

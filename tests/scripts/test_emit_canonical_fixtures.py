@@ -160,3 +160,16 @@ def test_fixture_count_parity_guard_fails_when_deal_json_added_without_canonical
 
     with pytest.raises((AssertionError, RuntimeError, ValueError)):
         assert_fixture_count_parity(fixtures_root=fixtures_root)
+
+
+def test_fixture_count_parity_guard_fails_when_canonical_exists_without_deal_json(tmp_path: Path):
+    module = _load_module()
+    assert_fixture_count_parity = _require_callable(module, "assert_fixture_count_parity")
+
+    fixtures_root = tmp_path / "fixtures"
+    orphan_dir = fixtures_root / "orphan_fixture"
+    orphan_dir.mkdir(parents=True, exist_ok=True)
+    (orphan_dir / "deal.canonical.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises((AssertionError, RuntimeError, ValueError)):
+        assert_fixture_count_parity(fixtures_root=fixtures_root)

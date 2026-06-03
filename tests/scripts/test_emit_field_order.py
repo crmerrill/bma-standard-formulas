@@ -73,11 +73,23 @@ def test_emitter_walks_all_nested_models_and_records_declaration_order():
     )
 
     for model_name, expected in expected_orders.items():
-        assert payload[model_name] == expected, (
+        model_entry = payload[model_name]
+        assert "fields" in model_entry, (
+            f"{model_name} entry missing 'fields' key"
+        )
+        actual_names = [f["name"] for f in model_entry["fields"]]
+        assert actual_names == expected, (
             f"{model_name} field order drifted.\n"
             f"expected={expected}\n"
-            f"actual={payload[model_name]}"
+            f"actual={actual_names}"
         )
+        for field_entry in model_entry["fields"]:
+            assert "type" in field_entry, (
+                f"{model_name}.{field_entry['name']} missing 'type' key"
+            )
+            assert isinstance(field_entry["type"], str) and len(field_entry["type"]) > 0, (
+                f"{model_name}.{field_entry['name']} type must be a non-empty string"
+            )
 
 
 def test_check_mode_fails_on_drift():
@@ -88,12 +100,13 @@ def test_check_mode_fails_on_drift():
 
     original_bytes = FIELD_ORDER_PATH.read_bytes()
     payload = json.loads(original_bytes.decode("utf-8"))
-    deal_fields = list(payload.get("DealDefinition", []))
+    deal_entry = payload.get("DealDefinition", {})
+    deal_fields = deal_entry.get("fields", [])
     assert len(deal_fields) >= 2, "DealDefinition must contain at least two fields."
 
     # Inject deterministic drift by swapping the first two fields.
     deal_fields[0], deal_fields[1] = deal_fields[1], deal_fields[0]
-    payload["DealDefinition"] = deal_fields
+    payload["DealDefinition"]["fields"] = deal_fields
     FIELD_ORDER_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     try:

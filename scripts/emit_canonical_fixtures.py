@@ -115,14 +115,22 @@ def emit_canonical_fixtures(
 
 
 def assert_fixture_count_parity(fixtures_root: Path = FIXTURES_ROOT) -> None:
-    """Assert every deal.json has a matching deal.canonical.json."""
+    """Assert every deal.json has a matching deal.canonical.json and vice versa."""
     deal_dirs = {p.parent.name for p in fixtures_root.glob("*/deal.json")}
     canonical_dirs = {p.parent.name for p in fixtures_root.glob("*/deal.canonical.json")}
-    missing = deal_dirs - canonical_dirs
-    if missing:
-        raise AssertionError(
-            f"Fixtures with deal.json but missing deal.canonical.json: {sorted(missing)}"
+    missing_canonical = deal_dirs - canonical_dirs
+    orphan_canonical = canonical_dirs - deal_dirs
+    errors: list[str] = []
+    if missing_canonical:
+        errors.append(
+            f"Fixtures with deal.json but missing deal.canonical.json: {sorted(missing_canonical)}"
         )
+    if orphan_canonical:
+        errors.append(
+            f"Fixtures with deal.canonical.json but missing deal.json (orphans): {sorted(orphan_canonical)}"
+        )
+    if errors:
+        raise AssertionError("\n".join(errors))
 
 
 def main() -> int:
@@ -130,11 +138,12 @@ def main() -> int:
     try:
         emit_canonical_fixtures(check=check)
         if check:
+            assert_fixture_count_parity()
             print("OK: canonical fixtures are up to date.")
         else:
             print("Canonical fixtures emitted successfully.")
         return 0
-    except RuntimeError as exc:
+    except (RuntimeError, AssertionError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 

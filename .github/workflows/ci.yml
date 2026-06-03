@@ -36,5 +36,34 @@ jobs:
         if: matrix.extras == 'git'
         run: pip install -e ".[dev,git]"
 
+      - name: Check field_order.json drift
+        run: python scripts/emit_field_order.py --check
+
+      - name: Check canonical fixtures drift
+        run: python scripts/emit_canonical_fixtures.py --check
+
+      - name: Check vendored field_order.json parity
+        run: diff -q src/bma_standard_formulas/deals/schemas/field_order.json src/bma_cfengine_app/ui/src/features/deals/field_order.json
+
       - name: Run tests
         run: python -m pytest tests/ -v
+
+  ui-test:
+    runs-on: ubuntu-latest
+    name: ui-test (vitest)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install UI dependencies
+        working-directory: src/bma_cfengine_app/ui
+        run: npm install
+
+      - name: Run Vitest
+        working-directory: src/bma_cfengine_app/ui
+        run: npx vitest run

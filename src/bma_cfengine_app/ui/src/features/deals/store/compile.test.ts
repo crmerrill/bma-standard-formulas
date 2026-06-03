@@ -126,7 +126,15 @@ function makeWorkingTree(overrides: Record<string, unknown> = {}): DealState {
 
 function parseFieldOrderManifest(): Record<string, string[]> {
   expect(existsSync(FIELD_ORDER_JSON_PATH)).toBe(true);
-  return JSON.parse(readFileSync(FIELD_ORDER_JSON_PATH, "utf-8")) as Record<string, string[]>;
+  const raw = JSON.parse(readFileSync(FIELD_ORDER_JSON_PATH, "utf-8")) as Record<
+    string,
+    { fields: Array<{ name: string; type: string }> }
+  >;
+  const result: Record<string, string[]> = {};
+  for (const [model, entry] of Object.entries(raw)) {
+    result[model] = entry.fields.map((f) => f.name);
+  }
+  return result;
 }
 
 function collectFragmentedTargetRuns(rules: RuleNodeIR[]): string[][] {
@@ -202,7 +210,13 @@ describe("sds-3 compile canonical serialization", () => {
     vi.resetModules();
     vi.doMock("../field_order.json", () => ({
       default: {
-        DealDefinition: DEAL_DEFINITION_TOP_LEVEL_FIELDS,
+        DealDefinition: {
+          fields: DEAL_DEFINITION_TOP_LEVEL_FIELDS.map((name) => ({
+            name,
+            type: name === "bonds" ? "list[BondDef]" :
+              name === "waterfall_rules" ? "list[RuleNode]" : "str",
+          })),
+        },
       },
     }));
 
@@ -275,5 +289,16 @@ describe("sds-3 compile canonical serialization", () => {
     const parsed = JSON.parse(compiled) as { waterfall_rules: RuleNodeIR[] };
     const compiledRuns = collectFragmentedTargetRuns(parsed.waterfall_rules ?? []);
     expect(compiledRuns).toEqual(sourceRuns);
+  });
+
+  test("test_compile_rejects_field_not_in_manifest", async () => {
+    const { compileToIR } = await loadCompileModule();
+    const workingTree = makeWorkingTree();
+    const tainted = workingTree as unknown as Record<string, unknown>;
+    tainted["__unknown_extra_field__"] = "should not be here";
+
+    expect(() => compileToIR(tainted as unknown as DealState)).toThrow(
+      /manifest.*stale|not present in manifest/i,
+    );
   });
 });

@@ -2,7 +2,7 @@
 
 Introspects DealDefinition and every nested BaseModel reachable via
 model_fields annotations, then writes the declaration-order field list
-for each model to a JSON file.
+with per-field type metadata for each model to a JSON file.
 
 Usage:
     python scripts/emit_field_order.py           # write mode
@@ -13,10 +13,12 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import types
 from pathlib import Path
-from typing import Any, Union, get_args, get_origin
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel
+from pydantic.fields import FieldInfo
 
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
 
@@ -56,9 +58,82 @@ def _extract_basemodel_types(annotation: Any) -> list[type[BaseModel]]:
     return results
 
 
-def walk_model_graph(root: type[BaseModel]) -> dict[str, list[str]]:
-    """Walk the model graph starting from root, collecting field orders."""
-    result: dict[str, list[str]] = {}
+def _type_string(annotation: Any) -> str:
+    """Convert a type annotation into a compact string discriminator.
+
+    Supported output forms: str, int, float, bool, date, <ModelName>,
+    list[X], Optional[X], dict[K, V], Union[X, Y, ...], Literal[...], Any.
+    """
+    if annotation is type(None):
+        return "None"
+
+    if isinstance(annotation, type):
+        if issubclass(annotation, bool):
+            return "bool"
+        if issubclass(annotation, int):
+            return "int"
+        if issubclass(annotation, float):
+            return "float"
+        if issubclass(annotation, str):
+            return "str"
+        if issubclass(annotation, BaseModel):
+            return annotation.__name__
+        return annotation.__name__
+
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    if origin is Annotated:
+        if args:
+            return _type_string(args[0])
+        return "Any"
+
+    if origin is Literal:
+        return f"Literal[{', '.join(repr(a) for a in args)}]"
+
+    if origin is Union or origin is types.UnionType:
+        non_none = [a for a in args if a is not type(None)]
+        if len(non_none) == 1 and len(args) == 2:
+            return f"Optional[{_type_string(non_none[0])}]"
+        return f"Union[{', '.join(_type_string(a) for a in args)}]"
+
+    if origin is list:
+        if args:
+            return f"list[{_type_string(args[0])}]"
+        return "list"
+
+    if origin is dict:
+        if args and len(args) == 2:
+            return f"dict[{_type_string(args[0])}, {_type_string(args[1])}]"
+        return "dict"
+
+    if origin is tuple:
+        if args:
+            return f"tuple[{', '.join(_type_string(a) for a in args)}]"
+        return "tuple"
+
+    if origin is set or origin is frozenset:
+        if args:
+            return f"set[{_type_string(args[0])}]"
+        return "set"
+
+    if args:
+        return f"{origin}[{', '.join(_type_string(a) for a in args)}]"
+
+    return str(annotation)
+
+
+def _resolve_annotation(field_info: FieldInfo) -> str:
+    """Resolve a Pydantic FieldInfo's annotation to a type string."""
+    ann = field_info.annotation
+    if ann is None:
+        return "Any"
+    return _type_string(ann)
+
+
+def walk_model_graph(root: type[BaseModel]) -> dict[str, dict[str, Any]]:
+    """Walk the model graph starting from root, collecting field orders and types."""
+    result: dict[str, dict[str, Any]] = {}
     queue: list[type[BaseModel]] = [root]
     visited: set[str] = set()
 
@@ -69,7 +144,12 @@ def walk_model_graph(root: type[BaseModel]) -> dict[str, list[str]]:
             continue
         visited.add(name)
 
-        result[name] = list(model.model_fields.keys())
+        fields_list: list[dict[str, str]] = []
+        for field_name, field_info in model.model_fields.items():
+            type_str = _resolve_annotation(field_info)
+            fields_list.append({"name": field_name, "type": type_str})
+
+        result[name] = {"fields": fields_list}
 
         for field_info in model.model_fields.values():
             nested = _extract_basemodel_types(field_info.annotation)
