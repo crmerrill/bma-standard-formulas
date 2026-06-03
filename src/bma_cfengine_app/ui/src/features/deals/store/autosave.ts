@@ -100,31 +100,26 @@ export function subscribeAutosave(store: Store): () => void {
     restoreFromSessionStorage(store, initState.deal_id, sessionId);
   }
 
-  // Major #1: capture prev tracking values AFTER restores so the restored
-  // working_tree doesn't look like a typed dispatch to the subscription.
+  // Major #1: track dispatch_revision (not working_tree reference) so that
+  // reloadFromHead() — which also mutates working_tree — does NOT falsely
+  // trigger autosave.  dispatch_revision is incremented ONLY by applyAction()
+  // when the active session's working_tree changed.
   const postRestoreState = store.getState();
-  let prevActiveSessionId: string = postRestoreState.activeSessionId;
-  let prevWorkingTree: unknown =
-    postRestoreState.sessions[prevActiveSessionId]?.working_tree;
+  let prevDispatchRevision: number = postRestoreState.dispatch_revision;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   const unsubscribe = store.subscribe((state: DealStoreState) => {
+    // Major #1: only react to true typed-dispatch signals.
+    if (state.dispatch_revision === prevDispatchRevision) return;
+    prevDispatchRevision = state.dispatch_revision;
+
     const { deal_id, activeSessionId, sessions } = state;
     const session = sessions[activeSessionId];
     if (!session) return;
 
-    const currentWorkingTree = session.working_tree;
-    const workingTreeChanged = currentWorkingTree !== prevWorkingTree;
-    const sameSession = activeSessionId === prevActiveSessionId;
-
-    // Always advance prev values so future comparisons are correct.
-    prevWorkingTree = currentWorkingTree;
-    prevActiveSessionId = activeSessionId;
-
-    // Major #1: only react when the active session's working_tree mutated.
-    // setDealId, setActiveSession, setDiagnostics, etc. don't trigger.
-    if (!workingTreeChanged || !sameSession) return;
+    // Major #2: skip when deal_id is not yet set (initial state).
+    if (!deal_id) return;
 
     // Synchronously persist working tree to sessionStorage on every typed dispatch.
     const key = `bma:draft:${deal_id}:${activeSessionId}`;
@@ -138,8 +133,8 @@ export function subscribeAutosave(store: Store): () => void {
         }),
       );
     } catch (err) {
-      // Major #2: QuotaExceededError or sessionStorage unavailable — surface a
-      // warning diagnostic so the UI can inform the user that crash recovery is
+      // QuotaExceededError or sessionStorage unavailable — surface a warning
+      // diagnostic so the UI can inform the user that crash recovery is
       // degraded. Backend autosave remains the durable path.
       store.setState((s) => ({
         sessions: {
@@ -170,6 +165,8 @@ export function subscribeAutosave(store: Store): () => void {
       debounceTimer = null;
       const current = store.getState();
 
+      // Major #2: skip when deal_id is not yet set (initial state).
+      if (!current.deal_id) return;
       // Autosave suppressed when a conflict is awaiting resolution.
       if (current.conflictState) return;
       // Local drafts only persist to sessionStorage; no backend commit.
@@ -189,17 +186,41 @@ export function subscribeAutosave(store: Store): () => void {
       current
         .commitWithConflictHandling(current.deal_id, body, activeSessionId)
         .then((result) => {
-          // Critical #1: advance base_sha so the next autosave sends the correct
-          // parent_sha and does not generate a spurious self-conflict.
-          store.setState((s) => ({
-            sessions: {
-              ...s.sessions,
-              [activeSessionId]: {
-                ...s.sessions[activeSessionId],
-                base_sha: result.sha,
+          // Advance base_sha so the next autosave sends the correct parent_sha
+          // and does not generate a spurious self-conflict.
+          store.setState((s) => {
+            const updatedSession = s.sessions[activeSessionId];
+            // Major #3: re-write sessionStorage so the persisted draft always
+            // references the most recent committed base_sha.  Without this,
+            // an edit that arrived between commit-fired and commit-resolved
+            // would be stored under the OLD base_sha and discarded on crash
+            // restore as "stale parent."
+            const draftKey = `bma:draft:${s.deal_id}:${activeSessionId}`;
+            if (updatedSession && s.deal_id) {
+              try {
+                sessionStorage.setItem(
+                  draftKey,
+                  JSON.stringify({
+                    working_tree: updatedSession.working_tree,
+                    base_sha: result.sha,
+                    saved_at: new Date().toISOString(),
+                  }),
+                );
+              } catch {
+                // sessionStorage unavailable — silently ignore; diagnostic
+                // already surfaced at write time.
+              }
+            }
+            return {
+              sessions: {
+                ...s.sessions,
+                [activeSessionId]: {
+                  ...s.sessions[activeSessionId],
+                  base_sha: result.sha,
+                },
               },
-            },
-          }));
+            };
+          });
         })
         .catch(() => {
           // Conflict written to conflictState by commitWithConflictHandling.

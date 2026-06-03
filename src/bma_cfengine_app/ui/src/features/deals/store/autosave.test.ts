@@ -501,4 +501,96 @@ describe("sds-5 autosave and draft persistence", () => {
     vi.advanceTimersByTime(2000);
     expect(getCommitCalls(fetchSpy)).toHaveLength(0);
   });
+
+  test("test_autosave_does_not_fire_on_reloadFromHead", async () => {
+    await subscribeAutosaveForTests();
+
+    // Dispatch then consume the debounce so we have a clean baseline.
+    useDealStore.getState().dispatch({
+      type: "addBond",
+      payload: makeBond("RELOAD_SETUP_BOND"),
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    fetchSpy.mockClear();
+
+    // Use mockImplementation so each fetch call gets a fresh Response body
+    // (a single Response object can only be read once).
+    fetchSpy.mockImplementation((url: RequestInfo | URL) => {
+      if (String(url).includes("/show")) {
+        return Promise.resolve(jsonResponse(makeDealFixture("head-tree")));
+      }
+      return Promise.resolve(jsonResponse({ status: "ok", sha: "e".repeat(40) }));
+    });
+
+    // Simulate a conflict so reloadFromHead is callable.
+    const payload = useDealStore.getState().sessions.main.working_tree;
+    useDealStore.setState({
+      conflictState: {
+        kind: "STALE_PARENT_SHA",
+        sessionId: "main",
+        head_sha: HEAD_SHA,
+        attempted_commit: { author: "a", message: "m", payload },
+      },
+    });
+
+    // reloadFromHead mutates working_tree via set() — does NOT increment
+    // dispatch_revision — must NOT schedule or fire another autosave commit.
+    await useDealStore.getState().reloadFromHead("main");
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // Only the /show fetch from reloadFromHead itself; zero commit calls.
+    expect(getCommitCalls(fetchSpy)).toHaveLength(0);
+  });
+
+  test("test_autosave_skips_when_deal_id_is_empty", async () => {
+    // Override deal_id back to "" (initial/uninitialized state).
+    useDealStore.setState({ deal_id: "" });
+
+    await subscribeAutosaveForTests();
+
+    useDealStore.getState().dispatch({
+      type: "addBond",
+      payload: makeBond("EMPTY_DEAL_ID_BOND"),
+    });
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // No backend fetch and no sessionStorage write when deal_id is blank.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(sessionStorageMock.setItem).not.toHaveBeenCalled();
+  });
+
+  test("test_autosave_success_rewrites_sessionStorage_with_advanced_base_sha", async () => {
+    const SHA1 = "1".repeat(40);
+    fetchSpy.mockResolvedValue(jsonResponse({ status: "ok", sha: SHA1 }));
+
+    await subscribeAutosaveForTests();
+
+    useDealStore.getState().dispatch({
+      type: "addBond",
+      payload: makeBond("REWRITE_SESSION_STORAGE_ON_SUCCESS"),
+    });
+
+    // Advance past debounce; await the commit promise resolution.
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // After commit resolves with SHA1, sessionStorage must be re-written with
+    // base_sha: SHA1 so a crash-restore sees the advanced base.
+    const expectedKey = `bma:draft:${DEAL_ID}:main`;
+    const setItemCalls = sessionStorageMock.setItem.mock.calls as [string, string][];
+    const lastWrite = [...setItemCalls]
+      .reverse()
+      .find(([k]) => k === expectedKey);
+
+    expect(lastWrite).toBeDefined();
+    const persisted = JSON.parse(lastWrite![1]) as {
+      working_tree: unknown;
+      base_sha: string;
+      saved_at: string;
+    };
+    expect(persisted.base_sha).toBe(SHA1);
+    expect(persisted).toHaveProperty("working_tree");
+    expect(persisted).toHaveProperty("saved_at");
+  });
 });

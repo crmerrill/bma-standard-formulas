@@ -31,6 +31,7 @@ export type DealStoreState = {
   sessions: Record<string, DocumentSession>;
   activeSessionId: string;
   deal_id: string;
+  dispatch_revision: number;
   conflictState: ConflictState;
   applyConflict: ApplyConflict;
   setDealId: (deal_id: string) => void;
@@ -140,6 +141,7 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
   },
   activeSessionId: "main",
   deal_id: "",
+  dispatch_revision: 0,
   conflictState: null,
   applyConflict: null,
 
@@ -158,6 +160,7 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
 
       if (newWorkingTree !== oldWorkingTree) {
         session.zundo_history.handleSet(oldWorkingTree);
+        return { ...result, dispatch_revision: state.dispatch_revision + 1 };
       }
 
       return result;
