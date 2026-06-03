@@ -43,6 +43,11 @@ export type DealStoreState = {
   }) => Promise<string>;
   setActiveSession: (sessionId: string) => void;
   setDiagnostics: (sessionId: string, payloads: DiagnosticPayload[]) => void;
+  mergeDiagnostics: (
+    sessionId: string,
+    source: "worker" | "backend",
+    payloads: DiagnosticPayload[],
+  ) => void;
   deleteSession: (sessionId: string) => void;
   commitWithConflictHandling: (
     deal_id: string,
@@ -56,6 +61,19 @@ export type DealStoreState = {
   reloadFromHead: (sessionId: string) => Promise<void>;
   promoteLocalDraft: () => Promise<void>;
 };
+
+// ---------------------------------------------------------------------------
+// Internal: per-session diagnostic source-retention map (ve-4 R1 NF M5)
+//
+// Tracks which (sessionId, code, path) tuples were last written by 'worker'
+// vs 'backend' so subsequent worker merges cannot overwrite a backend entry.
+// Module-private; not exposed on the public store state to preserve sds-2's
+// flat DocumentSession.diagnostics: DiagnosticPayload[] contract.
+// ---------------------------------------------------------------------------
+const _diagnosticSourceMap = new Map<
+  string,
+  Map<string, "worker" | "backend">
+>();
 
 function createPerSessionTemporal(
   sessionId: string,
@@ -218,6 +236,63 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
         },
       },
     })),
+
+  mergeDiagnostics: (sessionId, source, payloads) => {
+    set((state) => {
+      const session = state.sessions[sessionId];
+      if (!session) return {};
+
+      // Internal source map: per-session, keyed by `${code}:${path}`.
+      // Backend-wins persists across subsequent worker merges per ve-4 AC + R1 NF M5.
+      let sessionMap = _diagnosticSourceMap.get(sessionId);
+      if (!sessionMap) {
+        sessionMap = new Map();
+        _diagnosticSourceMap.set(sessionId, sessionMap);
+      }
+
+      const newKeysToSourceUpgrade = new Map<string, "worker" | "backend">();
+      const skipped = new Set<string>();
+      for (const p of payloads) {
+        const key = `${p.code}:${p.path}`;
+        const existingSource = sessionMap.get(key);
+        if (existingSource === "backend" && source === "worker") {
+          // Backend wins; skip this worker payload entirely.
+          skipped.add(key);
+          continue;
+        }
+        newKeysToSourceUpgrade.set(key, source);
+      }
+
+      // Build the next diagnostics array:
+      // 1. Carry forward existing diagnostics whose keys are NOT being upserted.
+      // 2. Append the (filtered) new payloads.
+      const upsertedKeys = newKeysToSourceUpgrade;
+      const carriedForward: DiagnosticPayload[] = [];
+      for (const e of session.diagnostics) {
+        const key = `${e.code}:${e.path}`;
+        if (!upsertedKeys.has(key)) {
+          carriedForward.push(e);
+        }
+      }
+      const appended: DiagnosticPayload[] = [];
+      for (const p of payloads) {
+        const key = `${p.code}:${p.path}`;
+        if (skipped.has(key)) continue;
+        appended.push(p);
+        sessionMap.set(key, source);
+      }
+
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            ...session,
+            diagnostics: [...carriedForward, ...appended],
+          },
+        },
+      };
+    });
+  },
 
   deleteSession: (sessionId) => {
     if (sessionId === "main") {
