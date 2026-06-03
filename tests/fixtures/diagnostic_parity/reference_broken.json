@@ -1,0 +1,31 @@
+{
+  "name": "reference_broken",
+  "description": "A deal with a waterfall rule referencing non-existent bond/account names in from_sources and to_targets, triggering REFERENCE_BROKEN.",
+  "deal": {
+    "schema_version": "2.0.0",
+    "deal_name": "Broken Reference Deal",
+    "bonds": [
+      { "name": "Tranche_A", "coupon": 5.0, "coupon_type": "FIXED" }
+    ],
+    "waterfall_rules": [
+      {
+        "rule_id": "r1",
+        "rule_type": "PAY_INTEREST",
+        "order": 0,
+        "from_sources": ["NONEXISTENT_SOURCE"],
+        "to_targets": ["Tranche_A"]
+      },
+      {
+        "rule_id": "r2",
+        "rule_type": "PAY_PRINCIPAL",
+        "order": 1,
+        "from_sources": ["CASH"],
+        "to_targets": ["GHOST_BOND"]
+      }
+    ]
+  },
+  "expected_diagnostics": [
+    { "code": "REFERENCE_BROKEN", "path": "deal.waterfall_rules[0].from_sources" },
+    { "code": "REFERENCE_BROKEN", "path": "deal.waterfall_rules[1].to_targets" }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "name": "kind_schedule_source_inconsistent",
+  "description": "A deal with a PAC bond missing schedule_contract and schedule_model_type, and a CASH_PAY bond that incorrectly has schedule_model_type set, triggering KIND_SCHEDULE_SOURCE_INCONSISTENT.",
+  "deal": {
+    "schema_version": "2.0.0",
+    "deal_name": "Kind Schedule Inconsistent Deal",
+    "bonds": [
+      {
+        "name": "PAC_Tranche",
+        "kind": "PAC",
+        "coupon": 5.0,
+        "coupon_type": "FIXED"
+      },
+      {
+        "name": "Normal_Tranche",
+        "kind": "CASH_PAY",
+        "coupon": 4.0,
+        "coupon_type": "FIXED",
+        "schedule_model_type": "PSA"
+      }
+    ],
+    "waterfall_rules": [
+      {
+        "rule_id": "r1",
+        "rule_type": "PAY_INTEREST",
+        "order": 0,
+        "from_sources": ["CASH"],
+        "to_targets": ["PAC_Tranche"]
+      }
+    ]
+  },
+  "expected_diagnostics": [
+    { "code": "KIND_SCHEDULE_SOURCE_INCONSISTENT", "path": "deal.bonds[0].kind" },
+    { "code": "KIND_SCHEDULE_SOURCE_INCONSISTENT", "path": "deal.bonds[1].kind" }
+  ]
+}

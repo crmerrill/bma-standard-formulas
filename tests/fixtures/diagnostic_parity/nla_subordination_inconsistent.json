@@ -1,0 +1,37 @@
+{
+  "name": "nla_subordination_inconsistent",
+  "description": "A deal with a bond that has nla_starting_balance set but no required_subordination_pct, and another with required_subordination_pct but no nla_starting_balance, triggering NLA_SUBORDINATION_INCONSISTENT.",
+  "deal": {
+    "schema_version": "2.0.0",
+    "deal_name": "NLA Subordination Inconsistent Deal",
+    "bonds": [
+      {
+        "name": "Class_A",
+        "coupon": 5.0,
+        "coupon_type": "FIXED",
+        "nla_starting_balance": 100000000,
+        "required_subordination_pct": null
+      },
+      {
+        "name": "Class_B",
+        "coupon": 4.0,
+        "coupon_type": "FIXED",
+        "nla_starting_balance": null,
+        "required_subordination_pct": 15.0
+      }
+    ],
+    "waterfall_rules": [
+      {
+        "rule_id": "r1",
+        "rule_type": "PAY_INTEREST",
+        "order": 0,
+        "from_sources": ["CASH"],
+        "to_targets": ["Class_A"]
+      }
+    ]
+  },
+  "expected_diagnostics": [
+    { "code": "NLA_SUBORDINATION_INCONSISTENT", "path": "deal.bonds[0].nla_starting_balance" },
+    { "code": "NLA_SUBORDINATION_INCONSISTENT", "path": "deal.bonds[1].nla_starting_balance" }
+  ]
+}

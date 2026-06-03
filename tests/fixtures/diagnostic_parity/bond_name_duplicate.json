@@ -1,0 +1,25 @@
+{
+  "name": "bond_name_duplicate",
+  "description": "A deal with two bonds sharing the same name 'Tranche_A', triggering BOND_NAME_DUPLICATE for both the Python and TS parity validators.",
+  "deal": {
+    "schema_version": "2.0.0",
+    "deal_name": "Duplicate Name Deal",
+    "bonds": [
+      { "name": "Tranche_A", "coupon": 5.0, "coupon_type": "FIXED" },
+      { "name": "Tranche_A", "coupon": 4.0, "coupon_type": "FIXED" },
+      { "name": "Tranche_B", "coupon": 3.0, "coupon_type": "FIXED" }
+    ],
+    "waterfall_rules": [
+      {
+        "rule_id": "r1",
+        "rule_type": "PAY_INTEREST",
+        "order": 0,
+        "from_sources": ["CASH"],
+        "to_targets": ["Tranche_A"]
+      }
+    ]
+  },
+  "expected_diagnostics": [
+    { "code": "BOND_NAME_DUPLICATE", "path": "deal.bonds[1].name" }
+  ]
+}

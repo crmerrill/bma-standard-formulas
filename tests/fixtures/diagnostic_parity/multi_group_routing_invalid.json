@@ -1,0 +1,27 @@
+{
+  "name": "multi_group_routing_invalid",
+  "description": "A deal with collateral groups where a rule references a group-prefixed source that does not correspond to a declared collateral_groups entry, triggering MULTI_GROUP_ROUTING_INVALID.",
+  "deal": {
+    "schema_version": "2.0.0",
+    "deal_name": "Multi Group Routing Invalid Deal",
+    "bonds": [
+      { "name": "Tranche_A", "coupon": 5.0, "coupon_type": "FIXED", "group_id": "1" }
+    ],
+    "collateral_groups": [
+      { "group_id": "1", "label": "Group 1" }
+    ],
+    "waterfall_rules": [
+      {
+        "rule_id": "r1",
+        "rule_type": "PAY_INTEREST",
+        "order": 0,
+        "from_sources": ["GROUP_99_CASH"],
+        "to_targets": ["Tranche_A"],
+        "group_id": "1"
+      }
+    ]
+  },
+  "expected_diagnostics": [
+    { "code": "MULTI_GROUP_ROUTING_INVALID", "path": "deal.waterfall_rules[0].from_sources" }
+  ]
+}

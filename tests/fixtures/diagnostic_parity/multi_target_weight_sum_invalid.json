@@ -1,0 +1,25 @@
+{
+  "name": "multi_target_weight_sum_invalid",
+  "description": "A deal with a SPLIT_CASH rule whose target_weights do not sum to 1.0, triggering MULTI_TARGET_WEIGHT_SUM_INVALID.",
+  "deal": {
+    "schema_version": "2.0.0",
+    "deal_name": "Bad Weight Sum Deal",
+    "bonds": [
+      { "name": "Tranche_A", "coupon": 5.0, "coupon_type": "FIXED" },
+      { "name": "Tranche_B", "coupon": 4.0, "coupon_type": "FIXED" }
+    ],
+    "waterfall_rules": [
+      {
+        "rule_id": "r1",
+        "rule_type": "SPLIT_CASH",
+        "order": 0,
+        "from_sources": ["CASH"],
+        "to_targets": ["Tranche_A", "Tranche_B"],
+        "target_weights": [0.3, 0.4]
+      }
+    ]
+  },
+  "expected_diagnostics": [
+    { "code": "MULTI_TARGET_WEIGHT_SUM_INVALID", "path": "deal.waterfall_rules[0].target_weights" }
+  ]
+}
