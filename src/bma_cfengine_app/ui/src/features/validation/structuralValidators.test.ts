@@ -5,9 +5,12 @@
  * asserts the output matches the expected (code, path) tuples.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
-import { clearRegistryForTesting, iterDiagnosticValidators } from "./diagnosticRegistry";
+import { describe, it, expect } from "vitest";
+import { iterDiagnosticValidators } from "./diagnosticRegistry";
 import type { DiagnosticPayload } from "../deals/store/diagnostics-types";
+
+// Import validators to trigger registration (runs once at module load).
+import "./structuralValidators";
 
 import fs from "node:fs";
 import path from "node:path";
@@ -33,18 +36,6 @@ function runAllValidators(deal: unknown): DiagnosticPayload[] {
   }
   return results;
 }
-
-beforeEach(() => {
-  clearRegistryForTesting();
-  // Re-import to re-register validators
-  // Dynamic import to ensure fresh registration
-});
-
-// We need to import the validators module to register them.
-// This must happen after clearRegistryForTesting in a way that triggers re-registration.
-// Since ES modules cache, we import once at the top and rely on the module executing
-// registerDiagnosticValidator on initial load.
-import "./structuralValidators";
 
 describe("ve-2: worker validators catch specific errors", () => {
   it("BOND_NAME_DUPLICATE: detects duplicate bond names", () => {
