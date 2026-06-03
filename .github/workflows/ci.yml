@@ -45,6 +45,9 @@ jobs:
       - name: Check vendored field_order.json parity
         run: diff -q src/bma_standard_formulas/deals/schemas/field_order.json src/bma_cfengine_app/ui/src/features/deals/field_order.json
 
+      - name: Diagnostic catalog parity check
+        run: python -m bma_standard_formulas.diagnostics.check
+
       - name: Run tests
         run: python -m pytest tests/ -v
 
