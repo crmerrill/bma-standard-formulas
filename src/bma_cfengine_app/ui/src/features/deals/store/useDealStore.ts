@@ -10,6 +10,7 @@ import type {
   TemporalState,
 } from "./session";
 import { mkBranchName } from "./session";
+import { createLifecycleActions } from "./lifecycle";
 
 export type { DealState };
 
@@ -41,6 +42,11 @@ export type DealStoreState = {
   setActiveSession: (sessionId: string) => void;
   setDiagnostics: (sessionId: string, payloads: DiagnosticPayload[]) => void;
   deleteSession: (sessionId: string) => void;
+  previewEphemeralSession: (sessionId: string) => void;
+  applyEphemeralSessionToMain: (sessionId: string) => Promise<void>;
+  discardEphemeralSession: (sessionId: string) => Promise<void>;
+  forceCommit: (sessionId: string) => Promise<void>;
+  reloadFromHead: (sessionId: string) => Promise<void>;
 };
 
 function createPerSessionTemporal(
@@ -232,4 +238,6 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
       return { sessions: rest, activeSessionId };
     });
   },
+
+  ...createLifecycleActions(set, get),
 }));
