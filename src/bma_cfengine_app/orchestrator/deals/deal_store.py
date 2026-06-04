@@ -374,36 +374,28 @@ def _load_sidecar_from_commit(
         return (StudioSidecar(), [diagnostic])
 
 
-_TRANSITIONAL_MANIFEST_KEYS: frozenset[str] = frozenset(
-    {"studio_current_version", "studio_versions", "solver_presets_library"}
-)
-
-
 def _update_manifest_on_save(deal_id: str, deal: DealDefinition) -> None:
     """Update manifest after a git-backed save.
 
-    Emits exactly the AC-1 canonical field set: deal_id, deal_name,
-    asset_class, schema_version_pin, created_at, updated_at.
-    Transitional studio fields are stripped on every write.
+    Always writes a fresh manifest containing exactly the AC-1 canonical field set:
+    deal_id, deal_name, asset_class, schema_version_pin, created_at, updated_at.
+    Any extra or transitional keys from a prior manifest are discarded.
     """
     d = deal_dir(deal_id)
     manifest_path = d / "manifest.json"
-    if manifest_path.exists():
-        manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
-    else:
-        manifest = {
-            "deal_id": deal_id,
-            "deal_name": deal.deal_name,
-            "asset_class": None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-    manifest["deal_name"] = deal.deal_name
-    manifest.setdefault("asset_class", None)
-    manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
-    manifest["schema_version_pin"] = deal.schema_version
-    for key in _TRANSITIONAL_MANIFEST_KEYS:
-        manifest.pop(key, None)
-    manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
+    prior: dict[str, Any] = (
+        json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    )
+
+    new_manifest: dict[str, Any] = {
+        "deal_id": deal_id,
+        "deal_name": deal.deal_name,
+        "asset_class": prior.get("asset_class"),
+        "schema_version_pin": deal.schema_version,
+        "created_at": prior.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    manifest_path.write_text(json.dumps(new_manifest, indent=2, default=str))
 
 
 # ---------------------------------------------------------------------------
