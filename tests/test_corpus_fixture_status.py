@@ -18,6 +18,7 @@ The canonical source of truth for every prospectus in the corpus is
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -362,15 +363,43 @@ def _extract_design_doc_sample_rows(path: Path) -> list[str]:
     return rows
 
 
-def test_inventory_covers_all_waterfall_design_references() -> None:
-    """Every row in the waterfall_ir_design.md sample-size table must
-    correspond to at least one entry in the structured inventory.
+def _extract_cell_deal_names(deal_cell: str) -> list[str]:
+    """Extract individual deal names from a table Deal-column cell.
 
-    Uses structural table parsing (full row text), not heuristic
-    issuer-family regex patterns.
+    Splits on comma-space and slash separators, then strips trailing
+    parentheticals (e.g. '(fixture)', '(HECM)', '(TLOT)').  Returns an
+    empty list when the cell itself is entirely parenthetical
+    (e.g. Freddie Mac row uses '(offering circular)').
+    """
+    parts = re.split(r",\s*|\s*/\s*", deal_cell)
+    names: list[str] = []
+    for part in parts:
+        name = re.sub(r"\s*\([^)]*\)", "", part).strip()
+        if name and not name.startswith("("):
+            names.append(name)
+    return names
+
+
+def test_inventory_covers_all_waterfall_design_references() -> None:
+    """Every deal name extracted from the waterfall_ir_design.md sample-size
+    table must correspond to at least one inventory entry, AND every inventory
+    entry that cites waterfall_ir_design.md must have its display_name present
+    somewhere in that document (table or prose).
+
+    Two-direction enforcement:
+    1. Forward  — per-cell: split multi-deal cells on comma/slash, strip
+       parentheticals, check each extracted name against inventory.
+       Catches a new deal name silently added to an existing multi-deal row.
+    2. Inverse  — inventory → doc: every inventory entry whose source_docs
+       includes waterfall_ir_design.md must have its display_name appear
+       somewhere in the file (handles prose-only mentions such as the
+       credit-card master trust section).
+       Catches deletion of an inventory entry from the design document without
+       a corresponding inventory update.
     """
     inventory = load_inventory()
     display_names = {e.display_name for e in inventory}
+    waterfall_text = WATERFALL_DESIGN_PATH.read_text(encoding="utf-8")
 
     rows = _extract_design_doc_sample_rows(WATERFALL_DESIGN_PATH)
     assert rows, (
@@ -378,15 +407,46 @@ def test_inventory_covers_all_waterfall_design_references() -> None:
         "table format may have changed."
     )
 
+    # --- Forward direction: per-cell deal name extraction ---
     missing: list[str] = []
     for row in rows:
-        matched = any(dn in row for dn in display_names)
-        if not matched:
-            missing.append(row.strip()[:100])
+        cells = [c.strip() for c in row.split("|") if c.strip()]
+        if len(cells) < 2:
+            continue
+        deal_cell = cells[1]
+        names = _extract_cell_deal_names(deal_cell)
+        if not names:
+            # Cell is entirely parenthetical (e.g. Freddie Mac offering
+            # circular row); fall back to full-row display_name substring
+            # check so the row is still validated.
+            if not any(dn in row for dn in display_names):
+                missing.append(row.strip()[:100])
+            continue
+        for name in names:
+            if not any(name in dn or dn in name for dn in display_names):
+                missing.append(name)
 
     assert not missing, (
-        f"These waterfall_ir_design.md sample-table rows have no inventory "
-        f"entry whose display_name appears in the row: {missing}"
+        f"These deal names extracted from waterfall_ir_design.md sample-table "
+        f"cells have no matching inventory entry: {missing}"
+    )
+
+    # --- Inverse direction: every waterfall-citing inventory entry must
+    #     appear somewhere in the document text ---
+    waterfall_citing = [
+        e
+        for e in inventory
+        if any("waterfall_ir_design" in sd for sd in e.source_docs)
+    ]
+    absent_from_doc = sorted(
+        e.display_name
+        for e in waterfall_citing
+        if e.display_name not in waterfall_text
+    )
+    assert not absent_from_doc, (
+        f"These inventory entries cite waterfall_ir_design.md but their "
+        f"display_name does not appear anywhere in that document: "
+        f"{absent_from_doc}"
     )
 
 

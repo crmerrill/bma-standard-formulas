@@ -21,7 +21,7 @@ both reusably and readably.
 | Agency MBS REMIC | Ginnie Mae 2024-115 (Multifamily) | Multifamily-specific: **trustee fee % of Principal Distribution Amount** before cascade |
 | Freddie Mac REMIC general OC | (offering circular) | **Single-Tier vs Double-Tier Series**: REMIC-inside-REMIC trust structure (mostly transparent for cashflow IR) |
 | Non-Agency RMBS (subprime) | JPMMT 2006 | Single pool, **interest waterfall + principal waterfall** sub-streams, **stepdown date**, **trigger event override**, OC + excess interest, M-1..M-10 mezz with reverse-seniority loss allocation |
-| Non-Agency RMBS (Non-QM) | Verus 2024-9 / 2026-4 | **Step-up coupon** at year 5 (time-conditional rate), **LCF (Last Cashflow) class**, mixed pay (senior pro rata, mezz/sub sequential), Class XS for excess spread |
+| Non-Agency RMBS (Non-QM) | Verus 2024-9 / Verus 2026-4 | **Step-up coupon** at year 5 (time-conditional rate), **LCF (Last Cashflow) class**, mixed pay (senior pro rata, mezz/sub sequential), Class XS for excess spread |
 | Prime Auto ABS | Ford Credit Auto Owner Trust 2024-C | Single pool, **interleaved I/P**, named priority principal amounts, target OC build, reserve replenishment, capped trustee fee with overflow |
 | Prime Auto ABS | Toyota Auto Receivables 2024-A | Same shape as Ford Credit. **Yield Supplement Overcollateralization Amount** for sub-WAC loan adjustment. Confirms prime auto = same grammar across sponsors. |
 | Auto Lease ABS | Toyota Lexus Owner Trust 2024-A (TLOT) | Lease-specific simpler waterfall (8 steps): pro-rata interest across all classes, single combined priority principal amount, "Securitization Value" valuation. Otherwise same grammar. |
