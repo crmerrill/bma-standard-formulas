@@ -490,16 +490,16 @@ _TIER_TO_STATUS_LABEL = {
 }
 
 
-def _extract_design_doc_deal_names(path: Path) -> list[str]:
+def _extract_design_doc_sample_rows(path: Path) -> list[str]:
     """Structurally parse the sample-size table in waterfall_ir_design.md.
 
-    Returns raw Deal-column cell values (one per table row).  Multi-deal
-    cells (e.g. "CAS 2024-R05, CAS 2024-R06") are returned as-is; callers
-    handle splitting.  This is structural markdown-table parsing, NOT
-    heuristic issuer-family regex.
+    Returns the full text of each data row (Asset class + Deal + Key features).
+    Callers match display_names against the full row text, which handles
+    edge cases like the Freddie Mac row where the name spans the Asset class
+    column rather than the Deal column.
     """
     text = path.read_text(encoding="utf-8")
-    deals: list[str] = []
+    rows: list[str] = []
     in_table = False
     for line in text.splitlines():
         if "| Asset class |" in line and "| Deal |" in line:
@@ -510,17 +510,15 @@ def _extract_design_doc_deal_names(path: Path) -> list[str]:
                 continue
             if not line.startswith("|"):
                 break
-            cells = [c.strip() for c in line.split("|")]
-            if len(cells) >= 3:
-                deals.append(cells[2])
-    return deals
+            rows.append(line)
+    return rows
 
 
 def test_inventory_covers_all_waterfall_design_references() -> None:
-    """Every prospectus in the waterfall_ir_design.md sample-size table
-    must have a corresponding entry in the structured inventory.
+    """Every row in the waterfall_ir_design.md sample-size table must
+    correspond to at least one entry in the structured inventory.
 
-    Uses structural table parsing (Deal column extraction), not heuristic
+    Uses structural table parsing (full row text), not heuristic
     issuer-family regex patterns.
     """
     from scripts.parse_prospectus_inventory import load_inventory
@@ -528,21 +526,21 @@ def test_inventory_covers_all_waterfall_design_references() -> None:
     inventory = load_inventory()
     display_names = {e.display_name for e in inventory}
 
-    raw_deal_cells = _extract_design_doc_deal_names(WATERFALL_DESIGN_PATH)
-    assert raw_deal_cells, (
-        "No deals extracted from waterfall_ir_design.md sample-size table — "
+    rows = _extract_design_doc_sample_rows(WATERFALL_DESIGN_PATH)
+    assert rows, (
+        "No rows extracted from waterfall_ir_design.md sample-size table — "
         "table format may have changed."
     )
 
     missing: list[str] = []
-    for cell in raw_deal_cells:
-        matched = any(dn in cell for dn in display_names)
+    for row in rows:
+        matched = any(dn in row for dn in display_names)
         if not matched:
-            missing.append(cell)
+            missing.append(row.strip()[:100])
 
     assert not missing, (
-        f"These waterfall_ir_design.md sample-table deals have no inventory "
-        f"entry whose display_name appears in the cell: {missing}"
+        f"These waterfall_ir_design.md sample-table rows have no inventory "
+        f"entry whose display_name appears in the row: {missing}"
     )
 
 
