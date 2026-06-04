@@ -39,6 +39,9 @@ class MalformedInventoryError(Exception):
     """Raised when the inventory file cannot be parsed."""
 
 
+_KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
 class ProspectusEntry(BaseModel):
     """A single row from the prospectus inventory table."""
 
@@ -49,6 +52,16 @@ class ProspectusEntry(BaseModel):
     tier: Tier
     fixture_dir: str | None
     source_docs: list[str]
+
+    @field_validator("prospectus_id", mode="before")
+    @classmethod
+    def _validate_kebab_case(cls, v: str) -> str:
+        if not _KEBAB_RE.match(v):
+            raise ValueError(
+                f"prospectus_id must be kebab-case matching "
+                f"^[a-z0-9]+(-[a-z0-9]+)*$, got {v!r}"
+            )
+        return v
 
     @field_validator("tier", mode="before")
     @classmethod
@@ -114,6 +127,7 @@ def _parse_table(text: str) -> list[ProspectusEntry]:
         )
 
     entries: list[ProspectusEntry] = []
+    seen_ids: set[str] = set()
     data_start = header_idx + 2  # skip header + separator
 
     for line_no, line in enumerate(lines[data_start:], start=data_start + 1):
@@ -148,6 +162,12 @@ def _parse_table(text: str) -> list[ProspectusEntry]:
                 f"Failed to parse inventory row at line ~{line_no}: {exc}"
             ) from exc
 
+        if entry.prospectus_id in seen_ids:
+            raise MalformedInventoryError(
+                f"Duplicate prospectus_id at line ~{line_no}: "
+                f"{entry.prospectus_id!r}"
+            )
+        seen_ids.add(entry.prospectus_id)
         entries.append(entry)
 
     if not entries:
