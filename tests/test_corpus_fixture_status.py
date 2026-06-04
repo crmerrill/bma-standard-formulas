@@ -27,6 +27,7 @@ STATUS_PATH = REPO_ROOT / "tests" / "fixtures" / "STATUS.md"
 WATERFALL_DESIGN_PATH = (
     REPO_ROOT / "docs" / "architecture" / "waterfall_ir_design.md"
 )
+INVENTORY_PATH = REPO_ROOT / "docs" / "architecture" / "prospectus_inventory.md"
 
 # Complete list of all research-only prospectuses named in
 # waterfall_ir_design.md that lack an executable fixture in tests/fixtures/.
@@ -472,4 +473,159 @@ def test_each_fixture_directory_appears_in_exactly_one_tier_row(
     assert not errors, (
         "Fixture-directory tier-row uniqueness failures:\n"
         + "\n".join(f"  {e}" for e in errors)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Inventory-driven tests (T1 — structured source-of-truth artifact)
+# ---------------------------------------------------------------------------
+# These tests reference `scripts.parse_prospectus_inventory` and the
+# inventory file at `docs/architecture/prospectus_inventory.md`.  They are
+# expected to FAIL until the inventory + parser are built (strict TDD).
+
+_TIER_TO_STATUS_LABEL = {
+    "structural": "(i) STRUCTURAL",
+    "quantitative_golden": "(ii) QUANTITATIVE GOLDEN",
+    "research_only": "(iii) RESEARCH-ONLY",
+}
+
+
+def _extract_design_doc_deal_names(path: Path) -> list[str]:
+    """Structurally parse the sample-size table in waterfall_ir_design.md.
+
+    Returns raw Deal-column cell values (one per table row).  Multi-deal
+    cells (e.g. "CAS 2024-R05, CAS 2024-R06") are returned as-is; callers
+    handle splitting.  This is structural markdown-table parsing, NOT
+    heuristic issuer-family regex.
+    """
+    text = path.read_text(encoding="utf-8")
+    deals: list[str] = []
+    in_table = False
+    for line in text.splitlines():
+        if "| Asset class |" in line and "| Deal |" in line:
+            in_table = True
+            continue
+        if in_table:
+            if line.strip().startswith("|---"):
+                continue
+            if not line.startswith("|"):
+                break
+            cells = [c.strip() for c in line.split("|")]
+            if len(cells) >= 3:
+                deals.append(cells[2])
+    return deals
+
+
+def test_inventory_covers_all_waterfall_design_references() -> None:
+    """Every prospectus in the waterfall_ir_design.md sample-size table
+    must have a corresponding entry in the structured inventory.
+
+    Uses structural table parsing (Deal column extraction), not heuristic
+    issuer-family regex patterns.
+    """
+    from scripts.parse_prospectus_inventory import load_inventory
+
+    inventory = load_inventory()
+    display_names = {e.display_name for e in inventory}
+
+    raw_deal_cells = _extract_design_doc_deal_names(WATERFALL_DESIGN_PATH)
+    assert raw_deal_cells, (
+        "No deals extracted from waterfall_ir_design.md sample-size table — "
+        "table format may have changed."
+    )
+
+    missing: list[str] = []
+    for cell in raw_deal_cells:
+        matched = any(dn in cell for dn in display_names)
+        if not matched:
+            missing.append(cell)
+
+    assert not missing, (
+        f"These waterfall_ir_design.md sample-table deals have no inventory "
+        f"entry whose display_name appears in the cell: {missing}"
+    )
+
+
+def test_inventory_covers_all_status_md_research_only_entries(
+    status_md: str,
+) -> None:
+    """Every research-only deal name in STATUS.md must have a matching
+    inventory entry with tier=research_only."""
+    from scripts.parse_prospectus_inventory import load_inventory
+
+    inventory = load_inventory()
+    research_ids = {
+        e.display_name for e in inventory if e.tier == "research_only"
+    }
+
+    for name in REQUIRED_RESEARCH_ONLY_NAMES:
+        assert name in research_ids, (
+            f"Research-only prospectus '{name}' (from STATUS.md / "
+            f"REQUIRED_RESEARCH_ONLY_NAMES) has no inventory entry with "
+            f"tier=research_only."
+        )
+
+
+def test_status_md_classifications_match_inventory(status_md: str) -> None:
+    """For each inventory entry with a non-null fixture_dir, STATUS.md must
+    classify it under the same tier label."""
+    from scripts.parse_prospectus_inventory import load_inventory
+
+    inventory = load_inventory()
+    errors: list[str] = []
+    for entry in inventory:
+        if entry.fixture_dir is None:
+            continue
+        expected_label = _TIER_TO_STATUS_LABEL.get(entry.tier)
+        if expected_label is None:
+            errors.append(
+                f"'{entry.prospectus_id}': unknown tier '{entry.tier}'"
+            )
+            continue
+        tier_rows = [
+            line
+            for line in status_md.splitlines()
+            if entry.fixture_dir in line
+            and any(label in line for label in _TIER_LABELS)
+        ]
+        if not tier_rows:
+            errors.append(
+                f"'{entry.prospectus_id}': fixture_dir='{entry.fixture_dir}' "
+                f"not found on any tier row in STATUS.md"
+            )
+            continue
+        for row in tier_rows:
+            if expected_label not in row:
+                errors.append(
+                    f"'{entry.prospectus_id}': inventory says "
+                    f"tier='{entry.tier}' but STATUS.md row classifies "
+                    f"'{entry.fixture_dir}' differently: {row[:120]!r}"
+                )
+    assert not errors, (
+        "Inventory ↔ STATUS.md tier mismatches:\n"
+        + "\n".join(f"  {e}" for e in errors)
+    )
+
+
+def test_each_fixture_directory_has_inventory_entry() -> None:
+    """Every fixture directory with deal_definition.py must have a
+    matching inventory entry (fixture_dir column)."""
+    from scripts.parse_prospectus_inventory import load_inventory
+
+    fixtures_dir = REPO_ROOT / "tests" / "fixtures"
+    fixture_dirs = sorted(
+        d.name
+        for d in fixtures_dir.iterdir()
+        if d.is_dir() and (d / "deal_definition.py").exists()
+    )
+    assert fixture_dirs, "No deal_definition.py fixtures found."
+
+    inventory = load_inventory()
+    inventory_fixture_dirs = {
+        e.fixture_dir for e in inventory if e.fixture_dir is not None
+    }
+
+    missing = [d for d in fixture_dirs if d not in inventory_fixture_dirs]
+    assert not missing, (
+        f"These fixture directories have no inventory entry: {missing}"
     )
