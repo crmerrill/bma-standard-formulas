@@ -307,7 +307,26 @@ def _load_from_git(deal_id: str, version: int | None = None) -> tuple[DealDefini
 
     sha = _resolve_version_to_sha(service, version)
     if sha is None:
-        return None
+        # Unborn-repo race guard (sdpm-3 M1): .git/ was created by a concurrent first-open
+        # caller that was preempted before commit_deal() completed.  If deal.json is still
+        # present we either wait for the in-flight migrator (lock is held) or complete the
+        # migration ourselves (lock is free).
+        if (d / "deal.json").exists():
+            with _migration_lock(d):
+                # Re-resolve after acquiring the lock — the in-flight migrator may have
+                # just committed.
+                sha = _resolve_version_to_sha(service, version)
+                if sha is None:
+                    deal_bytes = (d / "deal.json").read_bytes()
+                    service.commit_deal(
+                        deal_bytes,
+                        author="system:migration <migration@bma>",
+                        message="Migrate deal.json",
+                        parent_sha=None,
+                    )
+                    sha = _resolve_version_to_sha(service, version)
+        if sha is None:
+            return None
 
     raw = service.show(sha, "deal.json")
     payload = json.loads(raw)
