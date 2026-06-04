@@ -178,3 +178,32 @@ describe("test_duplicate_registration_throws", () => {
     expect(() => registerDiagnosticValidator(desc)).not.toThrow();
   });
 });
+
+describe("test_identical_metadata_re_registration_preserves_original_fn", () => {
+  it("re-registration with same metadata but different fn preserves the original fn", () => {
+    const fnA = (): DiagnosticPayload[] => [];
+    const fnB = (): DiagnosticPayload[] => [];
+
+    registerDiagnosticValidator({
+      code: "IDEM_TEST",
+      severity: "error",
+      pathSchema: "deal.field",
+      owner: "worker",
+      fn: fnA,
+    });
+
+    // Re-register same code/severity/pathSchema/owner but a different fn.
+    registerDiagnosticValidator({
+      code: "IDEM_TEST",
+      severity: "error",
+      pathSchema: "deal.field",
+      owner: "worker",
+      fn: fnB,
+    });
+
+    // Original fn must be preserved — this is a true no-op.
+    const found = getDiagnosticValidator("IDEM_TEST");
+    expect(found?.fn).toBe(fnA);
+    expect(found?.fn).not.toBe(fnB);
+  });
+});
