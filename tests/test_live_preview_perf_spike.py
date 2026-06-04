@@ -170,3 +170,54 @@ def test_status_md_addresses_cancellation_and_degraded_mode(
     assert "degraded" in text_lower or "stale" in text_lower or "paused" in text_lower, (
         "STATUS.md must address degraded-mode UI behavior (the spike's contract)."
     )
+
+
+def test_status_md_has_follow_on_tickets_section(status_md: str) -> None:
+    """R1 finding #3: STATUS.md must have a dedicated 'Follow-on tickets'
+    section heading (## or ###) so the unmeasured fixture-scale gaps are
+    tracked for Phase 1 closure or Phase 2 spillover.
+
+    Incidental 'follow-on' mentions in prose do NOT satisfy this requirement;
+    the section must appear as a Markdown heading.
+    """
+    import re
+
+    has_section = bool(
+        re.search(r"^#{1,4}\s+follow-on tickets", status_md, re.IGNORECASE | re.MULTILINE)
+    )
+    assert has_section, (
+        "STATUS.md must contain a dedicated '## Follow-on tickets' section heading "
+        "per R1 finding #3. Add a section that lists the three unmeasured fixture "
+        "gaps (200-rule auto ABS, multi-group RMBS, CC master trust) so they are "
+        "tracked for Phase 1 closure or Phase 2 spillover."
+    )
+
+
+def test_status_md_follow_on_items_named(status_md: str) -> None:
+    """R1 finding #3: The Follow-on tickets section must enumerate all three
+    unmeasured fixture-scale gaps explicitly:
+      - 200-rule synthetic auto ABS
+      - multi-group RMBS combined deal
+      - CC master trust with PFA/IFA
+    """
+    import re
+
+    # Extract just the text after the follow-on section heading.
+    match = re.search(
+        r"^#{1,4}\s+follow-on tickets.*",
+        status_md,
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    section_text = match.group(0).lower() if match else ""
+
+    assert "200-rule" in section_text or "200 rule" in section_text, (
+        "Follow-on tickets section must name the 200-rule auto ABS fixture gap."
+    )
+    assert "multi-group rmbs" in section_text or (
+        "multi-group" in section_text and "rmbs" in section_text
+    ), (
+        "Follow-on tickets section must name the multi-group RMBS combined deal gap."
+    )
+    assert "cc master trust" in section_text or "master trust" in section_text, (
+        "Follow-on tickets section must name the CC master trust with PFA/IFA gap."
+    )
