@@ -1,0 +1,30 @@
+{
+  "name": "invalid_group_target",
+  "description": "A deal with collateral groups where a rule's to_targets contains a group-prefixed token that does not correspond to any declared group. Should trigger REFERENCE_BROKEN on the to_targets path.",
+  "deal": {
+    "schema_version": "2.0.0",
+    "deal_name": "Invalid Group Target Deal",
+    "bonds": [
+      { "name": "Tranche_A", "coupon": 5.0, "coupon_type": "FIXED", "group_id": "1" }
+    ],
+    "accounts": [],
+    "fees": [],
+    "collateral_groups": [
+      { "group_id": "1", "label": "Group 1" }
+    ],
+    "deal_knobs": {},
+    "waterfall_rules": [
+      {
+        "rule_id": "r1",
+        "rule_type": "PAY_INTEREST",
+        "order": 0,
+        "from_sources": ["GROUP_1_CASH"],
+        "to_targets": ["GROUP_BAD_X_CASH"],
+        "group_id": "1"
+      }
+    ]
+  },
+  "expected_diagnostics": [
+    { "code": "REFERENCE_BROKEN", "path": "deal.waterfall_rules[0].to_targets" }
+  ]
+}

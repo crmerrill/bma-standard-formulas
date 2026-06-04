@@ -1,0 +1,31 @@
+{
+  "name": "cross_group_mixing",
+  "description": "A deal where a rule with group_id=1 mixes a bare collateral token (CASH) with an explicit GROUP_2_ACT_INT token for a different group. Should trigger MULTI_GROUP_ROUTING_INVALID per OA5.",
+  "deal": {
+    "schema_version": "2.0.0",
+    "deal_name": "Cross Group Mixing Deal",
+    "bonds": [
+      { "name": "Tranche_A", "coupon": 5.0, "coupon_type": "FIXED", "group_id": "1" }
+    ],
+    "accounts": [],
+    "fees": [],
+    "collateral_groups": [
+      { "group_id": "1", "label": "Group 1" },
+      { "group_id": "2", "label": "Group 2" }
+    ],
+    "deal_knobs": {},
+    "waterfall_rules": [
+      {
+        "rule_id": "r1",
+        "rule_type": "PAY_INTEREST",
+        "order": 0,
+        "from_sources": ["CASH", "GROUP_2_ACT_INT"],
+        "to_targets": ["Tranche_A"],
+        "group_id": "1"
+      }
+    ]
+  },
+  "expected_diagnostics": [
+    { "code": "MULTI_GROUP_ROUTING_INVALID", "path": "deal.waterfall_rules[0].from_sources" }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "name": "valid_split_cash_reference",
+  "description": "A deal with a SPLIT_CASH rule that declares virtual stream targets; a downstream rule references one of those split streams as from_source. Expect zero REFERENCE_BROKEN diagnostics.",
+  "deal": {
+    "schema_version": "2.0.0",
+    "deal_name": "Valid Split Cash Deal",
+    "bonds": [
+      { "name": "Tranche_A", "coupon": 5.0, "coupon_type": "FIXED" },
+      { "name": "Tranche_B", "coupon": 4.0, "coupon_type": "FIXED" }
+    ],
+    "accounts": [],
+    "fees": [],
+    "collateral_groups": [],
+    "deal_knobs": {},
+    "waterfall_rules": [
+      {
+        "rule_id": "split1",
+        "rule_type": "SPLIT_CASH",
+        "order": 0,
+        "from_sources": ["CASH"],
+        "to_targets": ["SENIOR_POOL", "JUNIOR_POOL"],
+        "target_weights": [0.6, 0.4]
+      },
+      {
+        "rule_id": "r2",
+        "rule_type": "PAY_INTEREST",
+        "order": 1,
+        "from_sources": ["SENIOR_POOL"],
+        "to_targets": ["Tranche_A"]
+      },
+      {
+        "rule_id": "r3",
+        "rule_type": "PAY_INTEREST",
+        "order": 2,
+        "from_sources": ["JUNIOR_POOL"],
+        "to_targets": ["Tranche_B"]
+      }
+    ]
+  },
+  "expected_diagnostics": []
+}

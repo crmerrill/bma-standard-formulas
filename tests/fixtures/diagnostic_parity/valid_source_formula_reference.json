@@ -1,0 +1,29 @@
+{
+  "name": "valid_source_formula_reference",
+  "description": "A deal with deal_knobs.source_formulas declaring a custom source name; a waterfall rule references that source formula. Expect zero REFERENCE_BROKEN diagnostics.",
+  "deal": {
+    "schema_version": "2.0.0",
+    "deal_name": "Valid Source Formula Deal",
+    "bonds": [
+      { "name": "Tranche_A", "coupon": 5.0, "coupon_type": "FIXED" }
+    ],
+    "accounts": [],
+    "fees": [],
+    "collateral_groups": [],
+    "deal_knobs": {
+      "source_formulas": {
+        "EXCESS_SPREAD": "CASH - Tranche_A"
+      }
+    },
+    "waterfall_rules": [
+      {
+        "rule_id": "r1",
+        "rule_type": "PAY_INTEREST",
+        "order": 0,
+        "from_sources": ["EXCESS_SPREAD"],
+        "to_targets": ["Tranche_A"]
+      }
+    ]
+  },
+  "expected_diagnostics": []
+}
