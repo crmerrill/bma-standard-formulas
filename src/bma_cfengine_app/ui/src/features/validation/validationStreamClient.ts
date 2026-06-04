@@ -68,10 +68,25 @@ export function subscribeToValidationStream(
   const es = new EventSourceCtor(url);
   let closed = false;
 
+  // Clears the active token for this session iff it still belongs to this
+  // subscription — never clobbers a newer token that may have superseded.
+  const clearActiveToken = () => {
+    if (_activeSubscriptions.get(sessionId) === subscriptionToken) {
+      _activeSubscriptions.delete(sessionId);
+    }
+  };
+
   const close = () => {
     if (closed) return;
     closed = true;
     es.close();
+  };
+
+  // Terminal close: EventSource is closed AND the active token is removed so
+  // that isStillActive() cannot pass for any late-arriving messages.
+  const terminalClose = () => {
+    close();
+    clearActiveToken();
   };
 
   const isStillActive = () =>
@@ -97,7 +112,7 @@ export function subscribeToValidationStream(
     }
 
     if (evt.event_type === "validation_complete") {
-      close();
+      terminalClose();
       return;
     }
 
@@ -110,18 +125,14 @@ export function subscribeToValidationStream(
         payload: {},
       };
       store.getState().mergeDiagnostics(sessionId, "backend", [errorDiagnostic]);
-      close();
+      terminalClose();
       return;
     }
   };
 
   return {
     unsubscribe: () => {
-      // Only clear the per-session active token if it still points at this
-      // subscription. Don't clobber a newer one that may have superseded.
-      if (_activeSubscriptions.get(sessionId) === subscriptionToken) {
-        _activeSubscriptions.delete(sessionId);
-      }
+      clearActiveToken();
       close();
     },
   };
