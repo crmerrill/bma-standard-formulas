@@ -27,4 +27,15 @@ describe("QuickFix registry", () => {
       UnknownQuickFixError
     );
   });
+
+  test("test_canonicalize_consolidate_rule_run_registered_as_dispatch_quick_fix", () => {
+    const descriptor = getQuickFix("canonicalize_consolidate_rule_run");
+    expect(descriptor.kind).toBe("dispatch");
+    expect((descriptor as { actionType: string }).actionType).toBe(
+      "canonicalizeConsolidateRuleRun"
+    );
+    expect((descriptor as { description: string }).description).toBe(
+      "Consolidate fragmented rules into a single multi-target rule."
+    );
+  });
 });

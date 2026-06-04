@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from bma_standard_formulas.diagnostics.quick_fix_registry import (
+    DispatchQuickFix,
     ManualQuickFix,
     UnknownQuickFixError,
     get_quick_fix,
@@ -29,3 +30,15 @@ def test_get_quick_fix_for_unknown_id_raises() -> None:
     """An unregistered action_id raises UnknownQuickFixError."""
     with pytest.raises(UnknownQuickFixError):
         get_quick_fix("nonexistent_action_id_xyz")
+
+
+def test_canonicalize_consolidate_rule_run_registered_as_dispatch_quick_fix() -> None:
+    """rcf-3: canonicalize_consolidate_rule_run resolves to a DispatchQuickFix."""
+    descriptor = get_quick_fix("canonicalize_consolidate_rule_run")
+    assert isinstance(descriptor, DispatchQuickFix)
+    assert descriptor.kind == "dispatch"
+    assert descriptor.action_type == "canonicalizeConsolidateRuleRun"
+    assert (
+        descriptor.description
+        == "Consolidate fragmented rules into a single multi-target rule."
+    )

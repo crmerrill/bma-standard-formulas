@@ -58,3 +58,20 @@ def test_ir_validation_error_is_cataloged() -> None:
     assert rec["message"], (
         "message template for IR_VALIDATION_ERROR must be non-empty"
     )
+
+
+def test_stale_quickfix_is_cataloged() -> None:
+    """rcf-3: STALE_QUICKFIX must be present with pinned metadata."""
+    mod = _import_parser()
+    records = mod.parse_diagnostic_catalog(CATALOG_PATH)
+    by_code = {r["code"]: r for r in records}
+
+    assert "STALE_QUICKFIX" in by_code, (
+        "STALE_QUICKFIX must be listed in docs/architecture/diagnostic_catalog.md "
+        "because canonicalizeConsolidateRuleRun invalid-range handling emits this warning."
+    )
+
+    rec = by_code["STALE_QUICKFIX"]
+    assert rec["severity"] == "warning"
+    assert rec["owner"] == "both"
+    assert rec["path_schema"] == "deal.waterfall_rules"

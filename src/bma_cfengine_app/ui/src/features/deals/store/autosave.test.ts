@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { compileToIR } from "./compile";
 import { useDealStore } from "./useDealStore";
 import type { DealStoreState } from "./useDealStore";
-import type { BondDefIR, DealDefinitionIR } from "../ir-types";
+import type { BondDefIR, DealDefinitionIR, RuleNodeIR } from "../ir-types";
 
 type DealState = DealDefinitionIR;
 type BondDef = BondDefIR;
@@ -103,6 +103,27 @@ function makeDealFixture(label: string): DealState {
   };
 }
 
+function makeCanonicalizableRule(ruleId: string, order: number, target: string): RuleNodeIR {
+  return {
+    rule_id: ruleId,
+    rule_type: "PAY_PRINCIPAL",
+    order,
+    from_sources: ["ACT_PRIN"],
+    to_targets: [target],
+    payment_style: "SEQUENTIAL",
+    max_amount_fixed: null,
+    max_amount_expr: null,
+    condition_trigger: null,
+    condition_invert: false,
+    condition_expr: null,
+    group_id: null,
+    cap_mode: null,
+    coverage_mode: "NORMAL",
+    allow_negative_source: false,
+    target_weights: null,
+  };
+}
+
 function seedMainSession(baseSha: string, tree: DealState): void {
   useDealStore.setState((state) => ({
     sessions: {
@@ -127,6 +148,17 @@ function getCommitCalls(fetchSpy: ReturnType<typeof vi.spyOn>) {
   return fetchSpy.mock.calls.filter(([url]) =>
     String(url).includes("/commit"),
   );
+}
+
+function dispatchCanonicalizeConsolidateRuleRun(start_index: number, end_index: number): void {
+  const dispatch = useDealStore.getState().dispatch as unknown as (action: {
+    type: string;
+    payload: Record<string, unknown>;
+  }) => void;
+  dispatch({
+    type: "canonicalizeConsolidateRuleRun",
+    payload: { start_index, end_index },
+  });
 }
 
 async function subscribeAutosaveForTests(): Promise<void> {
@@ -592,5 +624,110 @@ describe("sds-5 autosave and draft persistence", () => {
     expect(persisted.base_sha).toBe(SHA1);
     expect(persisted).toHaveProperty("working_tree");
     expect(persisted).toHaveProperty("saved_at");
+  });
+
+  test("test_autosave_consumes_pending_commit_message_and_clears_slot", async () => {
+    await subscribeAutosaveForTests();
+
+    useDealStore.setState((state) => {
+      const mainWithPending = {
+        ...state.sessions.main,
+        pending_commit_message: "Canonicalize consolidate rule run [2..3]",
+      } as typeof state.sessions.main;
+      return {
+        sessions: {
+          ...state.sessions,
+          main: mainWithPending,
+        },
+      };
+    });
+
+    useDealStore.getState().dispatch({
+      type: "addBond",
+      payload: makeBond("PENDING_MESSAGE_CONSUMED"),
+    });
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const commitCalls = getCommitCalls(fetchSpy);
+    expect(commitCalls).toHaveLength(1);
+    const commitBody = JSON.parse(String((commitCalls[0][1] as RequestInit).body)) as {
+      message: string;
+    };
+    expect(commitBody.message).toBe("Canonicalize consolidate rule run [2..3]");
+
+    const mainSession = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(mainSession.pending_commit_message).toBeNull();
+  });
+
+  test("test_autosave_falls_back_to_default_message_when_pending_is_null", async () => {
+    await subscribeAutosaveForTests();
+
+    const before = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(before.pending_commit_message).toBeNull();
+
+    useDealStore.getState().dispatch({
+      type: "addBond",
+      payload: makeBond("DEFAULT_AUTOSAVE_MESSAGE"),
+    });
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const commitCalls = getCommitCalls(fetchSpy);
+    expect(commitCalls).toHaveLength(1);
+    const commitBody = JSON.parse(String((commitCalls[0][1] as RequestInit).body)) as {
+      message: string;
+    };
+    expect(commitBody.message).toBe("autosave");
+  });
+
+  test("test_autosave_last_write_wins_when_two_actions_within_debounce_window", async () => {
+    await subscribeAutosaveForTests();
+
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("run0", 0, "A1"),
+              makeCanonicalizableRule("run1", 1, "A2"),
+              makeCanonicalizableRule("run2", 2, "A3"),
+              makeCanonicalizableRule("run3", 3, "A4"),
+            ],
+          },
+        },
+      },
+    }));
+
+    dispatchCanonicalizeConsolidateRuleRun(2, 3);
+    vi.advanceTimersByTime(300);
+    dispatchCanonicalizeConsolidateRuleRun(0, 1);
+
+    const preCommitSession = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(preCommitSession.pending_commit_message).toBe("Canonicalize consolidate rule run [0..1]");
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const commitCalls = getCommitCalls(fetchSpy);
+    expect(commitCalls).toHaveLength(1);
+    const commitBody = JSON.parse(String((commitCalls[0][1] as RequestInit).body)) as {
+      message: string;
+    };
+    expect(commitBody.message).toBe("Canonicalize consolidate rule run [0..1]");
+    expect(commitBody.message).not.toBe("Canonicalize consolidate rule run [2..3]");
+
+    const postCommitSession = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(postCommitSession.pending_commit_message).toBeNull();
   });
 });

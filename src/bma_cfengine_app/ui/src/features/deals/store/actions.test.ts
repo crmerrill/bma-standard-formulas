@@ -51,6 +51,33 @@ function makeRule(ruleId: string, priority = 1): RuleWithPriority {
   };
 }
 
+function makeCanonicalizableRule(
+  ruleId: string,
+  order: number,
+  target: string,
+  overrides: Partial<RuleNodeIR> = {},
+): RuleNodeIR {
+  return {
+    rule_id: ruleId,
+    rule_type: "PAY_PRINCIPAL",
+    order,
+    from_sources: ["ACT_PRIN"],
+    to_targets: [target],
+    payment_style: "SEQUENTIAL",
+    max_amount_fixed: null,
+    max_amount_expr: null,
+    condition_trigger: null,
+    condition_invert: false,
+    condition_expr: null,
+    group_id: null,
+    cap_mode: null,
+    coverage_mode: "NORMAL",
+    allow_negative_source: false,
+    target_weights: null,
+    ...overrides,
+  };
+}
+
 function makeDealFixture(): DealState {
   return {
     schema_version: "2.0.0",
@@ -63,6 +90,17 @@ function makeDealFixture(): DealState {
     collateral_groups: [],
     deal_knobs: {},
   };
+}
+
+function dispatchCanonicalizeConsolidateRuleRun(start_index: number, end_index: number): void {
+  const dispatch = useDealStore.getState().dispatch as unknown as (action: {
+    type: string;
+    payload: Record<string, unknown>;
+  }) => void;
+  dispatch({
+    type: "canonicalizeConsolidateRuleRun",
+    payload: { start_index, end_index },
+  });
 }
 
 describe("deal actions (sds-1 scaffolding)", () => {
@@ -203,5 +241,218 @@ describe("deal actions (sds-1 scaffolding)", () => {
         .sessions[siblingId]
         .working_tree.bonds.find((b) => b.name === "SIBLING_NEW"),
     ).toBeDefined();
+  });
+
+  test("test_canonicalize_consolidate_rule_run_replaces_rules_on_active_session", () => {
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("r1", 0, "A1"),
+              makeCanonicalizableRule("r2", 1, "A2"),
+              makeCanonicalizableRule("r3", 2, "A3"),
+            ],
+          },
+        },
+      },
+    }));
+
+    dispatchCanonicalizeConsolidateRuleRun(0, 2);
+
+    const rules = useDealStore.getState().sessions.main.working_tree.waterfall_rules;
+    expect(rules).toHaveLength(1);
+    expect(rules[0]?.to_targets).toEqual(["A1", "A2", "A3"]);
+    expect(rules[0]?.from_sources).toEqual(["ACT_PRIN"]);
+    expect(rules[0]?.payment_style).toBe("SEQUENTIAL");
+  });
+
+  test("test_canonicalize_consolidate_rule_run_does_not_touch_other_sessions", () => {
+    const siblingId = "ephemeral_canonicalize_sibling";
+    const siblingTree = {
+      ...makeDealFixture(),
+      waterfall_rules: [
+        makeCanonicalizableRule("s1", 0, "S1"),
+        makeCanonicalizableRule("s2", 1, "S2"),
+      ],
+    };
+
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("m1", 0, "M1"),
+              makeCanonicalizableRule("m2", 1, "M2"),
+            ],
+          },
+        },
+        [siblingId]: {
+          session_id: siblingId,
+          branch_name: mkBranchName("ai/turn-canonicalize-isolation"),
+          base_sha: "",
+          working_tree: siblingTree,
+          validation_target: "self",
+          commit_target: mkBranchName("ai/turn-canonicalize-isolation"),
+          zundo_history: {
+            getState: () => ({ pastStates: [], futureStates: [] }),
+            pause: () => {},
+            resume: () => {},
+            handleSet: () => {},
+            undo: () => {},
+            redo: () => {},
+          } satisfies TemporalState<DealState>,
+          ui_role: "preview",
+          diagnostics: [],
+        },
+      },
+      activeSessionId: "main",
+    }));
+
+    const siblingBefore = useDealStore.getState().sessions[siblingId].working_tree;
+    dispatchCanonicalizeConsolidateRuleRun(0, 1);
+
+    const stateAfter = useDealStore.getState();
+    expect(stateAfter.sessions[siblingId].working_tree).toBe(siblingBefore);
+    expect(stateAfter.sessions.main.working_tree.waterfall_rules).toHaveLength(1);
+  });
+
+  test("test_canonicalize_consolidate_rule_run_increments_dispatch_revision", () => {
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("rev1", 0, "A1"),
+              makeCanonicalizableRule("rev2", 1, "A2"),
+            ],
+          },
+        },
+      },
+    }));
+    const beforeRevision = useDealStore.getState().dispatch_revision;
+
+    dispatchCanonicalizeConsolidateRuleRun(0, 1);
+
+    expect(useDealStore.getState().dispatch_revision).toBe(beforeRevision + 1);
+  });
+
+  test("test_canonicalize_consolidate_rule_run_sets_pending_commit_message_on_active_session", () => {
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("msg0", 0, "A0"),
+              makeCanonicalizableRule("msg1", 1, "A1"),
+              makeCanonicalizableRule("msg2", 2, "A2"),
+            ],
+          },
+        },
+      },
+    }));
+
+    dispatchCanonicalizeConsolidateRuleRun(1, 2);
+
+    const activeSession = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(activeSession.pending_commit_message).toBe(
+      "Canonicalize consolidate rule run [1..2]",
+    );
+  });
+
+  test("test_canonicalize_consolidate_rule_run_preserves_first_rule_id", () => {
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("rule_first", 0, "A1"),
+              makeCanonicalizableRule("rule_second", 1, "A2"),
+            ],
+          },
+        },
+      },
+    }));
+
+    dispatchCanonicalizeConsolidateRuleRun(0, 1);
+
+    const rules = useDealStore.getState().sessions.main.working_tree.waterfall_rules;
+    expect(rules).toHaveLength(1);
+    expect(rules[0]?.rule_id).toBe("rule_first");
+  });
+
+  test("test_canonicalize_consolidate_rule_run_invalid_range_is_noop_with_stale_diagnostic", () => {
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("invalid0", 0, "A1"),
+              makeCanonicalizableRule("invalid1", 1, "A2"),
+            ],
+          },
+        },
+      },
+    }));
+    const beforeTree = useDealStore.getState().sessions.main.working_tree;
+
+    dispatchCanonicalizeConsolidateRuleRun(1, 1);
+
+    const afterState = useDealStore.getState();
+    expect(afterState.sessions.main.working_tree).toBe(beforeTree);
+    expect(
+      afterState.sessions.main.diagnostics.some(
+        (d) => d.code === "STALE_QUICKFIX" && d.severity === "warning",
+      ),
+    ).toBe(true);
+  });
+
+  test("test_canonicalize_consolidate_rule_run_preserves_surrounding_rules", () => {
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("before", 0, "B0", { from_sources: ["INT_CASH"] }),
+              makeCanonicalizableRule("run1", 1, "A1"),
+              makeCanonicalizableRule("run2", 2, "A2"),
+              makeCanonicalizableRule("after", 3, "B9", { from_sources: ["RESERVE"] }),
+            ],
+          },
+        },
+      },
+    }));
+
+    dispatchCanonicalizeConsolidateRuleRun(1, 2);
+
+    const rules = useDealStore.getState().sessions.main.working_tree.waterfall_rules;
+    expect(rules).toHaveLength(3);
+    expect(rules[0]?.rule_id).toBe("before");
+    expect(rules[1]?.rule_id).toBe("run1");
+    expect(rules[1]?.to_targets).toEqual(["A1", "A2"]);
+    expect(rules[2]?.rule_id).toBe("after");
   });
 });

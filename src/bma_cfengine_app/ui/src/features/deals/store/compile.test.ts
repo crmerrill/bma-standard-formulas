@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 
 import type { DealDefinitionIR, RuleNodeIR } from "../ir-types";
+import { useDealStore } from "./useDealStore";
 
 type DealState = DealDefinitionIR;
 
@@ -176,6 +177,17 @@ function collectFragmentedTargetRuns(rules: RuleNodeIR[]): string[][] {
   return runs;
 }
 
+function dispatchCanonicalizeConsolidateRuleRun(start_index: number, end_index: number): void {
+  const dispatch = useDealStore.getState().dispatch as unknown as (action: {
+    type: string;
+    payload: Record<string, unknown>;
+  }) => void;
+  dispatch({
+    type: "canonicalizeConsolidateRuleRun",
+    payload: { start_index, end_index },
+  });
+}
+
 describe("sds-3 compile canonical serialization", () => {
   test("test_compile_returns_string_with_pydantic_field_order", async () => {
     const { compileToIR } = await loadCompileModule();
@@ -300,5 +312,46 @@ describe("sds-3 compile canonical serialization", () => {
     expect(() => compileToIR(tainted as unknown as DealState)).toThrow(
       /manifest.*stale|not present in manifest/i,
     );
+  });
+
+  test("test_compile_does_not_implicit_canonicalize_pre_dispatch", async () => {
+    const { compileToIR } = await loadCompileModule();
+
+    useDealStore.setState(useDealStore.getInitialState(), true);
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: makeWorkingTree({
+            waterfall_rules: [
+              makeRule("frag_1", 0, "ACT_PRIN", "A1"),
+              makeRule("frag_2", 1, "ACT_PRIN", "A2"),
+              makeRule("frag_3", 2, "ACT_PRIN", "A3"),
+            ],
+          }),
+        },
+      },
+    }));
+
+    const preDispatchTree = useDealStore.getState().sessions.main.working_tree;
+    const compiledBeforeDispatch = compileToIR(preDispatchTree);
+    const preDispatchRuns = collectFragmentedTargetRuns(
+      (JSON.parse(compiledBeforeDispatch) as { waterfall_rules: RuleNodeIR[] }).waterfall_rules ??
+        [],
+    );
+    expect(preDispatchRuns.length).toBeGreaterThan(0);
+
+    dispatchCanonicalizeConsolidateRuleRun(0, 2);
+
+    const postDispatchTree = useDealStore.getState().sessions.main.working_tree;
+    const compiledAfterDispatch = compileToIR(postDispatchTree);
+    const postDispatchRuns = collectFragmentedTargetRuns(
+      (JSON.parse(compiledAfterDispatch) as { waterfall_rules: RuleNodeIR[] }).waterfall_rules ??
+        [],
+    );
+
+    expect(compiledAfterDispatch).not.toBe(compiledBeforeDispatch);
+    expect(postDispatchRuns).toEqual([]);
   });
 });
