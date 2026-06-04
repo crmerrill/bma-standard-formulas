@@ -15,15 +15,19 @@ import pytest
 
 from bma_cfengine_app.orchestrator.deals import deal_store
 from bma_cfengine_app.orchestrator.deals.git_service import GitService
-from bma_standard_formulas.deals.schemas.common import RuleType
+from bma_standard_formulas.deals.schemas.common import RuleType, TrancheRelationType
 from bma_standard_formulas.deals.schemas.ir import (
     AccountDef,
     BondDef,
     CalculationNode,
+    CollateralGroupDef,
     DealDefinition,
     FeeDef,
     RuleNode,
+    TrancheRelation,
+    TriggerNode,
 )
+from bma_standard_formulas.deals.schemas.migrations.studio_migration import migrate_studio_payload
 from bma_standard_formulas.deals.schemas.studio_sidecar import StudioSidecar
 
 
@@ -310,3 +314,142 @@ class TestLegacyAiProvenanceIsAddedToMigrationCommitMessage:
         full_message = _run_git(deal_path, "log", "--format=%B", "-1")
         assert "Legacy-Studio-Provenance:" not in full_message
         assert full_message.strip() == "Migrate v1"
+
+
+def _build_minimal_deal(*, deal_name: str = "test") -> DealDefinition:
+    """Minimal valid single-pool deal for direct migration unit tests."""
+    return DealDefinition(
+        deal_name=deal_name,
+        bonds=[BondDef(name="A1", coupon=5.0, notional=1_000_000.0)],
+        waterfall_rules=[
+            RuleNode(
+                rule_id="pay-principal-a1",
+                rule_type=RuleType.PAY_PRINCIPAL,
+                order=0,
+                from_sources=["CASH"],
+                to_targets=["A1"],
+            )
+        ],
+    )
+
+
+class TestApplyBlockNotesEntityCoverage:
+    """AC 3: block.data notes populate description on all entity types."""
+
+    def test_migrate_applies_notes_to_trigger_node_description(self) -> None:
+        deal = DealDefinition(
+            deal_name="trigger-notes-test",
+            bonds=[BondDef(name="A1", coupon=5.0, notional=1_000_000.0)],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="pay-principal-a1",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["A1"],
+                )
+            ],
+            triggers=[TriggerNode(name="OC_Trigger", threshold_value=1.2)],
+        )
+        payload: dict[str, Any] = {
+            "ir": {
+                "blockly_xml": "",
+                "block_data": {
+                    "OC_Trigger": {"description": "Overcollateralization trigger for A1"},
+                },
+            }
+        }
+        _, migrated, _ = migrate_studio_payload(payload, deal)
+        trigger = next(t for t in migrated.triggers if t.name == "OC_Trigger")
+        assert trigger.description == "Overcollateralization trigger for A1"
+
+    def test_migrate_applies_notes_to_collateral_group_description(self) -> None:
+        deal = DealDefinition(
+            deal_name="cg-notes-test",
+            bonds=[BondDef(name="A1", coupon=5.0, notional=1_000_000.0, group_id="GROUP_1")],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="pay-principal-a1",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["A1"],
+                    group_id="GROUP_1",
+                )
+            ],
+            collateral_groups=[CollateralGroupDef(group_id="GROUP_1", label="Senior Pool")],
+        )
+        payload: dict[str, Any] = {
+            "ir": {
+                "blockly_xml": "",
+                "block_data": {
+                    "GROUP_1": {"description": "Senior collateral pool backing A1 tranche"},
+                },
+            }
+        }
+        _, migrated, _ = migrate_studio_payload(payload, deal)
+        group = next(g for g in migrated.collateral_groups if g.group_id == "GROUP_1")
+        assert group.description == "Senior collateral pool backing A1 tranche"
+
+    def test_migrate_applies_notes_to_tranche_relation_description(self) -> None:
+        """TrancheRelation.description is populated via synthetic id ``<bond_name>:relation:<index>``.
+
+        The migration helper matches block_data keys of the form ``<bond_name>:relation:<i>``
+        (0-based index into ``bond.relations``) to the corresponding ``TrancheRelation`` and
+        copies ``description`` into it. This scheme is deterministic and does not require any
+        legacy block id field beyond what the Blockly workspace already tracks per entity.
+        """
+        deal = DealDefinition(
+            deal_name="relation-notes-test",
+            bonds=[
+                BondDef(name="A1", coupon=5.0, notional=800_000.0),
+                BondDef(
+                    name="B1",
+                    coupon=4.0,
+                    notional=200_000.0,
+                    relations=[
+                        TrancheRelation(
+                            relation_type=TrancheRelationType.SUPPORTED_BY,
+                            targets=["A1"],
+                        )
+                    ],
+                ),
+            ],
+            waterfall_rules=[
+                RuleNode(
+                    rule_id="pay-principal-a1",
+                    rule_type=RuleType.PAY_PRINCIPAL,
+                    order=0,
+                    from_sources=["CASH"],
+                    to_targets=["A1"],
+                )
+            ],
+        )
+        payload: dict[str, Any] = {
+            "ir": {
+                "blockly_xml": "",
+                "block_data": {
+                    "B1:relation:0": {
+                        "description": "B1 subordinates to A1, absorbing first-loss up to 20% of pool"
+                    },
+                },
+            }
+        }
+        _, migrated, _ = migrate_studio_payload(payload, deal)
+        b1 = next(b for b in migrated.bonds if b.name == "B1")
+        assert b1.relations[0].description == "B1 subordinates to A1, absorbing first-loss up to 20% of pool"
+
+    def test_migrate_unmatched_block_id_no_op(self) -> None:
+        deal = _build_minimal_deal(deal_name="no-op-test")
+        payload: dict[str, Any] = {
+            "ir": {
+                "blockly_xml": "",
+                "block_data": {
+                    "no-such-entity-xyz": {"description": "Should not match anything"},
+                },
+            }
+        }
+        _, migrated, _ = migrate_studio_payload(payload, deal)
+        assert migrated.deal_name == "no-op-test"
+        rule = next(r for r in migrated.waterfall_rules if r.rule_id == "pay-principal-a1")
+        assert rule.description == ""
