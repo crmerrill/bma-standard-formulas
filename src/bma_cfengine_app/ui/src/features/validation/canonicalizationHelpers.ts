@@ -44,7 +44,7 @@ function resolveLogical(token: string, groupId: string | null | undefined): stri
  *       via group routing — i.e. it reads from the same logical pool, which
  *       alters the pool balance and makes rule ordering load-bearing.
  */
-function mutatesSource(
+export function mutatesSource(
   intervening: RuleNodeIR,
   source: string,
   sourceGroupId: string | null | undefined,

@@ -14,7 +14,7 @@ _BUILTIN_TOKENS: frozenset[str] = frozenset({"CASH", "ACT_INT", "ACT_PRIN", "LOS
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -40,7 +40,7 @@ def _resolve_logical(token: str, group_id: str | None) -> str:
     return token
 
 
-def _mutates_source(intervening: RuleNode, source: str, source_group_id: str | None) -> bool:
+def mutates_source(intervening: RuleNode, source: str, source_group_id: str | None) -> bool:
     """Return True iff *intervening* mutates the logical pool identified by
     (*source*, *source_group_id*).
 
@@ -123,7 +123,7 @@ def is_consolidatable(
         group_id = rule_a.group_id
         for source in rule_a.from_sources:
             for intervening in all_rules_between:
-                if _mutates_source(intervening, source, group_id):
+                if mutates_source(intervening, source, group_id):
                     return False
 
     return True
