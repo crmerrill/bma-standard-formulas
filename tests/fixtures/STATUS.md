@@ -53,8 +53,13 @@ These prospectuses are cited in `waterfall_ir_design.md` for pattern coverage bu
 | Toyota Lexus Owner Trust 2024-A (TLOT) | Auto Lease ABS | Lease-specific 8-step waterfall; "Securitization Value" valuation |
 | Santander Drive 2024-2 (SDART) | Subprime Auto ABS | Same shape as Ford Credit; parametric differences only |
 | Westlake 2024-1 (WLAKE) | Subprime Auto ABS | 8-class structure; subprime auto pattern reinforcement |
-| Capital One COMET | Credit Card Master Trust | Cited in AI corpus seed for credit card master trust pattern |
-| Chase Issuance Trust | Credit Card Master Trust | Cited in AI corpus seed for credit card master trust pattern |
+| Ginnie Mae 2024-115 (Multifamily) | Agency Multifamily REMIC | Multifamily: trustee fee % of Principal Distribution Amount deducted before principal cascade; `PAY_FEE` with `basis_type=COLLATERAL_BALANCE` covers this; cited for multifamily vs single-family agency REMIC differences |
+| Freddie Mac REMIC general structure (offering circular) | Agency REMIC | Single-Tier vs Double-Tier Series (REMIC-inside-REMIC); MACR Certificates; lower-tier mechanics transparent for cashflow IR |
+| Capital One COMET | Credit Card Master Trust | Cited in AI corpus seed for credit card master trust pattern (Card series 2002-CC supplement; SF-3 registration) |
+| Chase Issuance Trust | Credit Card Master Trust | Cited in AI corpus seed for credit card master trust pattern (CHASEseries A-2024-2, A-2025-1) |
+| Citibank Credit Card Issuance Trust | Credit Card Master Trust | Cited in AI corpus seed for credit card master trust pattern (Citiseries 2023-A2 plus earlier 424B5 filings) |
+| Discover Card Execution Note Trust | Credit Card Master Trust | Cited in AI corpus seed for credit card master trust pattern (DCENT Class A 2022-2) |
+| American Express Credit Account Master Trust | Credit Card Master Trust | Cited in AI corpus seed for credit card master trust pattern (Series 2025-4) |
 
 ## Round-trip + canonicalization commitment
 
