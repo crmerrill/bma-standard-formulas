@@ -103,9 +103,22 @@ _PROSPECTUS_PATTERNS: list[re.Pattern[str]] = [
 def _parse_waterfall_prospectuses(path: Path) -> set[str]:
     """Extract prospectus names from waterfall_ir_design.md via issuer-prefix patterns.
 
-    NOT YET IMPLEMENTED — stub causes T1 tests to fail with NotImplementedError.
+    Scans the full text of the design doc with each pattern in _PROSPECTUS_PATTERNS
+    and returns the union of all matches as a deduplicated set.  The same name may
+    appear dozens of times in the doc (section headers, prose, tables); deduplication
+    ensures the assertion loop in the drift test is clean.
+
+    Heuristic: one compiled regex per known SF/RMBS/ABS issuer family, each pattern
+    anchored to the issuer prefix and capturing the adjacent identifier token.  This
+    is intentionally liberal — false positives (e.g. internal variable names) are not
+    a practical risk in a design doc.  False negatives (new issuers not yet in
+    _PROSPECTUS_PATTERNS) are the failure mode this test guards against over time.
     """
-    raise NotImplementedError("_parse_waterfall_prospectuses is not yet implemented")
+    text = path.read_text(encoding="utf-8")
+    found: set[str] = set()
+    for pattern in _PROSPECTUS_PATTERNS:
+        found.update(pattern.findall(text))
+    return found
 
 
 @pytest.fixture(scope="module")
