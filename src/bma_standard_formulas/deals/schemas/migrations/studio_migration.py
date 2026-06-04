@@ -113,4 +113,12 @@ def _apply_block_notes(
         if group.get("group_id") in notes_map:
             group["description"] = notes_map[group["group_id"]]
 
+    # Synthetic id scheme: "<bond_name>:relation:<index>" (0-based within bond.relations).
+    for bond in dump.get("bonds", []):
+        bond_name = bond.get("name", "")
+        for i, relation in enumerate(bond.get("relations", [])):
+            synthetic_id = f"{bond_name}:relation:{i}"
+            if synthetic_id in notes_map:
+                relation["description"] = notes_map[synthetic_id]
+
     return DealDefinition.model_validate(dump)
