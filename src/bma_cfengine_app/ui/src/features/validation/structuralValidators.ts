@@ -82,6 +82,102 @@ registerDiagnosticValidator({
   },
 });
 
+const BUILTIN_STREAMS = new Set(["CASH", "ACT_INT", "ACT_PRIN", "LOSS"]);
+
+function buildValidReferences(
+  deal: Record<string, unknown>,
+): { validSources: Set<string>; validTargets: Set<string> } {
+  const bonds = Array.isArray(deal.bonds) ? deal.bonds : [];
+  const accounts = Array.isArray(deal.accounts) ? deal.accounts : [];
+  const fees = Array.isArray(deal.fees) ? deal.fees : [];
+  const collateralGroups = Array.isArray(deal.collateral_groups)
+    ? deal.collateral_groups
+    : [];
+
+  const bondNames = new Set(
+    bonds
+      .map((b: Record<string, unknown>) => b.name as string)
+      .filter(Boolean),
+  );
+  const accountNames = new Set(
+    accounts
+      .map((a: Record<string, unknown>) => a.name as string)
+      .filter(Boolean),
+  );
+  const feeNames = new Set(
+    fees
+      .map((f: Record<string, unknown>) => f.name as string)
+      .filter(Boolean),
+  );
+  const groupIds = new Set(
+    collateralGroups
+      .map((g: Record<string, unknown>) => g.group_id as string)
+      .filter(Boolean),
+  );
+
+  const sourceFormulaNames = new Set<string>();
+  const dealKnobs = deal.deal_knobs as Record<string, unknown> | undefined;
+  if (dealKnobs && typeof dealKnobs === "object") {
+    const rawSf = dealKnobs.source_formulas;
+    if (rawSf && typeof rawSf === "object" && !Array.isArray(rawSf)) {
+      for (const k of Object.keys(rawSf as Record<string, unknown>)) {
+        sourceFormulaNames.add(k);
+      }
+    }
+  }
+
+  const groupStreams = new Set<string>();
+  for (const gid of groupIds) {
+    for (const suffix of ["CASH", "ACT_INT", "ACT_PRIN", "LOSS"]) {
+      groupStreams.add(`GROUP_${gid}_${suffix}`);
+    }
+  }
+
+  const entityNames = new Set([...bondNames, ...accountNames, ...feeNames]);
+
+  const splitStreams = new Set<string>();
+  const rules = Array.isArray(deal.waterfall_rules)
+    ? deal.waterfall_rules
+    : [];
+  const rulesSorted = [...rules].sort(
+    (a: Record<string, unknown>, b: Record<string, unknown>) =>
+      ((a.order as number) ?? 0) - ((b.order as number) ?? 0),
+  );
+  for (const rule of rulesSorted) {
+    const r = rule as Record<string, unknown>;
+    if (r.rule_type === "SPLIT_CASH") {
+      const toTargets = Array.isArray(r.to_targets) ? r.to_targets : [];
+      for (const tgt of toTargets) {
+        const t = tgt as string;
+        if (
+          !entityNames.has(t) &&
+          !BUILTIN_STREAMS.has(t) &&
+          !sourceFormulaNames.has(t)
+        ) {
+          splitStreams.add(t);
+        }
+      }
+    }
+  }
+
+  const allTargets = new Set([...entityNames, "CASH"]);
+  const validSources = new Set([
+    ...allTargets,
+    ...BUILTIN_STREAMS,
+    ...groupStreams,
+    ...sourceFormulaNames,
+    ...splitStreams,
+  ]);
+  const validTargets = new Set([
+    ...allTargets,
+    ...splitStreams,
+    ...BUILTIN_STREAMS,
+    ...groupStreams,
+  ]);
+
+  return { validSources, validTargets };
+}
+
 registerDiagnosticValidator({
   code: "REFERENCE_BROKEN",
   severity: "error",
@@ -89,44 +185,8 @@ registerDiagnosticValidator({
   owner: "both",
   fn(deal: unknown): DiagnosticPayload[] {
     const d = deal as Record<string, unknown>;
-    const bonds = Array.isArray(d.bonds) ? d.bonds : [];
-    const accounts = Array.isArray(d.accounts) ? d.accounts : [];
-    const fees = Array.isArray(d.fees) ? d.fees : [];
-    const collateralGroups = Array.isArray(d.collateral_groups)
-      ? d.collateral_groups
-      : [];
     const rules = Array.isArray(d.waterfall_rules) ? d.waterfall_rules : [];
-
-    const bondNames = new Set(
-      bonds.map((b: Record<string, unknown>) => b.name as string).filter(Boolean),
-    );
-    const accountNames = new Set(
-      accounts.map((a: Record<string, unknown>) => a.name as string).filter(Boolean),
-    );
-    const feeNames = new Set(
-      fees.map((f: Record<string, unknown>) => f.name as string).filter(Boolean),
-    );
-    const groupIds = new Set(
-      collateralGroups
-        .map((g: Record<string, unknown>) => g.group_id as string)
-        .filter(Boolean),
-    );
-
-    const builtin = new Set(["CASH", "ACT_INT", "ACT_PRIN", "LOSS"]);
-    const groupStreams = new Set<string>();
-    for (const gid of groupIds) {
-      for (const suffix of ["CASH", "ACT_INT", "ACT_PRIN", "LOSS"]) {
-        groupStreams.add(`GROUP_${gid}_${suffix}`);
-      }
-    }
-
-    const validNames = new Set([
-      ...bondNames,
-      ...accountNames,
-      ...feeNames,
-      ...builtin,
-      ...groupStreams,
-    ]);
+    const { validSources, validTargets } = buildValidReferences(d);
 
     const results: DiagnosticPayload[] = [];
     for (let i = 0; i < rules.length; i++) {
@@ -138,8 +198,7 @@ registerDiagnosticValidator({
 
       let hasBrokenSource = false;
       for (const src of fromSources) {
-        if ((src as string).startsWith("GROUP_")) continue;
-        if (!validNames.has(src as string)) {
+        if (!validSources.has(src as string)) {
           hasBrokenSource = true;
           break;
         }
@@ -156,8 +215,7 @@ registerDiagnosticValidator({
 
       let hasBrokenTarget = false;
       for (const tgt of toTargets) {
-        if ((tgt as string).startsWith("GROUP_")) continue;
-        if (!validNames.has(tgt as string)) {
+        if (!validTargets.has(tgt as string)) {
           hasBrokenTarget = true;
           break;
         }
@@ -276,6 +334,15 @@ registerDiagnosticValidator({
   },
 });
 
+function extractGroupFromToken(token: string): string | null {
+  for (const suffix of ["_CASH", "_ACT_INT", "_ACT_PRIN", "_LOSS"]) {
+    if (token.startsWith("GROUP_") && token.endsWith(suffix)) {
+      return token.slice("GROUP_".length, -suffix.length);
+    }
+  }
+  return null;
+}
+
 registerDiagnosticValidator({
   code: "MULTI_GROUP_ROUTING_INVALID",
   severity: "error",
@@ -308,25 +375,64 @@ registerDiagnosticValidator({
       const fromSources = Array.isArray(rule.from_sources)
         ? rule.from_sources
         : [];
-      let hasInvalid = false;
+      const toTargets = Array.isArray(rule.to_targets)
+        ? rule.to_targets
+        : [];
+
+      let hasInvalidSource = false;
       for (const src of fromSources) {
         if (
           typeof src === "string" &&
           src.startsWith("GROUP_") &&
           !validGroupStreams.has(src)
         ) {
-          hasInvalid = true;
+          hasInvalidSource = true;
           break;
         }
       }
-      if (hasInvalid) {
+      let hasInvalidTarget = false;
+      for (const tgt of toTargets) {
+        if (
+          typeof tgt === "string" &&
+          tgt.startsWith("GROUP_") &&
+          !validGroupStreams.has(tgt)
+        ) {
+          hasInvalidTarget = true;
+          break;
+        }
+      }
+
+      if (hasInvalidSource || hasInvalidTarget) {
         results.push({
           code: "MULTI_GROUP_ROUTING_INVALID",
           severity: "error",
           path: `deal.waterfall_rules[${i}].from_sources`,
-          message: `Rule '${rule.rule_id ?? ""}' references group-prefixed source not in declared collateral_groups.`,
+          message: `Rule '${rule.rule_id ?? ""}' references group-prefixed token not in declared collateral_groups.`,
           payload: { rule_index: i, rule_id: rule.rule_id ?? "" },
         });
+        continue;
+      }
+
+      const ruleGroupId = rule.group_id as string | undefined;
+      if (!ruleGroupId) continue;
+      const allKeys = [
+        ...fromSources.map((s: unknown) => s as string),
+        ...toTargets.map((t: unknown) => t as string),
+      ];
+      const hasBare = allKeys.some((k) => BUILTIN_STREAMS.has(k));
+      if (!hasBare) continue;
+      for (const key of allKeys) {
+        const otherGroup = extractGroupFromToken(key);
+        if (otherGroup !== null && otherGroup !== ruleGroupId) {
+          results.push({
+            code: "MULTI_GROUP_ROUTING_INVALID",
+            severity: "error",
+            path: `deal.waterfall_rules[${i}].from_sources`,
+            message: `Rule '${rule.rule_id ?? ""}' mixes bare collateral tokens (scoped to group_id='${ruleGroupId}') with explicit token '${key}' for a different group '${otherGroup}'.`,
+            payload: { rule_index: i, rule_id: rule.rule_id ?? "" },
+          });
+          break;
+        }
       }
     }
     return results;

@@ -25,6 +25,7 @@
     ]
   },
   "expected_diagnostics": [
-    { "code": "REFERENCE_BROKEN", "path": "deal.waterfall_rules[0].to_targets" }
+    { "code": "REFERENCE_BROKEN", "path": "deal.waterfall_rules[0].to_targets" },
+    { "code": "MULTI_GROUP_ROUTING_INVALID", "path": "deal.waterfall_rules[0].from_sources" }
   ]
 }

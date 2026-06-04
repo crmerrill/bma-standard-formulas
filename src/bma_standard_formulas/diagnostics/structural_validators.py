@@ -76,6 +76,54 @@ def validate_bond_name_duplicate(deal: dict[str, Any]) -> list[DiagnosticPayload
     return results
 
 
+_BUILTIN_STREAMS = frozenset({"CASH", "ACT_INT", "ACT_PRIN", "LOSS"})
+
+
+def _build_valid_references(deal: dict[str, Any]) -> tuple[set[str], set[str]]:
+    """Build the valid source and target sets, mirroring ``DealDefinition._validate_references``.
+
+    Returns (valid_sources, valid_targets).
+    """
+    bond_names = {b.get("name", "") for b in deal.get("bonds", []) if b.get("name")}
+    account_names = {a.get("name", "") for a in deal.get("accounts", []) if a.get("name")}
+    fee_names = {f.get("name", "") for f in deal.get("fees", []) if f.get("name")}
+    group_ids = {g.get("group_id", "") for g in deal.get("collateral_groups", []) if g.get("group_id")}
+
+    source_formula_names: set[str] = set()
+    deal_knobs = deal.get("deal_knobs")
+    if isinstance(deal_knobs, dict):
+        raw_sf = deal_knobs.get("source_formulas")
+        if isinstance(raw_sf, dict):
+            source_formula_names = {str(k) for k in raw_sf.keys()}
+
+    group_streams: set[str] = set()
+    for gid in group_ids:
+        for suffix in ("CASH", "ACT_INT", "ACT_PRIN", "LOSS"):
+            group_streams.add(f"GROUP_{gid}_{suffix}")
+
+    entity_names = bond_names | account_names | fee_names
+
+    split_streams: set[str] = set()
+    rules_sorted = sorted(deal.get("waterfall_rules", []), key=lambda r: r.get("order", 0))
+    for rule in rules_sorted:
+        if rule.get("rule_type") == "SPLIT_CASH":
+            for tgt in rule.get("to_targets", []):
+                if (
+                    tgt not in entity_names
+                    and tgt not in _BUILTIN_STREAMS
+                    and tgt not in source_formula_names
+                ):
+                    split_streams.add(tgt)
+
+    all_targets = entity_names | {"CASH"}
+    valid_sources = (
+        all_targets | _BUILTIN_STREAMS | group_streams | source_formula_names | split_streams
+    )
+    valid_targets = all_targets | split_streams | _BUILTIN_STREAMS | group_streams
+
+    return valid_sources, valid_targets
+
+
 @diagnostic_code(
     "REFERENCE_BROKEN",
     severity=Severity.error,
@@ -85,27 +133,14 @@ def validate_bond_name_duplicate(deal: dict[str, Any]) -> list[DiagnosticPayload
 def validate_reference_broken(deal: dict[str, Any]) -> list[DiagnosticPayload]:
     """Emit REFERENCE_BROKEN for rules referencing non-existent bond/account names."""
     results: list[DiagnosticPayload] = []
-    bond_names = {b.get("name", "") for b in deal.get("bonds", []) if b.get("name")}
-    account_names = {a.get("name", "") for a in deal.get("accounts", []) if a.get("name")}
-    fee_names = {f.get("name", "") for f in deal.get("fees", []) if f.get("name")}
-    group_ids = {g.get("group_id", "") for g in deal.get("collateral_groups", []) if g.get("group_id")}
-
-    builtin = {"CASH", "ACT_INT", "ACT_PRIN", "LOSS"}
-    group_streams: set[str] = set()
-    for gid in group_ids:
-        for suffix in ("CASH", "ACT_INT", "ACT_PRIN", "LOSS"):
-            group_streams.add(f"GROUP_{gid}_{suffix}")
-
-    valid_names = bond_names | account_names | fee_names | builtin | group_streams
+    valid_sources, valid_targets = _build_valid_references(deal)
 
     for i, rule in enumerate(deal.get("waterfall_rules", [])):
         from_sources = rule.get("from_sources", [])
         to_targets = rule.get("to_targets", [])
         has_broken_source = False
         for src in from_sources:
-            if src.startswith("GROUP_"):
-                continue
-            if src not in valid_names:
+            if src not in valid_sources:
                 has_broken_source = True
                 break
         if has_broken_source:
@@ -120,9 +155,7 @@ def validate_reference_broken(deal: dict[str, Any]) -> list[DiagnosticPayload]:
             )
         has_broken_target = False
         for tgt in to_targets:
-            if tgt.startswith("GROUP_"):
-                continue
-            if tgt not in valid_names:
+            if tgt not in valid_targets:
                 has_broken_target = True
                 break
         if has_broken_target:
@@ -238,6 +271,14 @@ def validate_nla_subordination(deal: dict[str, Any]) -> list[DiagnosticPayload]:
     return results
 
 
+def _extract_group_from_token(token: str) -> str | None:
+    """Extract the group id from a ``GROUP_<gid>_<suffix>`` token, or ``None``."""
+    for suffix in ("_CASH", "_ACT_INT", "_ACT_PRIN", "_LOSS"):
+        if token.startswith("GROUP_") and token.endswith(suffix):
+            return token[len("GROUP_"):-len(suffix)]
+    return None
+
+
 @diagnostic_code(
     "MULTI_GROUP_ROUTING_INVALID",
     severity=Severity.error,
@@ -245,7 +286,15 @@ def validate_nla_subordination(deal: dict[str, Any]) -> list[DiagnosticPayload]:
     owner=Owner.both,
 )
 def validate_multi_group_routing(deal: dict[str, Any]) -> list[DiagnosticPayload]:
-    """Emit MULTI_GROUP_ROUTING_INVALID for group-prefixed sources not in collateral_groups."""
+    """Emit MULTI_GROUP_ROUTING_INVALID for invalid group routing.
+
+    Checks two conditions:
+    1. Group-prefixed tokens in from_sources or to_targets that don't match
+       any declared collateral_groups entry.
+    2. OA5 cross-group mixing: a rule with group_id must not mix bare
+       collateral tokens (CASH/ACT_INT/ACT_PRIN/LOSS) with explicit
+       GROUP_<other>_* tokens for a different group.
+    """
     results: list[DiagnosticPayload] = []
     group_ids = {g.get("group_id", "") for g in deal.get("collateral_groups", []) if g.get("group_id")}
     if not group_ids:
@@ -258,19 +307,54 @@ def validate_multi_group_routing(deal: dict[str, Any]) -> list[DiagnosticPayload
 
     for i, rule in enumerate(deal.get("waterfall_rules", [])):
         from_sources = rule.get("from_sources", [])
-        has_invalid = False
+        to_targets = rule.get("to_targets", [])
+
+        has_invalid_source = False
         for src in from_sources:
             if src.startswith("GROUP_") and src not in valid_group_streams:
-                has_invalid = True
+                has_invalid_source = True
                 break
-        if has_invalid:
+        has_invalid_target = False
+        for tgt in to_targets:
+            if tgt.startswith("GROUP_") and tgt not in valid_group_streams:
+                has_invalid_target = True
+                break
+
+        if has_invalid_source or has_invalid_target:
             results.append(
                 DiagnosticPayload(
                     code="MULTI_GROUP_ROUTING_INVALID",
                     severity=Severity.error,
                     path=f"deal.waterfall_rules[{i}].from_sources",
-                    message=f"Rule '{rule.get('rule_id', '')}' references group-prefixed source not in declared collateral_groups.",
+                    message=f"Rule '{rule.get('rule_id', '')}' references group-prefixed token not in declared collateral_groups.",
                     payload={"rule_index": i, "rule_id": rule.get("rule_id", "")},
                 )
             )
+            continue
+
+        rule_group_id = rule.get("group_id")
+        if not rule_group_id:
+            continue
+        all_keys = list(from_sources) + list(to_targets)
+        has_bare = any(k in _BUILTIN_STREAMS for k in all_keys)
+        if not has_bare:
+            continue
+        for key in all_keys:
+            other_group = _extract_group_from_token(key)
+            if other_group is not None and other_group != rule_group_id:
+                results.append(
+                    DiagnosticPayload(
+                        code="MULTI_GROUP_ROUTING_INVALID",
+                        severity=Severity.error,
+                        path=f"deal.waterfall_rules[{i}].from_sources",
+                        message=(
+                            f"Rule '{rule.get('rule_id', '')}' mixes bare collateral tokens "
+                            f"(scoped to group_id={rule_group_id!r}) with explicit "
+                            f"token {key!r} for a different group {other_group!r}."
+                        ),
+                        payload={"rule_index": i, "rule_id": rule.get("rule_id", "")},
+                    )
+                )
+                break
+
     return results

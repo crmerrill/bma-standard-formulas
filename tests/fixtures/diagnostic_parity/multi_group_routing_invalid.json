@@ -22,6 +22,7 @@
     ]
   },
   "expected_diagnostics": [
-    { "code": "MULTI_GROUP_ROUTING_INVALID", "path": "deal.waterfall_rules[0].from_sources" }
+    { "code": "MULTI_GROUP_ROUTING_INVALID", "path": "deal.waterfall_rules[0].from_sources" },
+    { "code": "REFERENCE_BROKEN", "path": "deal.waterfall_rules[0].from_sources" }
   ]
 }
