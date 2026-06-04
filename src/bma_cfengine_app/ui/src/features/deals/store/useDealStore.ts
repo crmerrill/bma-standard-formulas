@@ -75,12 +75,17 @@ const _diagnosticSourceMap = new Map<
   Map<string, "worker" | "backend">
 >();
 
-/** Test-only: returns the raw internal source map for white-box assertion. */
+/** Test-only: returns a deep-cloned snapshot of the internal source map.
+ *  Callers may freely mutate the returned map without affecting module-private state. */
 export function getDiagnosticSourceMapForTesting(): Map<
   string,
   Map<string, "worker" | "backend">
 > {
-  return _diagnosticSourceMap;
+  const snapshot = new Map<string, Map<string, "worker" | "backend">>();
+  for (const [sessionId, sessionMap] of _diagnosticSourceMap.entries()) {
+    snapshot.set(sessionId, new Map(sessionMap));
+  }
+  return snapshot;
 }
 
 /**
