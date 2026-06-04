@@ -102,6 +102,69 @@ def test_missing_git_dir_triggers_git_init_and_system_migration_commit(
     assert committed_payload["bonds"] == original_payload["bonds"]
 
 
+def test_unborn_git_repo_completes_migration_instead_of_returning_none(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M1 regression (sdpm-3): .git/ exists but zero commits → complete migration, not return None.
+
+    Simulates the concurrent first-open race: one caller runs git init (creating .git/) but
+    is preempted before commit_deal(). A second concurrent caller skips
+    _migrate_deal_json_to_git because .git/ already exists, then enters _load_from_git where
+    _resolve_version_to_sha returns None on the unborn repo, causing load_deal to return None.
+
+    After the fix, _load_from_git detects the unborn-with-deal.json state, acquires
+    _migration_lock, and either waits for the in-flight migrator's commit or finishes the
+    migration commit itself before loading.
+    """
+    _redirect_deal_dirs(monkeypatch, tmp_path)
+
+    deal_id = "deal_sdpm3_unborn_race"
+    deal_path = tmp_path / deal_id
+    deal_path.mkdir(parents=True, exist_ok=True)
+
+    original_payload: dict[str, Any] = _minimal_deal().model_dump(mode="json")
+    original_bytes = json.dumps(original_payload, indent=2).encode("utf-8")
+    (deal_path / "deal.json").write_bytes(original_bytes)
+
+    # Simulate the half-initialized state: git init ran, symbolic-ref set, but no commit yet.
+    subprocess.run(["git", "init", str(deal_path)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(deal_path), "symbolic-ref", "HEAD", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+    )
+
+    assert (deal_path / ".git").exists(), "Fixture: .git/ should exist"
+    # Confirm repo is truly unborn (rev-list fails with non-zero exit code)
+    before = subprocess.run(
+        ["git", "-C", str(deal_path), "rev-list", "--count", "main"],
+        capture_output=True,
+        text=True,
+    )
+    assert before.returncode != 0, "Fixture: repo should be unborn (no commits)"
+
+    # load_deal must not return None — it must complete the migration
+    result = deal_store.load_deal(deal_id)
+    assert result is not None, (
+        "load_deal returned None for unborn repo with deal.json; "
+        "expected migration to be completed"
+    )
+
+    commit_count = int(_run_git(deal_path, "rev-list", "--count", "main"))
+    assert commit_count == 1, f"Expected exactly 1 migration commit, got {commit_count}"
+
+    log_line = _run_git(deal_path, "log", "--format=%an%x00%s", "HEAD")
+    author_name, subject = log_line.split("\x00")
+    assert author_name == "system:migration"
+    assert subject == "Migrate deal.json"
+
+    deal, sidecar, diagnostics = result
+    assert deal.deal_name == original_payload["deal_name"]
+    fail_codes = [d.code for d in diagnostics if d.code == "SIDECAR_LOAD_FAILED"]
+    assert fail_codes == []
+
+
 def test_missing_sidecar_yields_empty_sidecar_instance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
