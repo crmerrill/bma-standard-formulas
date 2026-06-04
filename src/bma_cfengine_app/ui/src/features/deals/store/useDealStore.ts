@@ -83,6 +83,17 @@ export function getDiagnosticSourceMapForTesting(): Map<
   return _diagnosticSourceMap;
 }
 
+/**
+ * Test-only: clears the entire module-private source map.
+ *
+ * Call this alongside `useDealStore.setState(useDealStore.getInitialState(), true)`
+ * in beforeEach hooks so the source-map provenance is fully reset between test
+ * cases, matching what a real page reload would do.
+ */
+export function resetDiagnosticSourceMapForTesting(): void {
+  _diagnosticSourceMap.clear();
+}
+
 function createPerSessionTemporal(
   sessionId: string,
   storeSet: (fn: (state: DealStoreState) => Partial<DealStoreState>) => void,
@@ -234,7 +245,22 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
 
   setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
 
-  setDiagnostics: (sessionId, payloads) =>
+  setDiagnostics: (sessionId, payloads) => {
+    // Replace the entire diagnostics array and reset the source map for this
+    // session so subsequent worker merges are not blocked by stale backend-wins
+    // entries that pre-dated the replacement.
+    if (payloads.length === 0) {
+      _diagnosticSourceMap.delete(sessionId);
+    } else {
+      // Treat all incoming payloads as 'worker' provenance — setDiagnostics is
+      // a full replacement (not a merge), so backend-wins protection should not
+      // carry forward from a previous merge cycle.
+      const newMap = new Map<string, "worker" | "backend">();
+      for (const p of payloads) {
+        newMap.set(`${p.code}:${p.path}`, "worker");
+      }
+      _diagnosticSourceMap.set(sessionId, newMap);
+    }
     set((state) => ({
       sessions: {
         ...state.sessions,
@@ -243,7 +269,8 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
           diagnostics: payloads,
         },
       },
-    })),
+    }));
+  },
 
   mergeDiagnostics: (sessionId, source, payloads) => {
     set((state) => {
@@ -330,6 +357,7 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
         state.activeSessionId === sessionId ? "main" : state.activeSessionId;
       return { sessions: rest, activeSessionId };
     });
+    _diagnosticSourceMap.delete(sessionId);
   },
 
   promoteLocalDraft: async () => {

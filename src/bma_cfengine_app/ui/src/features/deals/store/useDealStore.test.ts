@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { useDealStore, getDiagnosticSourceMapForTesting } from "./useDealStore";
+import {
+  useDealStore,
+  getDiagnosticSourceMapForTesting,
+  resetDiagnosticSourceMapForTesting,
+} from "./useDealStore";
 import type { BondDefIR, DealDefinitionIR, RuleNodeIR } from "../ir-types";
 
 type DealState = DealDefinitionIR;
@@ -162,7 +166,7 @@ describe("useDealStore (sds-1 scaffolding)", () => {
 describe("ve-4 R1 M1 — source map lifecycle", () => {
   beforeEach(() => {
     useDealStore.setState(useDealStore.getInitialState(), true);
-    // Fix-pass will add: resetDiagnosticSourceMapForTesting()
+    resetDiagnosticSourceMapForTesting();
   });
 
   test("test_deleteSession_clears_source_map_entries", () => {
@@ -228,8 +232,11 @@ describe("ve-4 R1 M1 — source map lifecycle", () => {
     ]);
 
     // Full store reset — provenance should be gone afterwards.
+    // resetDiagnosticSourceMapForTesting() is the required companion to
+    // getInitialState() for a complete reset (module-private map is not
+    // reachable via Zustand's setState).
     useDealStore.setState(useDealStore.getInitialState(), true);
-    // Fix-pass will add: resetDiagnosticSourceMapForTesting()
+    resetDiagnosticSourceMapForTesting();
 
     // Worker merge for the previously-backend key must now be accepted.
     useDealStore.getState().mergeDiagnostics(sessionId, "worker", [
