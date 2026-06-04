@@ -1,5 +1,7 @@
 # Test Fixture Status — `corpus-fixture-status` (Phase 1)
 
+> **Source of truth:** `docs/architecture/prospectus_inventory.md`. This document is a human-readable summary; for canonical metadata see the inventory.
+
 **Authoritative classification of every prospectus named in `docs/architecture/waterfall_ir_design.md`** per the three-tier classification mandated by the `corpus-fixture-status` Phase 1 ticket.
 
 The plan can require canonicalization round-trip + cashflow tie-out only on (i) STRUCTURAL and (ii) QUANTITATIVE GOLDEN fixtures. (iii) RESEARCH-ONLY corpus entries are explicitly downgraded — they are RAG governance material, not test coverage. This document is the single source of truth for which deal names support which kinds of test claims.
@@ -90,4 +92,4 @@ The 5 deal builder fixtures match the explicit fixture set named in `studio-docu
 
 ## Follow-on tickets
 
-- **Replace heuristic `_PROSPECTUS_PATTERNS` regex inventory with a structured `docs/architecture/prospectus_inventory.md` source-of-truth artifact** (Phase 2 or follow-on). The current `_PROSPECTUS_PATTERNS` list in `tests/test_corpus_fixture_status.py` is an issuer-family inventory that does not catch new issuer families (e.g., Hertz Vehicle Financing, BMW Vehicle Owner Trust, vehicle leasing trusts) or prospectus names that are split across line breaks or contain internal markdown formatting. Both `STATUS.md` and `waterfall_ir_design.md` should reference the structured inventory; CI should compare structured entries rather than infer names from prose via regex heuristics.
+(None — the heuristic `_PROSPECTUS_PATTERNS` regex inventory has been replaced by the structured `docs/architecture/prospectus_inventory.md` source-of-truth artifact. CI now validates against the inventory directly.)
