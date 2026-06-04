@@ -1,0 +1,30 @@
+/**
+ * Tests for the QuickFix registry (ve-5 fix-pass).
+ *
+ * Validates that:
+ * - Known manual action IDs resolve to a ManualQuickFix with kind === "manual".
+ * - Unknown action IDs throw an error.
+ */
+
+import { describe, expect, test } from "vitest";
+import {
+  getQuickFix,
+  UnknownQuickFixError,
+} from "./quickFixRegistry";
+
+describe("QuickFix registry", () => {
+  test("test_get_quick_fix_for_known_manual_action", () => {
+    const descriptor = getQuickFix("manual_resolve_duplicate_bond_name");
+    expect(descriptor.kind).toBe("manual");
+    expect(typeof (descriptor as { description: string }).description).toBe(
+      "string"
+    );
+    expect((descriptor as { description: string }).description.length).toBeGreaterThan(0);
+  });
+
+  test("test_get_quick_fix_for_unknown_id_raises", () => {
+    expect(() => getQuickFix("nonexistent_action_id_xyz")).toThrow(
+      UnknownQuickFixError
+    );
+  });
+});
