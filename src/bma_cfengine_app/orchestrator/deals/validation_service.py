@@ -11,7 +11,7 @@ from typing import Any, Iterator, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from bma_standard_formulas.diagnostics import DiagnosticPayload, Severity
+from bma_standard_formulas.diagnostics import DiagnosticPayload, Owner, Severity, diagnostic_code
 from bma_standard_formulas.diagnostics.structural_validators import (
     validate_bond_name_duplicate,
     validate_bond_name_empty,
@@ -22,6 +22,22 @@ from bma_standard_formulas.diagnostics.structural_validators import (
     validate_reference_broken,
 )
 from bma_standard_formulas.deals.schemas.ir import DealDefinition
+
+@diagnostic_code(
+    "IR_VALIDATION_ERROR",
+    severity=Severity.error,
+    path_schema="{field_loc}",
+    owner=Owner.backend,
+)
+def _ir_validation_error_sentinel() -> None:
+    """Stable diagnostic code for Pydantic ValidationError failures.
+
+    Registered via the vpc-1 catalog mechanism. The actual error conversion
+    runs inline in stream_validation(); this no-op placeholder exists solely
+    to satisfy the decorator-registration contract so that vpc-4 CI guard
+    and the catalog parity check recognise IR_VALIDATION_ERROR.
+    """
+
 
 # Ordered list of all registered structural validator callables.
 # Each function accepts a raw deal dict and returns list[DiagnosticPayload].
