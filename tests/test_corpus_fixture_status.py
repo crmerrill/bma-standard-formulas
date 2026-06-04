@@ -74,11 +74,42 @@ FNR_FIXTURE_TEST_FILES: list[str] = [
 
 _TIER_LABELS = ["(i) STRUCTURAL", "(ii) QUANTITATIVE GOLDEN", "(iii) RESEARCH-ONLY"]
 
-# Compiled regex patterns matching known SF/RMBS/ABS issuer prefixes.  One
-# pattern per issuer family; each match yields exactly the name token that
-# must appear verbatim in STATUS.md.  Adding a new prospectus to
+# NOTE — issuer-family inventory, NOT a source of truth.
+#
+# _PROSPECTUS_PATTERNS is a heuristic issuer-family regex inventory: each
+# entry matches prospectus names within a *known* issuer family.  It is NOT
+# a source of truth for every prospectus in the corpus — it is a drift guard
+# whose false-negative surface grows as new issuer families are added.
+#
+# Known limitations:
+#
+#   (a) Issuer-family inventory vs. source-of-truth: patterns cover only the
+#       families explicitly enumerated below.  New issuer families (e.g.,
+#       Hertz Vehicle Financing, BMW Vehicle Owner Trust, vehicle leasing
+#       trusts) will NOT be detected until a corresponding pattern is added
+#       here.  The guard is therefore PARTIALLY closed for forward-drift
+#       protection.
+#
+#   (b) New issuer-family additions require explicit pattern updates: there
+#       is no automatic detection of a family that does not match an existing
+#       pattern.  CI will silently miss additions from unknown issuers (Hertz,
+#       BMW, etc.) until this list is extended.
+#
+#   (c) Names split across line breaks or with internal markdown formatting
+#       are not detected.  Single-line patterns cannot match a prospectus
+#       name that is wrapped onto two lines in the design doc or that has
+#       inline markup inserted mid-name (e.g., "**Toyota** Auto Receivables
+#       2024-A").
+#
+# Long-term fix: replace this list with a maintained structured inventory at
+# docs/architecture/prospectus_inventory.md (see ## Follow-on tickets in
+# tests/fixtures/STATUS.md).
+#
+# One pattern per issuer family; each match yields exactly the name token
+# that must appear verbatim in STATUS.md.  Adding a new prospectus to
 # waterfall_ir_design.md without updating STATUS.md will be caught by
-# test_status_md_research_only_drift_against_waterfall_design.
+# test_status_md_research_only_drift_against_waterfall_design — but only if
+# the issuer family is already enumerated below.
 _PROSPECTUS_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"FNR \d{4}-\d+"),
     re.compile(r"FNMA \d{4}-\w+"),
@@ -349,8 +380,10 @@ def test_prospectus_patterns_documents_known_limitations() -> None:
         "the variable name or type annotation may have changed."
     )
     decl_line = decl_indices[0]
-    # Inspect the 20 lines immediately preceding the declaration for documentation.
-    window_start = max(0, decl_line - 20)
+    # Inspect the 40 lines immediately preceding the declaration for documentation.
+    # The comment block is intentionally verbose (~35 lines); a 40-line window
+    # ensures the full block is captured even as it grows slightly.
+    window_start = max(0, decl_line - 40)
     window = "\n".join(lines[window_start:decl_line])
 
     assert "issuer-family inventory" in window, (
