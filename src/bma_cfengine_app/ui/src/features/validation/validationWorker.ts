@@ -12,6 +12,7 @@
 import type { DiagnosticPayload } from "../deals/store/diagnostics-types";
 import { iterDiagnosticValidators } from "./diagnosticRegistry";
 import "./structuralValidators"; // side-effect: registers BOND_NAME_EMPTY (and future validators)
+import "./canonicalizationValidators"; // side-effect: registers RULE_FRAGMENTATION_CONSOLIDATABLE
 
 export function runValidators(deal: unknown): DiagnosticPayload[] {
   const diagnostics: DiagnosticPayload[] = [];
