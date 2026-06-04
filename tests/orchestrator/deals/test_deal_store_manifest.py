@@ -86,6 +86,59 @@ def redirected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+def test_save_deal_strips_all_non_canonical_keys_from_dirty_manifest(
+    redirected: Path,
+) -> None:
+    """M1 regression (sdpm-5): _update_manifest_on_save must rebuild from scratch, not just
+    pop three transitional keys.
+
+    Seeds manifest.json with all six canonical fields plus extra stale keys:
+    current_version, versions (old-style versioning keys), studio_current_version,
+    studio_versions, solver_presets_library (all transitional), and an arbitrary extra
+    key legacy_extra. Calls save_deal and asserts the resulting manifest has EXACTLY the
+    six canonical keys.
+    """
+    deal_id = "deal_manifest_dirty_regression"
+    deal_path = redirected / deal_id
+    deal_path.mkdir(parents=True, exist_ok=True)
+
+    dirty_manifest = {
+        "deal_id": deal_id,
+        "deal_name": "old-name",
+        "asset_class": "RMBS",
+        "schema_version_pin": "0.0.1",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        # old-style versioning keys — NOT in _TRANSITIONAL_MANIFEST_KEYS, so currently survive
+        "current_version": 3,
+        "versions": [{"version": 3, "created_at": "2026-01-01T00:00:00+00:00"}],
+        # transitional studio keys
+        "studio_current_version": 2,
+        "studio_versions": [{"version": 2, "created_at": "2026-01-01T00:00:00+00:00"}],
+        "solver_presets_library": {"preset_a": {}},
+        # arbitrary extra key
+        "legacy_extra": "do-not-persist",
+    }
+    (deal_path / "manifest.json").write_text(
+        json.dumps(dirty_manifest, indent=2), encoding="utf-8"
+    )
+
+    deal = DealDefinition.model_validate(_build_deal_payload(deal_name="updated-deal", coupon=6.0))
+    deal_store.save_deal(deal_id, deal)
+
+    manifest = json.loads((deal_path / "manifest.json").read_text(encoding="utf-8"))
+    actual_keys = set(manifest.keys())
+
+    assert actual_keys == _CANONICAL_MANIFEST_KEYS, (
+        f"After save_deal on dirty manifest, manifest keys are not exactly the canonical set. "
+        f"Extra: {actual_keys - _CANONICAL_MANIFEST_KEYS}; "
+        f"Missing: {_CANONICAL_MANIFEST_KEYS - actual_keys}"
+    )
+    # created_at and asset_class should be preserved from the prior manifest
+    assert manifest["created_at"] == dirty_manifest["created_at"]
+    assert manifest["asset_class"] == dirty_manifest["asset_class"]
+
+
 def test_manifest_strictly_excludes_transitional_studio_keys(
     redirected: Path,
 ) -> None:
