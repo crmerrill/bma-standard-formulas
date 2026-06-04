@@ -11,16 +11,18 @@ and every fixture in `tests/fixtures/` as one of:
 These tests assert the structural shape of STATUS.md so a future audit-on-PR
 guard can detect drift between the document and the actual fixture set.
 
-The tests fail until `tests/fixtures/STATUS.md` is authored with the
-required sections and references.
+The canonical source of truth for every prospectus in the corpus is
+`docs/architecture/prospectus_inventory.md`, parsed by
+`scripts/parse_prospectus_inventory.py`.
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
+
+from scripts.parse_prospectus_inventory import load_inventory
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STATUS_PATH = REPO_ROOT / "tests" / "fixtures" / "STATUS.md"
@@ -74,83 +76,6 @@ FNR_FIXTURE_TEST_FILES: list[str] = [
 ]
 
 _TIER_LABELS = ["(i) STRUCTURAL", "(ii) QUANTITATIVE GOLDEN", "(iii) RESEARCH-ONLY"]
-
-# NOTE — issuer-family inventory, NOT a source of truth.
-#
-# _PROSPECTUS_PATTERNS is a heuristic issuer-family regex inventory: each
-# entry matches prospectus names within a *known* issuer family.  It is NOT
-# a source of truth for every prospectus in the corpus — it is a drift guard
-# whose false-negative surface grows as new issuer families are added.
-#
-# Known limitations:
-#
-#   (a) Issuer-family inventory vs. source-of-truth: patterns cover only the
-#       families explicitly enumerated below.  New issuer families (e.g.,
-#       Hertz Vehicle Financing, BMW Vehicle Owner Trust, vehicle leasing
-#       trusts) will NOT be detected until a corresponding pattern is added
-#       here.  The guard is therefore PARTIALLY closed for forward-drift
-#       protection.
-#
-#   (b) New issuer-family additions require explicit pattern updates: there
-#       is no automatic detection of a family that does not match an existing
-#       pattern.  CI will silently miss additions from unknown issuers (Hertz,
-#       BMW, etc.) until this list is extended.
-#
-#   (c) Names split across line breaks or with internal markdown formatting
-#       are not detected.  Single-line patterns cannot match a prospectus
-#       name that is wrapped onto two lines in the design doc or that has
-#       inline markup inserted mid-name (e.g., "**Toyota** Auto Receivables
-#       2024-A").
-#
-# Long-term fix: replace this list with a maintained structured inventory at
-# docs/architecture/prospectus_inventory.md (see ## Follow-on tickets in
-# tests/fixtures/STATUS.md).
-#
-# One pattern per issuer family; each match yields exactly the name token
-# that must appear verbatim in STATUS.md.  Adding a new prospectus to
-# waterfall_ir_design.md without updating STATUS.md will be caught by
-# test_status_md_research_only_drift_against_waterfall_design — but only if
-# the issuer family is already enumerated below.
-_PROSPECTUS_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"FNR \d{4}-\d+"),
-    re.compile(r"FNMA \d{4}-\w+"),
-    re.compile(r"CAS \d{4}-\w+"),
-    re.compile(r"Ginnie Mae \d{4}-\d+"),
-    re.compile(r"Freddie Mac REMIC"),
-    re.compile(r"JPMMT \d{4}"),
-    re.compile(r"Verus \d{4}-\d+"),
-    re.compile(r"Ford Credit Auto Owner Trust \d{4}-\w+"),
-    re.compile(r"Toyota Auto Receivables \d{4}-\w+"),
-    re.compile(r"Toyota Lexus Owner Trust \d{4}-\w+"),
-    re.compile(r"Santander Drive \d{4}-\d+"),
-    re.compile(r"Westlake \d{4}-\d+"),
-    re.compile(r"Capital One COMET"),
-    re.compile(r"Chase Issuance Trust"),
-    re.compile(r"Citibank Credit Card Issuance Trust"),
-    re.compile(r"Discover Card Execution Note Trust"),
-    re.compile(r"American Express Credit Account Master Trust"),
-]
-
-
-def _parse_waterfall_prospectuses(path: Path) -> set[str]:
-    """Extract prospectus names from waterfall_ir_design.md via issuer-prefix patterns.
-
-    Scans the full text of the design doc with each pattern in _PROSPECTUS_PATTERNS
-    and returns the union of all matches as a deduplicated set.  The same name may
-    appear dozens of times in the doc (section headers, prose, tables); deduplication
-    ensures the assertion loop in the drift test is clean.
-
-    Heuristic: one compiled regex per known SF/RMBS/ABS issuer family, each pattern
-    anchored to the issuer prefix and capturing the adjacent identifier token.  This
-    is intentionally liberal — false positives (e.g. internal variable names) are not
-    a practical risk in a design doc.  False negatives (new issuers not yet in
-    _PROSPECTUS_PATTERNS) are the failure mode this test guards against over time.
-    """
-    text = path.read_text(encoding="utf-8")
-    found: set[str] = set()
-    for pattern in _PROSPECTUS_PATTERNS:
-        found.update(pattern.findall(text))
-    return found
 
 
 @pytest.fixture(scope="module")
@@ -337,105 +262,31 @@ def test_status_md_pins_fnr_2006_018_as_quantitative_golden(status_md: str) -> N
 def test_status_md_research_only_drift_against_waterfall_design(
     status_md: str,
 ) -> None:
-    """Every prospectus name extracted from waterfall_ir_design.md must appear
-    somewhere in STATUS.md.
+    """Every inventory entry that cites waterfall_ir_design.md as a source
+    must appear somewhere in STATUS.md.
 
-    Uses _parse_waterfall_prospectuses() to scan the design doc dynamically so
-    that adding a new prospectus there without updating STATUS.md will fail CI,
-    not just the hardcoded REQUIRED_RESEARCH_ONLY_NAMES list.
+    Uses the structured inventory instead of heuristic issuer-family regex
+    patterns, eliminating false-negative risk from unknown issuer families.
     """
-    candidates = _parse_waterfall_prospectuses(WATERFALL_DESIGN_PATH)
-    assert candidates, (
-        "No prospectus candidates extracted from waterfall_ir_design.md — "
-        "_PROSPECTUS_PATTERNS may be broken or the design doc was moved."
+    inventory = load_inventory()
+    waterfall_entries = [
+        e
+        for e in inventory
+        if any("waterfall_ir_design" in sd for sd in e.source_docs)
+    ]
+    assert waterfall_entries, (
+        "No inventory entries cite waterfall_ir_design.md — "
+        "the inventory may be incomplete."
     )
-    missing = sorted(name for name in candidates if name not in status_md)
+    missing = sorted(
+        e.display_name
+        for e in waterfall_entries
+        if e.display_name not in status_md
+    )
     assert not missing, (
-        f"These prospectus names appear in waterfall_ir_design.md but are "
+        f"These inventory entries cite waterfall_ir_design.md but are "
         f"absent from STATUS.md: {missing}. Add them to STATUS.md under the "
         f"correct tier (fixture table for (i)/(ii); Research-only table for (iii))."
-    )
-
-
-def test_prospectus_patterns_documents_known_limitations() -> None:
-    """_PROSPECTUS_PATTERNS must have a comment block documenting its three
-    known limitations so future maintainers understand the heuristic's scope.
-
-    The comment must cover:
-      (a) it is an issuer-family inventory, NOT a source of truth;
-      (b) new issuer families (e.g., Hertz, BMW, vehicle leasing trusts)
-          require explicit pattern additions;
-      (c) names split across line breaks or with internal markdown formatting
-          are not detected.
-    """
-    source = Path(__file__).read_text(encoding="utf-8")
-    lines = source.splitlines()
-    # Locate the declaration line (not usages inside the list or function calls).
-    decl_indices = [
-        i
-        for i, line in enumerate(lines)
-        if "_PROSPECTUS_PATTERNS:" in line and "list[" in line
-    ]
-    assert decl_indices, (
-        "_PROSPECTUS_PATTERNS declaration not found in source — "
-        "the variable name or type annotation may have changed."
-    )
-    decl_line = decl_indices[0]
-    # Inspect the 40 lines immediately preceding the declaration for documentation.
-    # The comment block is intentionally verbose (~35 lines); a 40-line window
-    # ensures the full block is captured even as it grows slightly.
-    window_start = max(0, decl_line - 40)
-    window = "\n".join(lines[window_start:decl_line])
-
-    assert "issuer-family inventory" in window, (
-        "_PROSPECTUS_PATTERNS must have a preceding comment stating it is an "
-        "'issuer-family inventory' (not a source of truth)."
-    )
-    assert (
-        "not a source of truth" in window.lower()
-        or "not the source of truth" in window.lower()
-    ), "_PROSPECTUS_PATTERNS comment must state it is NOT a source of truth."
-    assert (
-        "Hertz" in window
-        or "BMW" in window
-        or "vehicle leasing" in window.lower()
-    ), (
-        "_PROSPECTUS_PATTERNS comment must name example new issuer families "
-        "(e.g., Hertz, BMW, vehicle leasing trusts) that require pattern additions."
-    )
-    assert (
-        "line break" in window.lower()
-        or "line-break" in window.lower()
-        or "wrapped" in window.lower()
-        or "split across" in window.lower()
-    ), (
-        "_PROSPECTUS_PATTERNS comment must document that names split across "
-        "line breaks or with internal markdown formatting are not detected."
-    )
-
-
-def test_status_md_references_future_inventory_followup(status_md: str) -> None:
-    """STATUS.md must have a '## Follow-on tickets' section that names the
-    _PROSPECTUS_PATTERNS limitation and a future structured-inventory artifact."""
-    assert "## Follow-on tickets" in status_md, (
-        "STATUS.md must have a '## Follow-on tickets' section naming the "
-        "_PROSPECTUS_PATTERNS limitation and the future prospectus_inventory work."
-    )
-    followon_idx = status_md.find("## Follow-on tickets")
-    followon_section = status_md[followon_idx:]
-    assert (
-        "prospectus_inventory" in followon_section
-        or "prospectus inventory" in followon_section.lower()
-    ), (
-        "The '## Follow-on tickets' section must reference a future structured "
-        "prospectus inventory artifact (e.g., docs/architecture/prospectus_inventory.md)."
-    )
-    assert (
-        "_PROSPECTUS_PATTERNS" in followon_section
-        or "PROSPECTUS_PATTERNS" in followon_section
-    ), (
-        "The '## Follow-on tickets' section must name _PROSPECTUS_PATTERNS as "
-        "the heuristic to be replaced."
     )
 
 
@@ -477,11 +328,8 @@ def test_each_fixture_directory_appears_in_exactly_one_tier_row(
 
 
 # ---------------------------------------------------------------------------
-# Inventory-driven tests (T1 — structured source-of-truth artifact)
+# Inventory-driven tests (structured source-of-truth artifact)
 # ---------------------------------------------------------------------------
-# These tests reference `scripts.parse_prospectus_inventory` and the
-# inventory file at `docs/architecture/prospectus_inventory.md`.  They are
-# expected to FAIL until the inventory + parser are built (strict TDD).
 
 _TIER_TO_STATUS_LABEL = {
     "structural": "(i) STRUCTURAL",
@@ -521,8 +369,6 @@ def test_inventory_covers_all_waterfall_design_references() -> None:
     Uses structural table parsing (full row text), not heuristic
     issuer-family regex patterns.
     """
-    from scripts.parse_prospectus_inventory import load_inventory
-
     inventory = load_inventory()
     display_names = {e.display_name for e in inventory}
 
@@ -549,8 +395,6 @@ def test_inventory_covers_all_status_md_research_only_entries(
 ) -> None:
     """Every research-only deal name in STATUS.md must have a matching
     inventory entry with tier=research_only."""
-    from scripts.parse_prospectus_inventory import load_inventory
-
     inventory = load_inventory()
     research_ids = {
         e.display_name for e in inventory if e.tier == "research_only"
@@ -567,8 +411,6 @@ def test_inventory_covers_all_status_md_research_only_entries(
 def test_status_md_classifications_match_inventory(status_md: str) -> None:
     """For each inventory entry with a non-null fixture_dir, STATUS.md must
     classify it under the same tier label."""
-    from scripts.parse_prospectus_inventory import load_inventory
-
     inventory = load_inventory()
     errors: list[str] = []
     for entry in inventory:
@@ -608,8 +450,6 @@ def test_status_md_classifications_match_inventory(status_md: str) -> None:
 def test_each_fixture_directory_has_inventory_entry() -> None:
     """Every fixture directory with deal_definition.py must have a
     matching inventory entry (fixture_dir column)."""
-    from scripts.parse_prospectus_inventory import load_inventory
-
     fixtures_dir = REPO_ROOT / "tests" / "fixtures"
     fixture_dirs = sorted(
         d.name
