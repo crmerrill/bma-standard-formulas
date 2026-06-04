@@ -21,6 +21,10 @@ export function runValidators(deal: unknown): DiagnosticPayload[] {
   return diagnostics;
 }
 
-self.onmessage = (e: MessageEvent<{ deal: unknown }>) => {
-  self.postMessage({ diagnostics: runValidators(e.data.deal) });
+self.onmessage = (e: MessageEvent<{ deal: unknown; requestId: number; sessionId: string }>) => {
+  self.postMessage({
+    diagnostics: runValidators(e.data.deal),
+    requestId: e.data.requestId,
+    sessionId: e.data.sessionId,
+  });
 };
