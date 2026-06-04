@@ -44,6 +44,8 @@ export function registerDiagnosticValidator(
           `new: severity=${desc.severity}, pathSchema=${desc.pathSchema}, owner=${desc.owner})`,
       );
     }
+    // Metadata matches — true no-op: return original descriptor without overwriting.
+    return existing;
   }
   REGISTRY.set(desc.code, desc);
   return desc;
