@@ -80,7 +80,7 @@ def parse_diagnostic_catalog(path: Path | str | None = None) -> list[CatalogReco
         FileNotFoundError: If the catalog file does not exist.
     """
     catalog_path = Path(path) if path is not None else DEFAULT_CATALOG_PATH
-    text = catalog_path.read_text()
+    text = catalog_path.read_text(encoding="utf-8")
     lines = text.splitlines()
 
     # Locate the header row by matching normalized cell values.
@@ -101,10 +101,22 @@ def parse_diagnostic_catalog(path: Path | str | None = None) -> list[CatalogReco
 
     # Validate the separator row immediately after the header.
     sep_idx = header_idx + 1
-    if sep_idx >= len(lines) or not re.match(r"\s*\|[\s\-|]+\|\s*$", lines[sep_idx]):
+    if sep_idx >= len(lines):
+        raise MalformedCatalogError(
+            f"Expected a separator row after the header at line {header_idx + 1} "
+            f"in {catalog_path}, but the file ended."
+        )
+    sep_line = lines[sep_idx]
+    if not re.match(r"\s*\|[\s\-|]+\|\s*$", sep_line):
         raise MalformedCatalogError(
             f"Expected a separator row (e.g. '| --- | ...' ) at line {sep_idx + 1} "
-            f"in {catalog_path}, but got: {lines[sep_idx]!r}"
+            f"in {catalog_path}, but got: {sep_line!r}"
+        )
+    separator_cells = _split_row(sep_line)
+    if len(separator_cells) != len(EXPECTED_HEADERS):
+        raise MalformedCatalogError(
+            f"Separator row at line {sep_idx + 1} has {len(separator_cells)} column(s), "
+            f"expected {len(EXPECTED_HEADERS)}: {sep_line!r}"
         )
 
     records: list[CatalogRecord] = []
