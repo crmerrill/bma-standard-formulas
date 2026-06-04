@@ -45,11 +45,33 @@ jobs:
       - name: Check vendored field_order.json parity
         run: diff -q src/bma_standard_formulas/deals/schemas/field_order.json src/bma_cfengine_app/ui/src/features/deals/field_order.json
 
-      - name: Diagnostic catalog parity check
-        run: python -m bma_standard_formulas.diagnostics.check
-
       - name: Run tests
         run: python -m pytest tests/ -v
+
+  diagnostic-check:
+    runs-on: ubuntu-latest
+    name: diagnostic-check (catalog parity)
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history required so that 'git diff HEAD~1 HEAD' can compute
+          # which files changed in the current commit (AC 5 same-commit enforcement).
+          # Without this, GitHub Actions' default shallow clone leaves HEAD~1
+          # unavailable and the check would silently skip or fail loudly with a
+          # SHALLOW-CLONE error.
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Diagnostic catalog parity check
+        run: python -m bma_standard_formulas.diagnostics.check
 
   slow-bench:
     runs-on: ubuntu-latest

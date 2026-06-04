@@ -55,7 +55,11 @@ _DEFAULT_TS_DIR = (
     / "validation"
 )
 _DEFAULT_TS_FILES: list[Path] = (
-    [p for p in sorted(_DEFAULT_TS_DIR.glob("*.ts")) if not p.name.endswith(".test.ts")]
+    [
+        p
+        for p in sorted(_DEFAULT_TS_DIR.rglob("*.ts"))
+        if not p.name.endswith(".test.ts") and not p.name.endswith(".spec.ts")
+    ]
     if _DEFAULT_TS_DIR.exists()
     else []
 )
@@ -291,7 +295,22 @@ def check_same_commit_catalog_update(
             check=True,
         )
     except subprocess.CalledProcessError:
-        # No parent commit — first commit on branch; skip this check.
+        # HEAD~1 is unavailable.  Distinguish two cases:
+        #   (a) Shallow clone — .git/shallow marker exists.  GitHub Actions'
+        #       default checkout (fetch-depth: 1) creates this file.  We must
+        #       fail loudly so the CI operator knows to set fetch-depth: 0.
+        #   (b) First commit on the branch — no shallow marker; parent simply
+        #       does not exist yet.  Skip without error.
+        shallow_file = git_dir / ".git" / "shallow"
+        if shallow_file.exists():
+            return [
+                "SHALLOW-CLONE: 'git diff HEAD~1 HEAD' failed because this is a "
+                "shallow git checkout (.git/shallow exists). Set fetch-depth: 0 "
+                "(or fetch-depth: 2 as a minimum) on the actions/checkout step in "
+                "the CI diagnostic-check job to enable same-commit catalog "
+                "enforcement (AC 5)."
+            ]
+        # First commit on branch — no parent exists; enforcement deferred.
         return []
 
     changed = set(proc.stdout.strip().splitlines())
@@ -425,19 +444,55 @@ def main(argv: list[str] | None = None) -> int:
                     "but no matching TypeScript registerDiagnosticValidator call was found."
                 )
 
-    # AC 4: Python and TS must agree on severity and path_schema for shared codes.
+    # AC 4a: Catalog is the source of truth — compare against Python decorator metadata.
+    for code, py_diag in py_diagnostics.items():
+        if code not in catalog:
+            continue  # already reported under AC-2
+        cat = catalog[code]
+        cat_sev = cat.get("severity", "")
+        cat_path = cat.get("path_schema", "")
+        if py_diag.severity and cat_sev and py_diag.severity != cat_sev:
+            errors.append(
+                f"[AC-4] Catalog/Python severity mismatch for '{code}': "
+                f"catalog severity='{cat_sev}' vs Python severity='{py_diag.severity}'."
+            )
+        if py_diag.path_schema and cat_path and py_diag.path_schema != cat_path:
+            errors.append(
+                f"[AC-4] Catalog/Python path_schema mismatch for '{code}': "
+                f"catalog path_schema='{cat_path}' vs Python path_schema='{py_diag.path_schema}'."
+            )
+
+    # AC 4b: Catalog is the source of truth — compare against TS worker metadata.
+    for code, ts_diag in ts_diagnostics.items():
+        if code not in catalog:
+            continue  # worker-only codes absent from catalog are handled by AC-3
+        cat = catalog[code]
+        cat_sev = cat.get("severity", "")
+        cat_path = cat.get("path_schema", "")
+        if ts_diag.severity and cat_sev and ts_diag.severity != cat_sev:
+            errors.append(
+                f"[AC-4] Catalog/TS severity mismatch for '{code}': "
+                f"catalog severity='{cat_sev}' vs TS severity='{ts_diag.severity}'."
+            )
+        if ts_diag.path_schema and cat_path and ts_diag.path_schema != cat_path:
+            errors.append(
+                f"[AC-4] Catalog/TS path_schema mismatch for '{code}': "
+                f"catalog path_schema='{cat_path}' vs TS path_schema='{ts_diag.path_schema}'."
+            )
+
+    # AC 4c: Python and TS must also agree with each other for shared codes.
     for code, ts_diag in ts_diagnostics.items():
         if code not in py_diagnostics:
             continue
         py_diag = py_diagnostics[code]
         if py_diag.severity != ts_diag.severity:
             errors.append(
-                f"[AC-4] Metadata divergence for '{code}': "
+                f"[AC-4] Python/TS severity divergence for '{code}': "
                 f"Python severity='{py_diag.severity}' vs TS severity='{ts_diag.severity}'."
             )
         if py_diag.path_schema != ts_diag.path_schema:
             errors.append(
-                f"[AC-4] Metadata divergence for '{code}': "
+                f"[AC-4] Python/TS path_schema divergence for '{code}': "
                 f"Python path_schema='{py_diag.path_schema}' "
                 f"vs TS path_schema='{ts_diag.path_schema}'."
             )
