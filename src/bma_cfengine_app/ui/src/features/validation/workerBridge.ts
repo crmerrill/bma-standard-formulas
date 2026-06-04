@@ -11,6 +11,15 @@
  * validated — not whatever session happens to be active at response time.
  * A per-session requestId counter ensures stale responses (requestId <
  * latestRequestId[sessionId]) are silently dropped.
+ *
+ * M2 fix (ve-1 R1 pass-2): before applying diagnostics the bridge checks that
+ * the session still exists in the store; if not, the response is dropped. This
+ * prevents setDiagnostics from recreating a malformed entry via spread of
+ * undefined when a session is deleted between postMessage and onmessage.
+ *
+ * m1 fix (ve-1 R1 pass-2): the store subscription now detects session
+ * deletions and removes the corresponding latestRequestId entry so the map
+ * is bounded to live sessions only.
  */
 
 import type { DiagnosticPayload } from "../deals/store/diagnostics-types";
@@ -42,7 +51,11 @@ type WorkerResponse = {
   sessionId: string;
 };
 
-export function createWorkerBridge(useStore: StoreApi): { unsubscribe: () => void } {
+export function createWorkerBridge(useStore: StoreApi): {
+  unsubscribe: () => void;
+  /** Test-only: snapshot of the internal per-session request-id map. */
+  _getLatestRequestIdForTesting: () => Record<string, number>;
+} {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let worker: Worker | null = null;
   const latestRequestId: Record<string, number> = {};
@@ -57,6 +70,9 @@ export function createWorkerBridge(useStore: StoreApi): { unsubscribe: () => voi
         const { diagnostics, requestId, sessionId } = e.data;
         if (requestId < (latestRequestId[sessionId] ?? 0)) return;
         const state = useStore.getState();
+        // M2 fix: drop response if the session was deleted while the worker
+        // was running; avoids recreating a malformed entry in the store.
+        if (!state.sessions[sessionId]) return;
         state.setDiagnostics(sessionId, diagnostics);
       };
     }
@@ -64,6 +80,13 @@ export function createWorkerBridge(useStore: StoreApi): { unsubscribe: () => voi
   }
 
   const unsubscribe = useStore.subscribe((state, prev) => {
+    // m1 fix: clean up latestRequestId for any session that was removed.
+    for (const key of Object.keys(latestRequestId)) {
+      if (!(key in state.sessions)) {
+        delete latestRequestId[key];
+      }
+    }
+
     if (state.dispatch_revision === prev.dispatch_revision) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
@@ -89,5 +112,6 @@ export function createWorkerBridge(useStore: StoreApi): { unsubscribe: () => voi
         worker = null;
       }
     },
+    _getLatestRequestIdForTesting: () => ({ ...latestRequestId }),
   };
 }
