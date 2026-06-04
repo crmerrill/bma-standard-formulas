@@ -76,13 +76,27 @@ This is acceptable per the measurement — the worst case is one wasted run per 
 
 ## Performance regression test
 
-The benchmark at `tests/performance/live_preview/test_live_preview_budget.py` is the regression-testable budget per the plan's deliverable list. It is marked `@pytest.mark.slow` so it does NOT run by default in `pytest tests/`. CI runs it on PR merges to `main` via:
+The benchmark at `tests/performance/live_preview/test_live_preview_budget.py` is the regression-testable budget per the plan's deliverable list. It is marked `@pytest.mark.slow` so it does NOT run by default in `pytest tests/`. CI runs it on every PR/push to `main` via the `slow-bench` job:
 
 ```bash
-pytest -m slow tests/performance/live_preview/
+pytest -m slow tests/performance/ -v --tb=short
 ```
 
-The benchmark currently asserts only that timings are positive (sanity); a future tightening can switch to hard-failing the test if `p50 >= 250 ms` or `p95 >= 600 ms`. For now the measurement is the deliverable; the assertion is informative.
+The `slow-bench` CI job is set to `continue-on-error: true` because GitHub Actions runners have higher variance than dev hardware. The job is informational: a consistent budget failure over multiple runs (or local reproduction) is the authoritative signal for a regression. To make timing failures gate the merge, set `continue-on-error: false` in `.github/workflows/ci.yml`.
+
+The benchmark asserts hard budget failures on `p50 >= 250 ms` or `p95 >= 600 ms`. These assertions are unconditional — the tests are `@pytest.mark.slow` and excluded from the default suite, so they only run when explicitly invoked with `-m slow`.
+
+## Follow-on tickets
+
+The following fixture-scale gaps are unresolved and tracked for Phase 1 closure or Phase 2 spillover. The M13 always-on viability verdict applies only to the measured FNR 2006-018 Group 1 scale; these gaps represent the next measurement tier before Phase 4 `live-preview-cashflow` acceptance.
+
+1. **200-rule synthetic auto ABS** — no large-rule-count auto ABS fixture exists in the repo. A 200-rule synthetic fixture should be authored (e.g., for a Phase 4 stress-test corpus) and added to `tests/performance/live_preview/` with the same p50/p95 budget assertions.
+
+2. **Multi-group RMBS combined deal** — the FNR 2006-018 combined Group 1 + Group 2 deal runs in `test_fnr_2006_018_combined.py` but uses a multi-group input constructor that isn't factored for the benchmark loop. A follow-on should extend the benchmark to the combined deal once the multi-group input helper (`GroupedCollateralInput` path) is available for direct benchmark invocation.
+
+3. **CC master trust with PFA/IFA** — no real CC master-trust fixture exists (`cc_series_test` is a synthetic minimal fixture). Capital One COMET and Chase Issuance Trust are RAG corpus only (per `tests/fixtures/STATUS.md`); no measurement run is possible until a CC master-trust deal builder is authored with PFA/IFA waterfall rules.
+
+These items do not block Phase 1 closure (the M13 verdict stands for the measured scale), but they should be triaged and assigned before the Phase 4 `live-preview-cashflow` ticket opens.
 
 ## Decision-gate (M13) summary
 

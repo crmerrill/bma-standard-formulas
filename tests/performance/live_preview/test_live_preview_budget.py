@@ -117,9 +117,16 @@ def test_live_preview_budget_fnr_2006_018_group_1_baseline() -> None:
     run_input = _deal_input_from_repline(100.0, n_periods=360)
     stats = _measure_run(deal, run_input)
     _print_stats("FNR 2006-018 Group 1 (100 PSA, 360 periods)", stats)
-    # Sanity: timings are positive.
     assert stats["p50_ms"] > 0
     assert stats["p95_ms"] >= stats["p50_ms"]
+    assert stats["p50_ms"] < TARGET_P50_MS, (
+        f"Budget regression: p50 {stats['p50_ms']:.2f} ms >= {TARGET_P50_MS:.0f} ms target. "
+        "See docs/architecture/tickets/phase1/live-preview-perf-spike.STATUS.md."
+    )
+    assert stats["p95_ms"] < TARGET_P95_MS, (
+        f"Budget regression: p95 {stats['p95_ms']:.2f} ms >= {TARGET_P95_MS:.0f} ms target. "
+        "See docs/architecture/tickets/phase1/live-preview-perf-spike.STATUS.md."
+    )
 
 
 @pytest.mark.slow
@@ -131,6 +138,14 @@ def test_live_preview_budget_fnr_2006_018_group_1_zero_psa() -> None:
     _print_stats("FNR 2006-018 Group 1 (0 PSA, 360 periods)", stats)
     assert stats["p50_ms"] > 0
     assert stats["p95_ms"] >= stats["p50_ms"]
+    assert stats["p50_ms"] < TARGET_P50_MS, (
+        f"Budget regression: p50 {stats['p50_ms']:.2f} ms >= {TARGET_P50_MS:.0f} ms target. "
+        "See docs/architecture/tickets/phase1/live-preview-perf-spike.STATUS.md."
+    )
+    assert stats["p95_ms"] < TARGET_P95_MS, (
+        f"Budget regression: p95 {stats['p95_ms']:.2f} ms >= {TARGET_P95_MS:.0f} ms target. "
+        "See docs/architecture/tickets/phase1/live-preview-perf-spike.STATUS.md."
+    )
 
 
 @pytest.mark.slow
@@ -142,3 +157,11 @@ def test_live_preview_budget_fnr_2006_018_group_1_300_psa() -> None:
     _print_stats("FNR 2006-018 Group 1 (300 PSA, 360 periods)", stats)
     assert stats["p50_ms"] > 0
     assert stats["p95_ms"] >= stats["p50_ms"]
+    assert stats["p50_ms"] < TARGET_P50_MS, (
+        f"Budget regression: p50 {stats['p50_ms']:.2f} ms >= {TARGET_P50_MS:.0f} ms target. "
+        "See docs/architecture/tickets/phase1/live-preview-perf-spike.STATUS.md."
+    )
+    assert stats["p95_ms"] < TARGET_P95_MS, (
+        f"Budget regression: p95 {stats['p95_ms']:.2f} ms >= {TARGET_P95_MS:.0f} ms target. "
+        "See docs/architecture/tickets/phase1/live-preview-perf-spike.STATUS.md."
+    )

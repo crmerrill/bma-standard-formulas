@@ -51,6 +51,34 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -v
 
+  slow-bench:
+    runs-on: ubuntu-latest
+    # Run benchmarks on PRs and main-branch pushes but do NOT gate the merge
+    # on timing — CI hardware variance can cause spurious failures.  The job
+    # is informational for regressions; a manual re-run or local measurement
+    # is the authoritative gate.  If the budget assertions start flapping
+    # consistently, set `continue-on-error: false` here.
+    continue-on-error: true
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    name: slow-bench (performance, ${{ matrix.python-version }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run slow performance benchmarks
+        run: python -m pytest -m slow tests/performance/ -v --tb=short
+
   ui-test:
     runs-on: ubuntu-latest
     name: ui-test (vitest)
