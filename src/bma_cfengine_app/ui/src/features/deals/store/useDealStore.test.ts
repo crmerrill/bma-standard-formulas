@@ -223,6 +223,26 @@ describe("ve-4 R1 M1 — source map lifecycle", () => {
     expect(diagsAfter.find((d) => d.code === "E002")?.severity).toBe("warning");
   });
 
+  test("test_getDiagnosticSourceMapForTesting_returns_readonly_snapshot", () => {
+    const sessionId = "main";
+
+    // Seed the internal map with a known backend entry.
+    useDealStore.getState().mergeDiagnostics(sessionId, "backend", [
+      { code: "E_SNAP", severity: "error", path: "$.bonds", message: "seed", payload: {} },
+    ]);
+
+    // First call — capture the snapshot and mutate it.
+    const result1 = getDiagnosticSourceMapForTesting();
+    result1.set("hacked", new Map());
+
+    // Second call — the internal map must not contain the hacked entry.
+    const result2 = getDiagnosticSourceMapForTesting();
+    expect(result2.has("hacked")).toBe(false);
+
+    // Sanity: the real session entry is still intact.
+    expect(result2.has(sessionId)).toBe(true);
+  });
+
   test("test_store_reset_clears_source_map", () => {
     const sessionId = "main";
 
