@@ -17,6 +17,7 @@ required sections and references.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,39 @@ FNR_FIXTURE_TEST_FILES: list[str] = [
 ]
 
 _TIER_LABELS = ["(i) STRUCTURAL", "(ii) QUANTITATIVE GOLDEN", "(iii) RESEARCH-ONLY"]
+
+# Compiled regex patterns matching known SF/RMBS/ABS issuer prefixes.  One
+# pattern per issuer family; each match yields exactly the name token that
+# must appear verbatim in STATUS.md.  Adding a new prospectus to
+# waterfall_ir_design.md without updating STATUS.md will be caught by
+# test_status_md_research_only_drift_against_waterfall_design.
+_PROSPECTUS_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"FNR \d{4}-\d+"),
+    re.compile(r"FNMA \d{4}-\w+"),
+    re.compile(r"CAS \d{4}-\w+"),
+    re.compile(r"Ginnie Mae \d{4}-\d+"),
+    re.compile(r"Freddie Mac REMIC"),
+    re.compile(r"JPMMT \d{4}"),
+    re.compile(r"Verus \d{4}-\d+"),
+    re.compile(r"Ford Credit Auto Owner Trust \d{4}-\w+"),
+    re.compile(r"Toyota Auto Receivables \d{4}-\w+"),
+    re.compile(r"Toyota Lexus Owner Trust \d{4}-\w+"),
+    re.compile(r"Santander Drive \d{4}-\d+"),
+    re.compile(r"Westlake \d{4}-\d+"),
+    re.compile(r"Capital One COMET"),
+    re.compile(r"Chase Issuance Trust"),
+    re.compile(r"Citibank Credit Card Issuance Trust"),
+    re.compile(r"Discover Card Execution Note Trust"),
+    re.compile(r"American Express Credit Account Master Trust"),
+]
+
+
+def _parse_waterfall_prospectuses(path: Path) -> set[str]:
+    """Extract prospectus names from waterfall_ir_design.md via issuer-prefix patterns.
+
+    NOT YET IMPLEMENTED — stub causes T1 tests to fail with NotImplementedError.
+    """
+    raise NotImplementedError("_parse_waterfall_prospectuses is not yet implemented")
 
 
 @pytest.fixture(scope="module")
@@ -252,4 +286,64 @@ def test_status_md_pins_fnr_2006_018_as_quantitative_golden(status_md: str) -> N
         f"classification row in STATUS.md: {missing_files}. All 6 dedicated "
         f"quantitative test files must be enumerated on (or within 2 lines "
         f"of) the FNR tier row."
+    )
+
+
+def test_status_md_research_only_drift_against_waterfall_design(
+    status_md: str,
+) -> None:
+    """Every prospectus name extracted from waterfall_ir_design.md must appear
+    somewhere in STATUS.md.
+
+    Uses _parse_waterfall_prospectuses() to scan the design doc dynamically so
+    that adding a new prospectus there without updating STATUS.md will fail CI,
+    not just the hardcoded REQUIRED_RESEARCH_ONLY_NAMES list.
+    """
+    candidates = _parse_waterfall_prospectuses(WATERFALL_DESIGN_PATH)
+    assert candidates, (
+        "No prospectus candidates extracted from waterfall_ir_design.md — "
+        "_PROSPECTUS_PATTERNS may be broken or the design doc was moved."
+    )
+    missing = sorted(name for name in candidates if name not in status_md)
+    assert not missing, (
+        f"These prospectus names appear in waterfall_ir_design.md but are "
+        f"absent from STATUS.md: {missing}. Add them to STATUS.md under the "
+        f"correct tier (fixture table for (i)/(ii); Research-only table for (iii))."
+    )
+
+
+def test_each_fixture_directory_appears_in_exactly_one_tier_row(
+    status_md: str,
+) -> None:
+    """Each fixture directory (those containing deal_definition.py) must appear
+    on EXACTLY ONE classification row in STATUS.md — a row that contains both
+    the directory name and a tier label.
+
+    Zero rows → fixture is not classified at all (already caught by
+    test_status_md_classifies_every_existing_fixture, but redundantly enforced
+    here for clarity).  Two or more rows → duplicate or conflicting classification.
+    """
+    fixtures_dir = REPO_ROOT / "tests" / "fixtures"
+    fixture_dirs = [
+        d.name
+        for d in fixtures_dir.iterdir()
+        if d.is_dir() and (d / "deal_definition.py").exists()
+    ]
+    assert fixture_dirs, "No deal_definition.py fixtures found — sanity check failed."
+
+    errors: list[str] = []
+    for name in fixture_dirs:
+        tier_rows = [
+            line
+            for line in status_md.splitlines()
+            if name in line and any(label in line for label in _TIER_LABELS)
+        ]
+        if len(tier_rows) != 1:
+            errors.append(
+                f"'{name}': expected exactly 1 tier-classification row, "
+                f"found {len(tier_rows)}: {tier_rows!r}"
+            )
+    assert not errors, (
+        "Fixture-directory tier-row uniqueness failures:\n"
+        + "\n".join(f"  {e}" for e in errors)
     )
