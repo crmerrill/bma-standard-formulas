@@ -123,10 +123,17 @@ Implements the typed DealAction that applies the consolidation quick-fix on the 
 #### Files affected
 - `src/bma_cfengine_app/ui/src/features/deals/store/actions.ts` — modified; defines the new `CanonicalizeConsolidateRuleRunAction` variant of `DealAction`; extends the exhaustive reducer.
 - `src/bma_cfengine_app/ui/src/features/deals/store/actions.test.ts` — modified; adds reducer tests.
+- `src/bma_cfengine_app/ui/src/features/deals/store/useDealStore.ts` — modified; adds `pending_commit_message: string | null` to `DealSession` state shape; reducer sets the message on this action.
+- `src/bma_cfengine_app/ui/src/features/deals/store/autosave.ts` — modified; reads and clears `pending_commit_message` per-session before posting to commit endpoint; falls back to `"autosave"` when null.
+- `src/bma_cfengine_app/ui/src/features/validation/quickFixRegistry.ts` — modified; registers `canonicalize_consolidate_rule_run` as a `DispatchQuickFix`.
+- `src/bma_standard_formulas/diagnostics/quick_fix_registry.py` — modified; same registration on Python side for parity.
+- `docs/architecture/diagnostic_catalog.md` — modified; adds `STALE_QUICKFIX` row in the same commit (vpc-4 contract).
+- `src/bma_standard_formulas/diagnostics/canonicalization_validators.py` — modified; adds a `@diagnostic_code("STALE_QUICKFIX", ...)` sentinel decorator (no-op function body) so the catalog row passes the vpc-4 same-commit guard.
 
 #### Dependencies
 - `rcf-2-fragmentation-detector`
 - `studio-document-and-store` (R1 M1; specifically sds-1 for `DealAction` / `dispatch(action)` / exhaustive reducer pattern; sds-5 for `dispatch_revision` counter so autosave fires after the consolidation mutation)
+- `validation-engine` ve-5 retroactive fix-pass (QuickFix registry contract — `quick_fix_registry.py` / `quickFixRegistry.ts`)
 
 #### User journeys (1-3)
 1. GIVEN a `RULE_FRAGMENTATION_CONSOLIDATABLE` diagnostic WHEN the user dispatches the `canonicalizeConsolidateRuleRun` quick-fix THEN the store replaces the specified rule run with a single multi-target rule on the active session's working_tree only.
@@ -136,17 +143,38 @@ Implements the typed DealAction that applies the consolidation quick-fix on the 
 #### Acceptance criteria (numbered, testable)
 1. **Action shape pinned (R1 M2)**: `CanonicalizeConsolidateRuleRunAction = { type: 'canonicalizeConsolidateRuleRun'; payload: { start_index: number; end_index: number } }`. Included in the `DealAction` discriminated union; handled by the exhaustive reducer in `actions.ts`; the reducer's never-guard default branch still compile-fails if any future variant is added without a case.
 2. **Active-session-only semantics (R1 M2)**: the reducer mutates ONLY `state.sessions[state.activeSessionId].working_tree.waterfall_rules`. No other session's working_tree is touched. Indices are interpreted against the active session's `waterfall_rules` array.
-3. **Reducer correctness**: replaces rules from `start_index` (inclusive) to `end_index` (inclusive) with a single multi-target rule whose `to_targets` is the concatenation of the per-rule targets, preserving authored order. All other fields on the consolidated rule come from the first replaced rule (which is identical across the run by `is_consolidatable`'s contract).
-4. **Commit message pinned**: the autosave debouncer's next commit (driven by the `dispatch_revision` increment from sds-5) carries the exact message `Canonicalize consolidate rule run [{start_index}..{end_index}]` with literal square brackets and `..`.
-5. **Invalid-range no-op (R1 M2)**: out-of-bounds indices, `start_index >= end_index`, or the current rules at those indices failing `is_consolidatable` produce a no-op + a `STALE_QUICKFIX` warning diagnostic appended to `state.sessions[state.activeSessionId].diagnostics` (severity=warning; path=`deal.waterfall_rules`; message names the stale range). No mutation; no commit attempt.
+3. **Reducer correctness**: replaces rules from `start_index` (inclusive) to `end_index` (inclusive) with a single multi-target rule whose `to_targets` is the concatenation of the per-rule targets, preserving authored order. All other fields on the consolidated rule come from the first replaced rule (which is identical across the run by `is_consolidatable`'s contract). **Rule identity (D1 Mi1)**: the consolidated rule retains the `rule_id` of the first replaced rule to preserve entity identity and minimize diffs.
+4. **Commit message via per-session pending slot (D1 M2 — Option B last-write-wins)**:
+   - `DealSession` state shape gains a new field `pending_commit_message: string | null` (initial value `null`).
+   - The `canonicalizeConsolidateRuleRun` reducer sets `state.sessions[active].pending_commit_message = "Canonicalize consolidate rule run [{start_index}..{end_index}]"` (literal square brackets and `..`) at the same time it mutates `working_tree.waterfall_rules`.
+   - `autosave.ts` reads `pending_commit_message` per-session before each debounced commit POST, sends it as the `message` field, and clears the slot to `null` after the response (success or failure). When `null`, falls back to the existing `"autosave"` default.
+   - **Last-write-wins semantics**: if multiple typed actions dispatch within the debounce window, each reducer overwrites the prior `pending_commit_message`; the autosave commit uses the most recent one. Earlier action labels are intentionally lost (per Phase 1 product decision).
+   - Author remains `studio:autosave` (unchanged from the existing autosave path).
+5. **Invalid-range no-op + STALE_QUICKFIX (R1 M2 + D1 M3)**: out-of-bounds indices, `start_index >= end_index`, or the current rules at those indices failing `is_consolidatable` produce a no-op (no mutation, no commit attempt) and append a `STALE_QUICKFIX` warning diagnostic to `state.sessions[state.activeSessionId].diagnostics`. **Catalog row pinned**: a same-commit row in `docs/architecture/diagnostic_catalog.md` with EXACTLY:
+   - `code = STALE_QUICKFIX`
+   - `severity = warning`
+   - `path schema = deal.waterfall_rules`
+   - `message template = QuickFix could not be applied to range [{start_index}..{end_index}]: {reason}.`
+   - `owner = both`
+   - `quick fix = (none)`
+   - `owning validator file:line = canonicalization_validators.py:<line>` (no-op `@diagnostic_code` sentinel; mirrors the IR_VALIDATION_ERROR / MERGE_CONFLICT pattern). Python decorator + TS registration must agree on severity/path_schema/owner per vpc-4.
 6. **Compile path UNCHANGED (Phase 0 B6)**: the compile-to-IR path remains byte-identical to its sds-3 behavior; canonicalization is opt-in only via this dispatched action. A regression test asserts that `compileToIR(working_tree_before_dispatch)` and `compileToIR(working_tree_before_dispatch_again_with_no_canonicalization)` are byte-identical (no implicit canonicalization at compile time).
+7. **QuickFix registry registration (D1 M1)**: `canonicalize_consolidate_rule_run` is registered in BOTH `src/bma_cfengine_app/ui/src/features/validation/quickFixRegistry.ts` AND `src/bma_standard_formulas/diagnostics/quick_fix_registry.py` (added by ve-5 retroactive fix-pass) as a `DispatchQuickFix` with `actionType: 'canonicalizeConsolidateRuleRun'` (TS) / `action_type: 'canonicalizeConsolidateRuleRun'` (Python) and a user-facing `description: "Consolidate fragmented rules into a single multi-target rule."`. Phase 2 problems-panel calls `getQuickFix(diagnostic.fix.action_id)` and dispatches via the registered descriptor's `actionType`.
 
 #### Test plan
 - `src/bma_cfengine_app/ui/src/features/deals/store/actions.test.ts::test_canonicalize_consolidate_rule_run_replaces_rules_on_active_session` — AC 1, 2, 3
 - `src/bma_cfengine_app/ui/src/features/deals/store/actions.test.ts::test_canonicalize_consolidate_rule_run_does_not_touch_other_sessions` — AC 2
 - `src/bma_cfengine_app/ui/src/features/deals/store/actions.test.ts::test_canonicalize_consolidate_rule_run_increments_dispatch_revision` — AC 4 (asserts the autosave triggers per sds-5)
+- `src/bma_cfengine_app/ui/src/features/deals/store/actions.test.ts::test_canonicalize_consolidate_rule_run_sets_pending_commit_message_on_active_session` — AC 4 (asserts the message slot is set with literal `Canonicalize consolidate rule run [{s}..{e}]`)
+- `src/bma_cfengine_app/ui/src/features/deals/store/actions.test.ts::test_canonicalize_consolidate_rule_run_preserves_first_rule_id` — AC 3 (rule_id retention)
 - `src/bma_cfengine_app/ui/src/features/deals/store/actions.test.ts::test_canonicalize_consolidate_rule_run_invalid_range_is_noop_with_stale_diagnostic` — AC 5
 - `src/bma_cfengine_app/ui/src/features/deals/store/actions.test.ts::test_canonicalize_consolidate_rule_run_preserves_surrounding_rules` — AC 3
+- `src/bma_cfengine_app/ui/src/features/deals/store/autosave.test.ts::test_autosave_consumes_pending_commit_message_and_clears_slot` — AC 4 (autosave path: reads, sends, clears)
+- `src/bma_cfengine_app/ui/src/features/deals/store/autosave.test.ts::test_autosave_falls_back_to_default_message_when_pending_is_null` — AC 4 (default behavior preserved)
+- `src/bma_cfengine_app/ui/src/features/deals/store/autosave.test.ts::test_autosave_last_write_wins_when_two_actions_within_debounce_window` — AC 4 (semantics)
+- `src/bma_cfengine_app/ui/src/features/validation/quickFixRegistry.test.ts::test_canonicalize_consolidate_rule_run_registered_as_dispatch_quick_fix` — AC 7
+- `tests/diagnostics/test_quick_fix_registry.py::test_canonicalize_consolidate_rule_run_registered_as_dispatch_quick_fix` — AC 7 (Python parity)
+- `tests/diagnostics/test_diagnostic_catalog.py::test_stale_quickfix_is_cataloged` — AC 5 (catalog row presence)
 - `src/bma_cfengine_app/ui/src/features/deals/store/compile.test.ts::test_compile_does_not_implicit_canonicalize_pre_dispatch` — AC 6 (regression on Phase 0 B6)
 
 #### Out-of-scope notes
@@ -173,24 +201,27 @@ Implements the `INTERLEAVED_RULES_FACTORABLE` diagnostic as a heuristic info-onl
 2. GIVEN an `INTERLEAVED_RULES_FACTORABLE` diagnostic WHEN the Problems Panel inspects it THEN it renders the message but offers no quick-fix button (the `fix` field is `null`).
 
 #### Acceptance criteria (numbered, testable)
-1. Detects M rules (M >= 2) with shared `(rule_type, source, payment_style)` that are separated by at least one rule whose `to_targets` contains the shared source OR whose `source` aliases via group routing to the shared source (the rcf-1 mutation definition reused for symmetry).
-2. **Catalog row pinned (R1 C2)**: `docs/architecture/diagnostic_catalog.md` gains a row with EXACTLY:
+1. **Algorithm pinned (D1 M2 — group + transitivity)**: group all rules in the waterfall by the tuple `(rule_type, source, payment_style)`. For any group with `len(group) >= 2`, examine the rules whose indices fall between `min(group_indices)` and `max(group_indices)` (exclusive of the group members themselves). If ANY rule in that range mutates the source (per the rcf-1 mutation predicate), emit a single `INTERLEAVED_RULES_FACTORABLE` diagnostic for the entire group (all indices). The group is treated as a whole, not split per-mutator. **Mutation predicate reuse (D1 M1)**: rcf-1 must export `mutates_source(intervening_rule, shared_source) -> bool` (Python: rename `_mutates_source` to public `mutates_source`; TS: add `export` to `mutatesSource`). rcf-4 imports it directly — no duplicated logic.
+2. **Catalog row pinned (R1 C2 + D1 Mi3)**: `docs/architecture/diagnostic_catalog.md` gains a row with EXACTLY:
    - `code = INTERLEAVED_RULES_FACTORABLE`
    - `severity = info`
-   - `path schema = deal.waterfall_rules[*]`
+   - `path schema = deal.waterfall_rules[{indices}]`
    - `message template = Rules at {indices} share (rule_type, source, payment_style) but are interleaved with a source mutation; manual review recommended.`
    - `owner = both`
    - `quick fix = Manual review only; no automatic fix is offered.`
    - `owning validator file:line = canonicalization_validators.py:<line>`
-3. The diagnostic severity is strictly set to `info`.
-4. **Force `fix = null` (R1 C2)**: the diagnostic `fix` field is `null` (Python: `fix=None`; TS: `fix` omitted or explicitly set to `undefined`/`null`). NOT `manual_resolve_*`. This is a heuristic visibility detector, not an actionable QuickFix surface.
+3. The diagnostic severity is strictly set to `info`. **Emitted path format (D1 Mi3)**: `path = f"deal.waterfall_rules[{','.join(map(str, sorted(indices)))}]"` — comma-separated indices in ascending order so the UI can highlight the exact rules.
+4. **Force `fix = null` (R1 C2 + D1 Mi4)**: Python emits `fix=None`; TypeScript omits the `fix` field entirely (matches the existing `structuralValidators.ts` convention for fix-less diagnostics; do NOT use `null` literal). Round-trip JSON serialization treats both as the absence of a quick fix; Phase 2 problems-panel must accept both representations as equivalent.
 5. Python and TS metadata match the catalog row; the vpc-4 CI guard exits 0 post-implementation.
 
 #### Test plan
 - `tests/diagnostics/test_canonicalization_validators.py::test_interleaved_detector_emits_info_diagnostic` — AC 1, 2, 3
 - `tests/diagnostics/test_canonicalization_validators.py::test_interleaved_detector_fix_is_null_never_autofix` — AC 4
+- `tests/diagnostics/test_canonicalization_validators.py::test_interleaved_detector_path_uses_comma_separated_indices` — AC 3 (D1 Mi3 — `deal.waterfall_rules[1,3,5]` shape)
+- `tests/diagnostics/test_canonicalization_validators.py::test_interleaved_detector_groups_transitively_with_internal_mutator` — AC 1 (D1 M2 — A,B,C all share key, mutator between A and C → single group {A,B,C})
+- `tests/diagnostics/test_canonicalization_validators.py::test_interleaved_detector_ignores_rules_without_mutator` — AC 1 (D1 B1 — M=2 rules with shared key but no intervening mutator do NOT emit interleaved; this is rcf-2's territory if consolidatable)
 - `tests/diagnostics/test_canonicalization_validators.py::test_catalog_row_present_for_interleaved_rules_factorable` — AC 2
-- `src/bma_cfengine_app/ui/src/features/validation/canonicalizationValidators.test.ts` — TS parity tests for both detectors (rcf-2 + rcf-4).
+- `src/bma_cfengine_app/ui/src/features/validation/canonicalizationValidators.test.ts` — TS parity tests for both detectors (rcf-2 + rcf-4); includes a parity test confirming TS omits `fix` while Python emits `fix=None` and both round-trip identically through JSON.
 - AC 5 verified by `python -m bma_standard_formulas.diagnostics.check` post-implementation.
 
 #### Out-of-scope notes
@@ -210,7 +241,7 @@ Implements the architectural correctness gate for the canonicalization framework
 #### Dependencies
 - `rcf-3-consolidation-quick-fix-action`
 - `rcf-4-interleaved-info-detector`
-- `corpus-fixture-status` (R1 M3; STATUS.md is the authoritative fixture classification)
+- `corpus-fixture-status` (R1 M3 + retroactive prospectus-inventory build; rcf-5 enumerates fixtures via `scripts.parse_prospectus_inventory.load_inventory()` + tier filter, NOT direct STATUS.md parsing)
 
 #### User journeys (1-3)
 1. GIVEN a fixture classified as STRUCTURAL or QUANTITATIVE GOLDEN in `tests/fixtures/STATUS.md` AND containing at least one fragmented rule run WHEN the canonicalization quick-fix is applied THEN the resulting per-period, per-bond cashflow vectors match the pre-fix vectors within tolerance.
@@ -225,16 +256,16 @@ Implements the architectural correctness gate for the canonicalization framework
    - Same source + intervening rule with `to_targets` containing the source (the rcf-1 mutation case).
    - Same source + intervening group-aliased mutation.
    - Same source + per-target `max_amount_fixed` / `max_amount_expr` / `target_weights` differences (rule-level fields that prevent consolidation).
-2. **STATUS-driven fixture coverage (R1 M3)**: round-trip tests load every deal-builder fixture classified as STRUCTURAL or QUANTITATIVE GOLDEN in `tests/fixtures/STATUS.md`. The minimum required set is `fnr_2006_018`, `ginniemae_2025_203`, `verus_2024_9`, `cc_series_test`, `ford_2024_c`. The test parses STATUS.md (or imports the same parser used by `test_corpus_fixture_status.py`) to enumerate; future fixtures auto-extend coverage. RESEARCH-ONLY entries are excluded.
-3. For each covered fixture: invoke the rcf-2 fragmentation detector to enumerate any consolidatable runs; for each run, apply the `canonicalizeConsolidateRuleRun` quick-fix individually; run `run_deal` on the deal before and after the fix.
-4. **Cashflow equivalence oracle (R1 C3)**: assert per-period, per-bond cashflow vector equality between pre-fix and post-fix runs:
-   - The set of bond IDs in `result.bond_cashflows` is identical.
+2. **Inventory-driven fixture coverage (R1 M3 + D1 M1)**: round-trip tests load fixtures via `scripts.parse_prospectus_inventory.load_inventory()`, then filter to `tier in {"structural", "quantitative_golden"}` AND `fixture_dir is not None`. The minimum required set (verified by D1 audit against the inventory) is `fnr_2006_018`, `ginniemae_2025_203`, `verus_2024_9`, `cc_series_test`, `ford_2024_c`. Future inventory additions auto-extend coverage. RESEARCH-ONLY entries are excluded by tier filter. STATUS.md is NOT parsed directly; `prospectus_inventory.md` is the source of truth.
+3. **Round-trip apply path (D1 M7)**: For each covered fixture: load the deal via the fixture loader pattern (per D1 M9 — use `importlib.import_module(f"tests.fixtures.{fixture.fixture_dir}")` falling back to `.deal_definition`; locate the callable matching `build_*_deal` via `getattr` or `inspect`). Invoke the rcf-2 fragmentation detector to enumerate consolidatable runs. Apply the canonicalization mutation in Python via a dedicated test helper `apply_consolidation_quickfix(deal, start_index, end_index)` defined in `tests/diagnostics/test_canonicalization_roundtrip.py` that performs the same rule-array slice-and-replace as the TS reducer. Run `bma_standard_formulas.deals.runtime.run_deal` on the deal before and after the mutation. (The TS `canonicalizeConsolidateRuleRun` reducer from rcf-3 is not Python-portable; the helper duplicates the slice logic for round-trip oracle testing only and is asserted byte-equivalent to the TS reducer's output via a separate comparison test.)
+4. **Cashflow equivalence oracle (R1 C3 + D1 M4)**: assert per-period, per-bond cashflow vector equality between pre-fix and post-fix runs:
+   - The set of bond IDs (`tranche_id`) in `result.bond_cashflows` is identical (exact equality).
    - The period count is identical.
-   - The cashflow field set on each row is identical.
-   - For each `(bond_id, period)` row, every numeric field satisfies `abs(post - pre) <= 1e-9` AND `rel_error <= 1e-12` (where `rel_error = abs(post - pre) / max(abs(pre), 1.0)`).
+   - For each `(tranche_id, period)` row: `tranche_id` and `period` are exact-equality matches; all `float`-typed fields (e.g., `begin_balance`, `end_balance`, `total_principal`, `interest_paid`, `principal_paid`, `loss`, `writedown`, etc. — every numeric field on the cashflow row) satisfy `abs(post - pre) <= CANONICALIZATION_ABS_TOL` AND `rel_error <= CANONICALIZATION_REL_TOL` where `rel_error = abs(post - pre) / max(abs(pre), 1.0)`.
+   - Tolerance constants (D1 M5): defined at module scope in `tests/diagnostics/test_canonicalization_roundtrip.py` as `CANONICALIZATION_ABS_TOL = 1e-9` and `CANONICALIZATION_REL_TOL = 1e-12`. Tunable via a single Phase 0 amendment if required.
    - Any deviation fails the test with a clear message naming the bond, period, field, and the pre/post values.
 5. **WAL / yield / trustee tie-out are NOT the equivalence oracle** (R1 C3 clarification): canonicalization equivalence is governed by the per-period cashflow vectors above. Each fixture's existing dedicated tests (e.g., `test_fnr_2006_018_decrement_table.py`) continue to govern quantitative tie-out independently.
-6. If a fixture has zero consolidatable runs detected, the round-trip is trivially satisfied for that fixture (skipped with an explanatory message; not failed).
+6. **Skipped-fixture semantics pinned (D1 M6)**: if a fixture has zero consolidatable runs detected, the round-trip test for that fixture invokes `pytest.skip(reason=f"No consolidatable runs in {fixture_dir}; canonicalization round-trip trivially satisfied.")`. NOT `xfail`, NOT silent return. The runner output marks the test as `s` (skipped) with the reason visible.
 
 #### Test plan
 - `tests/diagnostics/test_canonicalization_negative.py::test_negative_different_payment_style_not_consolidatable` — AC 1
@@ -244,9 +275,11 @@ Implements the architectural correctness gate for the canonicalization framework
 - `tests/diagnostics/test_canonicalization_negative.py::test_negative_intervening_to_target_mutation_not_consolidatable` — AC 1
 - `tests/diagnostics/test_canonicalization_negative.py::test_negative_intervening_group_alias_mutation_not_consolidatable` — AC 1
 - `tests/diagnostics/test_canonicalization_negative.py::test_negative_per_target_amount_or_weight_differences_not_consolidatable` — AC 1
-- `tests/diagnostics/test_canonicalization_roundtrip.py::test_roundtrip_loads_fixtures_from_status_md` — AC 2 (asserts STATUS-driven enumeration produces the required minimum set)
-- `tests/diagnostics/test_canonicalization_roundtrip.py::test_roundtrip_semantic_equivalence_per_fixture` — AC 3, 4, 6 (parametrized over discovered fixtures)
+- `tests/diagnostics/test_canonicalization_roundtrip.py::test_roundtrip_loads_fixtures_from_inventory` — AC 2 (asserts inventory-driven enumeration produces the required minimum set; uses `parse_prospectus_inventory.load_inventory()` + tier filter; verifies all 5 named fixtures are discovered)
+- `tests/diagnostics/test_canonicalization_roundtrip.py::test_roundtrip_semantic_equivalence_per_fixture` — AC 3, 4, 6 (parametrized over discovered fixtures via inventory)
+- `tests/diagnostics/test_canonicalization_roundtrip.py::test_apply_consolidation_quickfix_helper_matches_ts_reducer_byte_equivalent` — AC 3 (D1 M7 — proves the Python test helper's slice-and-replace produces byte-equivalent IR to the TS reducer's output, sampled against rcf-3's reducer test fixtures)
 - `tests/diagnostics/test_canonicalization_roundtrip.py::test_roundtrip_quantitative_tie_out_governance_unchanged` — AC 5 (sanity: existing fixture tie-out tests still pass post-fix; no new claim is made about WAL/yield equivalence as the oracle)
+- `tests/diagnostics/test_canonicalization_roundtrip.py::test_roundtrip_skips_fixtures_with_no_consolidatable_runs` — AC 6 (D1 M6 — verifies `pytest.skip` is invoked rather than `xfail` or silent pass)
 
 #### Out-of-scope notes
 Do not add new fixtures in this ticket. The `corpus-fixture-status` ticket handles authoritative classification; `rcf-5` consumes that classification. Do not weaken the equivalence tolerance from `1e-9 abs / 1e-12 rel` without an explicit Phase 0 amendment.
@@ -270,8 +303,12 @@ Once merged, this todo unblocks Phase 2 `problems-panel` (which renders the `RUL
 1. **Worker-hosted, not main-thread**: per ve-1, the canonicalization detectors run in the same Web Worker as the structural validators. `canonicalizationValidators.ts` follows the `structuralValidators.ts` pattern from ve-2 — module-level `registerDiagnosticValidator(...)` call; the worker imports the module at startup so registration happens before `iterDiagnosticValidators()` runs.
 2. **Compile path UNCHANGED**: per Phase 0 B6, compile-to-IR does NOT apply consolidation. Quick-fixes produce typed-action commits via the autosave path (sds-5 dispatch_revision triggers debounced commit). A regression test in `rcf-3` AC 6 enforces this.
 3. **Cashflow equivalence oracle is per-period, per-bond vector equality** (rcf-5 AC 4) at `abs <= 1e-9 / rel <= 1e-12`. WAL / yield / trustee tie-out are NOT the canonicalization oracle.
-4. **STATUS.md drives fixture coverage** (rcf-5 AC 2): the round-trip suite enumerates fixtures from the corpus-fixture-status STATUS.md classification, not a hardcoded list. Future fixtures auto-extend.
+4. **Inventory drives fixture coverage** (rcf-5 AC 2 — D1 fold-back): the round-trip suite enumerates fixtures via `parse_prospectus_inventory.load_inventory()` filtered to `tier in {structural, quantitative_golden}` + non-null `fixture_dir`. NOT direct STATUS.md parsing. Future inventory additions auto-extend.
 5. **Phase 3 deferred**: `SHARED_TRIGGER_BRANCHABLE` is explicitly out-of-scope. Both rcf-1 and rcf-4 carry out-of-scope notes.
-6. **Catalog parity contract honored**: every new diagnostic code (`RULE_FRAGMENTATION_CONSOLIDATABLE`, `INTERLEAVED_RULES_FACTORABLE`) has a same-commit catalog row enforced by the vpc-4 CI guard. Decorator metadata + TS registration metadata + catalog row must agree on severity / path_schema / owner.
+6. **Catalog parity contract honored**: every new diagnostic code (`RULE_FRAGMENTATION_CONSOLIDATABLE`, `INTERLEAVED_RULES_FACTORABLE`, `STALE_QUICKFIX`) has a same-commit catalog row enforced by the vpc-4 CI guard. Decorator metadata + TS registration metadata + catalog row must agree on severity / path_schema / owner.
 7. **Diagnostic payload schema pinned** (rcf-2 AC 3): `payload = { start_index, end_index, rule_ids, source, target_count }`; `fix = { action_id: 'canonicalize_consolidate_rule_run', params: { start_index, end_index } }`. The Problems Panel and ve-4 merge semantics key off `code:path` and consume the QuickFix from `fix`.
-8. **`fix = null` for INTERLEAVED_RULES_FACTORABLE** (rcf-4 AC 4): info-only heuristic detector. Phase 2 Problems Panel renders the message but offers no QuickFix button. NOT a `manual_resolve_*` action.
+8. **`fix = null` for INTERLEAVED_RULES_FACTORABLE** (rcf-4 AC 4 — D1 fold-back clarification): info-only heuristic detector. Phase 2 Problems Panel renders the message but offers no QuickFix button. Python emits `fix=None`; TS omits the `fix` field entirely (do NOT use `null` literal in TS — matches existing `structuralValidators.ts` convention).
+9. **QuickFix registry contract** (rcf-3 AC 7 — D1 fold-back): `canonicalize_consolidate_rule_run` is registered as `DispatchQuickFix` in BOTH `quickFixRegistry.ts` and `quick_fix_registry.py`. Phase 2 problems-panel calls `getQuickFix(action_id)` to determine kind before dispatching.
+10. **Per-session pending commit message slot** (rcf-3 AC 4 — D1 fold-back): typed-action commits surface in git log with semantic messages via `pending_commit_message: string | null` on `DealSession`. Last-write-wins when multiple actions dispatch within the autosave debounce window. `autosave.ts` reads + clears the slot per commit; falls back to `"autosave"` when null.
+11. **Mutation predicate reuse** (rcf-4 AC 1 — D1 fold-back): rcf-1's `mutates_source` (Python) and `mutatesSource` (TS) MUST be exported (rcf-1 currently has them prefixed `_` / unexported). rcf-4 imports directly to avoid duplicated logic and predicate drift.
+12. **rcf-5 Python apply helper** (rcf-5 AC 3 — D1 fold-back): the TS `canonicalizeConsolidateRuleRun` reducer is not Python-portable; rcf-5 implements `apply_consolidation_quickfix(deal, start_index, end_index)` in its own test module to perform the same slice-and-replace for round-trip testing. A separate test asserts the helper produces byte-equivalent output to the TS reducer.
