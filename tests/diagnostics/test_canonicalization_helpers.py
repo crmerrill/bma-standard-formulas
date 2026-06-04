@@ -9,6 +9,7 @@ import pytest
 
 from bma_standard_formulas.diagnostics.canonicalization_helpers import (
     is_consolidatable,
+    mutates_source,
 )
 from bma_standard_formulas.deals.schemas.ir import RuleNode
 
@@ -128,3 +129,13 @@ def test_is_consolidatable_rejects_intervening_group_alias_mutation() -> None:
         to_targets=["CLASS_C"],
     )
     assert is_consolidatable(rule_a, rule_b, [intervening]) is False
+
+
+# ---------------------------------------------------------------------------
+# rcf-4 export contract — mutates_source must be publicly importable
+# ---------------------------------------------------------------------------
+
+
+def test_mutates_source_is_publicly_exported() -> None:
+    """rcf-4 pre-req: mutates_source (no underscore) must be importable and callable."""
+    assert callable(mutates_source)

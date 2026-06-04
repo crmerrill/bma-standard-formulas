@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { isConsolidatable } from "./canonicalizationHelpers";
+import { isConsolidatable, mutatesSource } from "./canonicalizationHelpers";
 import type { RuleNodeIR } from "../deals/ir-types";
 
 // ---------------------------------------------------------------------------
@@ -97,5 +97,13 @@ describe("isConsolidatable", () => {
       to_targets: ["CLASS_C"],
     });
     expect(isConsolidatable(ruleA, ruleB, [intervening])).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // rcf-4 export contract — mutatesSource must be publicly importable
+  // -------------------------------------------------------------------------
+
+  it("mutatesSource is publicly exported and callable (rcf-4 pre-req)", () => {
+    expect(typeof mutatesSource).toBe("function");
   });
 });
