@@ -447,6 +447,63 @@ def test_status_md_classifications_match_inventory(status_md: str) -> None:
     )
 
 
+def test_drift_catches_new_prospectus_in_existing_multi_deal_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Drift detection must individually verify each deal name extracted from
+    a multi-deal table cell, not just confirm that *any* known display_name
+    appears somewhere in the row.
+
+    Currently fails: the existing check passes the CAS row because
+    'CAS 2024-R05' is already in inventory, silently missing 'CAS 2999-NEW'.
+    """
+    fake = (
+        "| Asset class | Deal | Key features |\n"
+        "|---|---|---|\n"
+        "| Agency Synthetic CRT | CAS 2024-R05, CAS 2024-R06, CAS 2999-NEW | row |\n"
+    )
+    wf = tmp_path / "waterfall_ir_design.md"
+    wf.write_text(fake)
+
+    import tests.test_corpus_fixture_status as m
+
+    monkeypatch.setattr(m, "WATERFALL_DESIGN_PATH", wf)
+
+    with pytest.raises(AssertionError, match="CAS 2999-NEW"):
+        m.test_inventory_covers_all_waterfall_design_references()
+
+
+def test_drift_catches_prospectus_outside_sample_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Drift detection must enforce the inverse direction: every inventory
+    entry that cites waterfall_ir_design.md must have its display_name
+    present somewhere in that document (table *or* prose).
+
+    Currently fails: the existing check is forward-only (table rows →
+    inventory) and does not assert that every inventory entry citing the
+    design document actually appears in it.  Credit-card trusts
+    (e.g. Capital One COMET) are only mentioned in prose outside the
+    sample-size table, so if they were deleted from that prose without
+    being removed from the inventory, the existing test would not detect it.
+    """
+    # Minimal waterfall: only FNR 2006-018 in the table, no credit-card prose.
+    fake = (
+        "| Asset class | Deal | Key features |\n"
+        "|---|---|---|\n"
+        "| Agency MBS REMIC | FNR 2006-018 | anchor |\n"
+    )
+    wf = tmp_path / "waterfall_ir_design.md"
+    wf.write_text(fake)
+
+    import tests.test_corpus_fixture_status as m
+
+    monkeypatch.setattr(m, "WATERFALL_DESIGN_PATH", wf)
+
+    with pytest.raises(AssertionError, match="Capital One COMET"):
+        m.test_inventory_covers_all_waterfall_design_references()
+
+
 def test_each_fixture_directory_has_inventory_entry() -> None:
     """Every fixture directory with deal_definition.py must have a
     matching inventory entry (fixture_dir column)."""
