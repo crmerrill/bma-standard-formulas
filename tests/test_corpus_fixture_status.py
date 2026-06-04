@@ -27,6 +27,52 @@ WATERFALL_DESIGN_PATH = (
     REPO_ROOT / "docs" / "architecture" / "waterfall_ir_design.md"
 )
 
+# Complete list of all research-only prospectuses named in
+# waterfall_ir_design.md that lack an executable fixture in tests/fixtures/.
+# Every entry must appear under the (iii) RESEARCH-ONLY section of STATUS.md.
+# Subset checks are insufficient — this list is the full enumeration.
+REQUIRED_RESEARCH_ONLY_NAMES: list[str] = [
+    # Agency MBS REMIC (non-fixture)
+    "FNR 2016-104",
+    "FNR 2019-17",
+    "FNMA 2024-M2",
+    # Agency Synthetic CRT
+    "CAS 2024-R05",
+    "CAS 2024-R06",
+    # Ginnie Mae (non-fixture)
+    "Ginnie Mae 2025-009",
+    "Ginnie Mae 2024-115",  # Multifamily; missing from original STATUS.md
+    # Freddie Mac
+    "Freddie Mac REMIC",  # general structure (offering circular); missing from original STATUS.md
+    # Non-Agency RMBS
+    "JPMMT 2006",
+    "Verus 2026-4",
+    # Auto ABS
+    "Toyota Auto Receivables 2024-A",
+    "Toyota Lexus Owner Trust 2024-A",
+    "Santander Drive 2024-2",
+    "Westlake 2024-1",
+    # Credit Card Master Trusts (all 5 issuers)
+    "Capital One COMET",
+    "Chase Issuance Trust",
+    "Citibank Credit Card Issuance Trust",   # missing from original STATUS.md
+    "Discover Card Execution Note Trust",    # missing from original STATUS.md
+    "American Express Credit Account Master Trust",  # missing from original STATUS.md
+]
+
+# The 6 dedicated test files that must be enumerated on (or near) the FNR
+# 2006-018 table row in STATUS.md.
+FNR_FIXTURE_TEST_FILES: list[str] = [
+    "test_fnr_2006_018_decrement_table.py",
+    "test_fnr_2006_018_group_2_decrement_table.py",
+    "test_fnr_2006_018_yield_tables.py",
+    "test_fnr_2006_018_combined.py",
+    "test_fnr_2006_018_staged_tieout.py",
+    "test_fnr_2006_018_parity.py",
+]
+
+_TIER_LABELS = ["(i) STRUCTURAL", "(ii) QUANTITATIVE GOLDEN", "(iii) RESEARCH-ONLY"]
+
 
 @pytest.fixture(scope="module")
 def status_md() -> str:
@@ -52,10 +98,10 @@ def test_status_md_has_classification_key_section(status_md: str) -> None:
         "STATUS.md must have a '## Classification key' section explaining "
         "the (i) STRUCTURAL / (ii) QUANTITATIVE GOLDEN / (iii) RESEARCH-ONLY tiers."
     )
-    # All three tier labels must appear.
-    assert "STRUCTURAL" in status_md
-    assert "QUANTITATIVE GOLDEN" in status_md
-    assert "RESEARCH-ONLY" in status_md
+    for label in _TIER_LABELS:
+        assert label in status_md, (
+            f"STATUS.md must define tier '{label}' in the Classification key."
+        )
 
 
 def test_status_md_classifies_every_existing_fixture(status_md: str) -> None:
@@ -77,54 +123,133 @@ def test_status_md_classifies_every_existing_fixture(status_md: str) -> None:
     )
 
 
-def test_status_md_references_research_only_prospectuses(status_md: str) -> None:
-    """STATUS.md must reference research-only prospectuses (cited in
-    waterfall_ir_design.md but with no fixture). The audit's value is that
-    it explicitly downgrades these entries to (iii) so test claims about
-    them are bounded."""
-    # A representative subset of named research-only entries from
-    # waterfall_ir_design.md. STATUS.md must classify all of them as (iii).
-    expected_research_only = [
-        "FNR 2016-104",
-        "FNR 2019-17",
-        "JPMMT 2006",
-        "Toyota Auto Receivables 2024-A",
-        "Santander Drive 2024-2",
-        "Westlake 2024-1",
+def test_status_md_per_row_tier_assertion(status_md: str) -> None:
+    """Each fixture directory name must appear on a table row containing
+    EXACTLY ONE tier label from (i) STRUCTURAL, (ii) QUANTITATIVE GOLDEN,
+    (iii) RESEARCH-ONLY.  A row with zero or two labels signals a
+    classification error or a malformed table."""
+    fixtures_dir = REPO_ROOT / "tests" / "fixtures"
+    fixture_dirs = [
+        d.name
+        for d in fixtures_dir.iterdir()
+        if d.is_dir() and (d / "deal_definition.py").exists()
     ]
-    missing = [name for name in expected_research_only if name not in status_md]
-    assert not missing, (
-        f"STATUS.md does not reference these research-only prospectuses: "
-        f"{missing}. They are cited in waterfall_ir_design.md and must be "
-        f"classified as (iii) RESEARCH-ONLY."
+    errors: list[str] = []
+    for name in fixture_dirs:
+        # Rows that both mention the fixture directory name AND a tier label.
+        tier_rows = [
+            line
+            for line in status_md.splitlines()
+            if name in line and any(label in line for label in _TIER_LABELS)
+        ]
+        if not tier_rows:
+            errors.append(f"'{name}': no table row with a tier label found")
+            continue
+        for line in tier_rows:
+            count = sum(1 for label in _TIER_LABELS if label in line)
+            if count != 1:
+                errors.append(
+                    f"'{name}': row contains {count} tier labels (expected 1): "
+                    f"{line[:120]!r}"
+                )
+    assert not errors, (
+        "Per-row tier assertion failures:\n" + "\n".join(f"  {e}" for e in errors)
+    )
+
+
+def test_status_md_references_all_research_only_prospectuses(status_md: str) -> None:
+    """STATUS.md must classify EVERY prospectus named in waterfall_ir_design.md
+    that has no executable fixture.  The required list is REQUIRED_RESEARCH_ONLY_NAMES;
+    checking only a representative subset is insufficient."""
+    # Pass 1: all names must appear somewhere in the document.
+    missing_from_doc = [
+        name for name in REQUIRED_RESEARCH_ONLY_NAMES if name not in status_md
+    ]
+    assert not missing_from_doc, (
+        f"STATUS.md is missing these required research-only prospectuses: "
+        f"{missing_from_doc}.  All prospectuses cited in waterfall_ir_design.md "
+        f"without an executable fixture must appear under (iii) RESEARCH-ONLY."
+    )
+
+    # Pass 2: every entry must appear in the dedicated research-only section,
+    # not just somewhere in the document.
+    research_section_start = status_md.find("### Research-only corpus entries")
+    assert research_section_start != -1, (
+        "STATUS.md must have a '### Research-only corpus entries' section."
+    )
+    research_section = status_md[research_section_start:]
+    misplaced = [
+        name
+        for name in REQUIRED_RESEARCH_ONLY_NAMES
+        if name not in research_section
+    ]
+    assert not misplaced, (
+        f"These research-only prospectuses are not in the "
+        f"'### Research-only corpus entries' section: {misplaced}."
     )
 
 
 def test_status_md_has_per_deal_classification_section(status_md: str) -> None:
     """The doc must have an explicit per-deal classification section."""
-    assert (
-        "## Per-deal classification" in status_md
-        or "Per-deal classification" in status_md
-    ), "STATUS.md must have a 'Per-deal classification' section."
+    assert "## Per-deal classification" in status_md, (
+        "STATUS.md must have a '## Per-deal classification' section."
+    )
 
 
 def test_status_md_pins_round_trip_commitment(status_md: str) -> None:
-    """The doc must pin which fixture tiers receive canonicalization
-    round-trip + cashflow tie-out test coverage."""
-    assert "round-trip" in status_md.lower() or "round trip" in status_md.lower(), (
+    """The round-trip commitment section must:
+    (a) explicitly name every (i) and (ii) fixture as requiring round-trip
+        + canonicalization tests, and
+    (b) explicitly state that (iii) RESEARCH-ONLY entries receive NO
+        automated test coverage.
+    """
+    assert "round-trip" in status_md.lower(), (
         "STATUS.md must pin the round-trip / canonicalization round-trip "
         "test commitment per fixture tier (Phase 0 B6 + "
         "rule-canonicalization-framework requirement)."
     )
+    # (i) and (ii) fixtures must be explicitly named as receiving round-trip.
+    assert "every (i) and (ii)" in status_md or "(i) and (ii) fixture" in status_md, (
+        "STATUS.md must state that EVERY (i) and (ii) fixture requires "
+        "round-trip + canonicalization testing."
+    )
+    # (iii) must be explicitly excluded from automated test coverage.
+    lower = status_md.lower()
+    assert "no test coverage" in lower or "no automated test" in lower, (
+        "STATUS.md must explicitly state that (iii) RESEARCH-ONLY entries "
+        "receive NO automated test coverage."
+    )
 
 
 def test_status_md_pins_fnr_2006_018_as_quantitative_golden(status_md: str) -> None:
-    """FNR 2006-018 has dedicated decrement-table tests; it MUST be (ii)."""
-    # The doc must flag FNR 2006-018 specifically as (ii) QUANTITATIVE GOLDEN.
-    # This is the only existing fixture with per-period tie-out.
-    fnr_section_present = "fnr_2006_018" in status_md or "FNR 2006-018" in status_md
-    assert fnr_section_present, "FNR 2006-018 must be referenced in STATUS.md."
-    # The audit's central claim is that fnr_2006_018 is the (ii) anchor.
-    # We assert "QUANTITATIVE GOLDEN" appears near "fnr_2006_018" by checking
-    # the (ii) marker is in the doc at all.
-    assert "QUANTITATIVE GOLDEN" in status_md
+    """FNR 2006-018 must be classified as (ii) QUANTITATIVE GOLDEN on its
+    table row, and all 6 dedicated quantitative test files must be listed
+    on that same row (not merely somewhere in the document)."""
+    lines = status_md.splitlines()
+
+    # Find lines containing the FNR fixture name together with the tier label.
+    fnr_tier_lines = [
+        (i, line)
+        for i, line in enumerate(lines)
+        if ("fnr_2006_018" in line or "FNR 2006-018" in line)
+        and "(ii) QUANTITATIVE GOLDEN" in line
+    ]
+    assert fnr_tier_lines, (
+        "No table row found with both 'FNR 2006-018' / 'fnr_2006_018' "
+        "and '(ii) QUANTITATIVE GOLDEN'. FNR 2006-018 must be classified "
+        "as (ii) QUANTITATIVE GOLDEN on its classification row."
+    )
+
+    # All 6 test files must appear on (or within 2 lines of) the FNR tier row.
+    first_tier_idx, _ = fnr_tier_lines[0]
+    window_start = max(0, first_tier_idx - 2)
+    window_end = min(len(lines), first_tier_idx + 3)
+    window_text = "\n".join(lines[window_start:window_end])
+
+    missing_files = [f for f in FNR_FIXTURE_TEST_FILES if f not in window_text]
+    assert not missing_files, (
+        f"These FNR test files are not listed near the FNR 2006-018 "
+        f"classification row in STATUS.md: {missing_files}. All 6 dedicated "
+        f"quantitative test files must be enumerated on (or within 2 lines "
+        f"of) the FNR tier row."
+    )
