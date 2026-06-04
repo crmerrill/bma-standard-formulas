@@ -98,6 +98,9 @@ describe("ve-2: worker validators catch specific errors", () => {
     const actual = results
       .filter((r) => r.code === "MULTI_GROUP_ROUTING_INVALID")
       .map((r) => ({ code: r.code, path: r.path }));
-    expect(actual).toEqual(fixture.expected_diagnostics);
+    const expected = fixture.expected_diagnostics.filter(
+      (d) => d.code === "MULTI_GROUP_ROUTING_INVALID",
+    );
+    expect(actual).toEqual(expected);
   });
 });
