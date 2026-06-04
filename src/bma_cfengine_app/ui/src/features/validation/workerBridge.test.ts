@@ -10,6 +10,44 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 // T1: these imports will FAIL until workerBridge.ts is created (I commit).
 import { createWorkerBridge, VALIDATION_DEBOUNCE_MS } from "./workerBridge";
 
+// ---------------------------------------------------------------------------
+// Helper: build a minimal mock Worker instance and stub global Worker.
+// ---------------------------------------------------------------------------
+function makeWorkerStub() {
+  const mockPostMessage = vi.fn();
+  const instance = {
+    postMessage: mockPostMessage,
+    terminate: vi.fn(),
+    onmessage: null as ((e: MessageEvent) => void) | null,
+  };
+  vi.stubGlobal("Worker", function MockWorker() { return instance; });
+  return { mockPostMessage, instance };
+}
+
+// ---------------------------------------------------------------------------
+// Helper: build a minimal mock store backed by a mutable storeState ref.
+// ---------------------------------------------------------------------------
+function makeStore(initial: Record<string, unknown>) {
+  let storeState = { ...initial };
+  const subscribers: Array<(state: unknown, prev: unknown) => void> = [];
+  const mockStore = {
+    subscribe: vi.fn((cb: (state: unknown, prev: unknown) => void) => {
+      subscribers.push(cb);
+      return () => {
+        const idx = subscribers.indexOf(cb);
+        if (idx !== -1) subscribers.splice(idx, 1);
+      };
+    }),
+    getState: vi.fn(() => storeState),
+  };
+  const emit = (next: Record<string, unknown>) => {
+    const prev = storeState;
+    storeState = { ...next };
+    for (const cb of subscribers) cb(storeState, prev);
+  };
+  return { mockStore, emit, getState: () => storeState };
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -236,7 +274,7 @@ describe("test_bridge_routes_diagnostics_to_validated_session_not_active_session
     bridge.unsubscribe();
   });
 
-  it("ignores stale responses whose requestId is less than the latest for that session", () => {
+  it("ignores stale responses whose requestId is less than the latest for that session (stale-guard)", () => {
     vi.useFakeTimers();
 
     const setDiagnostics = vi.fn();
@@ -296,6 +334,87 @@ describe("test_bridge_routes_diagnostics_to_validated_session_not_active_session
     );
     expect(setDiagnostics).toHaveBeenCalledTimes(1);
     expect(setDiagnostics).toHaveBeenCalledWith("A", freshPayload);
+
+    bridge.unsubscribe();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M2 fix test (ve-1 R1 pass-2): deleted-session responses must be dropped
+// ---------------------------------------------------------------------------
+
+describe("test_deleted_session_response_does_not_recreate_malformed_entry", () => {
+  it("drops worker response for a session that was deleted before the response arrived (M2)", () => {
+    vi.useFakeTimers();
+
+    const setDiagnostics = vi.fn();
+    const { instance: workerInstance } = makeWorkerStub();
+
+    const { mockStore, emit } = makeStore({
+      dispatch_revision: 0,
+      activeSessionId: "A",
+      sessions: { A: { working_tree: { bonds: [] } } },
+      setDiagnostics,
+    });
+
+    const bridge = createWorkerBridge(mockStore);
+
+    // Trigger validation for session A.
+    emit({ dispatch_revision: 1, activeSessionId: "A", sessions: { A: { working_tree: { bonds: [] } } }, setDiagnostics });
+    vi.advanceTimersByTime(VALIDATION_DEBOUNCE_MS);
+    expect(workerInstance.postMessage).toHaveBeenCalledTimes(1);
+
+    // Delete session A — remove it from sessions entirely.
+    emit({ dispatch_revision: 1, activeSessionId: "main", sessions: {}, setDiagnostics });
+
+    // Worker now responds for the deleted session A.
+    const diagnostics = [
+      { code: "E001", severity: "error" as const, path: "bond[0]", message: "test", payload: {} },
+    ];
+    workerInstance.onmessage!(
+      new MessageEvent("message", { data: { diagnostics, requestId: 1, sessionId: "A" } }),
+    );
+
+    // Bridge must NOT call setDiagnostics — session A no longer exists.
+    expect(setDiagnostics).not.toHaveBeenCalled();
+
+    bridge.unsubscribe();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// m1 fix test (ve-1 R1 pass-2): latestRequestId must be cleaned up on deletion
+// ---------------------------------------------------------------------------
+
+describe("test_latestRequestId_cleaned_up_on_session_delete", () => {
+  it("removes the latestRequestId entry when a session is deleted (m1)", () => {
+    vi.useFakeTimers();
+
+    const { instance: workerInstance } = makeWorkerStub();
+    const setDiagnostics = vi.fn();
+
+    const { mockStore, emit } = makeStore({
+      dispatch_revision: 0,
+      activeSessionId: "A",
+      sessions: { A: { working_tree: { bonds: [] } } },
+      setDiagnostics,
+    });
+
+    const bridge = createWorkerBridge(mockStore);
+
+    // Trigger validation → latestRequestId["A"] should be set to 1.
+    emit({ dispatch_revision: 1, activeSessionId: "A", sessions: { A: { working_tree: { bonds: [] } } }, setDiagnostics });
+    vi.advanceTimersByTime(VALIDATION_DEBOUNCE_MS);
+    expect(workerInstance.postMessage).toHaveBeenCalledTimes(1);
+
+    // Confirm "A" is tracked in latestRequestId.
+    expect(bridge._getLatestRequestIdForTesting()).toHaveProperty("A", 1);
+
+    // Delete session A.
+    emit({ dispatch_revision: 1, activeSessionId: "main", sessions: {}, setDiagnostics });
+
+    // latestRequestId["A"] must have been cleaned up.
+    expect(bridge._getLatestRequestIdForTesting()).not.toHaveProperty("A");
 
     bridge.unsubscribe();
   });
