@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { useDealStore } from "./useDealStore";
+import { useDealStore, getDiagnosticSourceMapForTesting } from "./useDealStore";
 import type { BondDefIR, DealDefinitionIR, RuleNodeIR } from "../ir-types";
 
 type DealState = DealDefinitionIR;
@@ -148,5 +148,94 @@ describe("useDealStore (sds-1 scaffolding)", () => {
   test("test_setDealId_action_updates_root_deal_id", () => {
     useDealStore.getState().setDealId("deal_abc_123");
     expect(useDealStore.getState().deal_id).toBe("deal_abc_123");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ve-4 R1 M1 — _diagnosticSourceMap lifecycle
+//
+// These three cases are the TDD red phase for the fix-pass. They fail until:
+//   • deleteSession cleans up _diagnosticSourceMap
+//   • setDiagnostics resets the source map for a session
+//   • resetDiagnosticSourceMapForTesting is exported and called in beforeEach
+// ---------------------------------------------------------------------------
+describe("ve-4 R1 M1 — source map lifecycle", () => {
+  beforeEach(() => {
+    useDealStore.setState(useDealStore.getInitialState(), true);
+    // Fix-pass will add: resetDiagnosticSourceMapForTesting()
+  });
+
+  test("test_deleteSession_clears_source_map_entries", () => {
+    const sessionId = "test_ephem_del";
+
+    // Inject a non-main session by copying the main session structure.
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [sessionId]: {
+          ...state.sessions.main,
+          session_id: sessionId,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          branch_name: "test-branch" as any,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          commit_target: "test-branch" as any,
+          diagnostics: [],
+        },
+      },
+    }));
+
+    // Record a backend diagnostic so the source map gains an entry.
+    useDealStore.getState().mergeDiagnostics(sessionId, "backend", [
+      { code: "E001", severity: "error", path: "$.bonds", message: "backend err", payload: {} },
+    ]);
+    expect(getDiagnosticSourceMapForTesting().has(sessionId)).toBe(true);
+
+    // Deleting the session must remove its source-map entry.
+    useDealStore.getState().deleteSession(sessionId);
+    expect(getDiagnosticSourceMapForTesting().has(sessionId)).toBe(false);
+  });
+
+  test("test_setDiagnostics_clears_source_map_for_session", () => {
+    const sessionId = "main";
+
+    // Record a backend win so worker merges are blocked for "E002:$.bonds".
+    useDealStore.getState().mergeDiagnostics(sessionId, "backend", [
+      { code: "E002", severity: "error", path: "$.bonds", message: "backend err", payload: {} },
+    ]);
+    useDealStore.getState().mergeDiagnostics(sessionId, "worker", [
+      { code: "E002", severity: "warning", path: "$.bonds", message: "worker ignored", payload: {} },
+    ]);
+    const diags = useDealStore.getState().sessions[sessionId].diagnostics;
+    expect(diags.find((d) => d.code === "E002")?.severity).toBe("error");
+
+    // Replacing diagnostics via setDiagnostics must reset the source map so
+    // a subsequent worker merge is accepted (backend-wins lock lifted).
+    useDealStore.getState().setDiagnostics(sessionId, []);
+    useDealStore.getState().mergeDiagnostics(sessionId, "worker", [
+      { code: "E002", severity: "warning", path: "$.bonds", message: "worker after clear", payload: {} },
+    ]);
+
+    const diagsAfter = useDealStore.getState().sessions[sessionId].diagnostics;
+    expect(diagsAfter.find((d) => d.code === "E002")?.severity).toBe("warning");
+  });
+
+  test("test_store_reset_clears_source_map", () => {
+    const sessionId = "main";
+
+    // Record a backend win so worker merges are blocked.
+    useDealStore.getState().mergeDiagnostics(sessionId, "backend", [
+      { code: "E003", severity: "error", path: "$.fees", message: "backend err", payload: {} },
+    ]);
+
+    // Full store reset — provenance should be gone afterwards.
+    useDealStore.setState(useDealStore.getInitialState(), true);
+    // Fix-pass will add: resetDiagnosticSourceMapForTesting()
+
+    // Worker merge for the previously-backend key must now be accepted.
+    useDealStore.getState().mergeDiagnostics(sessionId, "worker", [
+      { code: "E003", severity: "warning", path: "$.fees", message: "worker after reset", payload: {} },
+    ]);
+    const diags = useDealStore.getState().sessions[sessionId].diagnostics;
+    expect(diags.find((d) => d.code === "E003")?.severity).toBe("warning");
   });
 });

@@ -75,6 +75,14 @@ const _diagnosticSourceMap = new Map<
   Map<string, "worker" | "backend">
 >();
 
+/** Test-only: returns the raw internal source map for white-box assertion. */
+export function getDiagnosticSourceMapForTesting(): Map<
+  string,
+  Map<string, "worker" | "backend">
+> {
+  return _diagnosticSourceMap;
+}
+
 function createPerSessionTemporal(
   sessionId: string,
   storeSet: (fn: (state: DealStoreState) => Partial<DealStoreState>) => void,
