@@ -4,7 +4,7 @@
 
 **Authoritative classification of every prospectus named in `docs/architecture/waterfall_ir_design.md`** per the three-tier classification mandated by the `corpus-fixture-status` Phase 1 ticket.
 
-The plan can require canonicalization round-trip + cashflow tie-out only on (i) STRUCTURAL and (ii) QUANTITATIVE GOLDEN fixtures. (iii) RESEARCH-ONLY corpus entries are explicitly downgraded — they are RAG governance material, not test coverage. This document is the single source of truth for which deal names support which kinds of test claims.
+The plan can require canonicalization round-trip + cashflow tie-out only on (i) STRUCTURAL and (ii) QUANTITATIVE GOLDEN fixtures. (iii) RESEARCH-ONLY corpus entries are explicitly downgraded — they are RAG governance material, not test coverage. This document is the inventory-backed summary of which deal names support which kinds of test claims.
 
 The shape of this file is enforced by `tests/test_corpus_fixture_status.py`.
 
