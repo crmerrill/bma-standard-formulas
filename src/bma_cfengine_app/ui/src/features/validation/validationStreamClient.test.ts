@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { DiagnosticPayload } from "../deals/store/diagnostics-types";
 import type { DealStoreState } from "../deals/store/useDealStore";
-import { subscribeToValidationStream } from "./validationStreamClient";
+import {
+  subscribeToValidationStream,
+  _getActiveSubscriptionsForTesting,
+  _resetActiveSubscriptionsForTesting,
+} from "./validationStreamClient";
 
 // ---------------------------------------------------------------------------
 // Minimal mock EventSource
@@ -62,6 +66,7 @@ const SESSION_ID = "main";
 describe("validationStreamClient (ve-4a)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    _resetActiveSubscriptionsForTesting();
   });
 
   // -------------------------------------------------------------------------
@@ -151,6 +156,37 @@ describe("validationStreamClient (ve-4a)", () => {
     unsubscribe();
 
     expect(instances[0].close).toHaveBeenCalledOnce();
+  });
+
+  // -------------------------------------------------------------------------
+  // R1 Finding 1: terminal events must clear _activeSubscriptions
+  // These tests are RED until close() is patched to delete the active token.
+  // -------------------------------------------------------------------------
+  test("test_validation_complete_clears_active_token", () => {
+    const { ctor, instances } = makeMockEventSourceCtor();
+    const { store } = makeMockStore();
+
+    subscribeToValidationStream(DEAL_ID, SHA, SESSION_ID, store, ctor);
+    expect(_getActiveSubscriptionsForTesting().has(SESSION_ID)).toBe(true);
+
+    instances[0].emit({ event_type: "validation_complete" });
+
+    expect(_getActiveSubscriptionsForTesting().has(SESSION_ID)).toBe(false);
+  });
+
+  test("test_validation_failed_clears_active_token", () => {
+    const { ctor, instances } = makeMockEventSourceCtor();
+    const { store } = makeMockStore();
+
+    subscribeToValidationStream(DEAL_ID, SHA, SESSION_ID, store, ctor);
+    expect(_getActiveSubscriptionsForTesting().has(SESSION_ID)).toBe(true);
+
+    instances[0].emit({
+      event_type: "validation_failed",
+      error: "Upstream failure",
+    });
+
+    expect(_getActiveSubscriptionsForTesting().has(SESSION_ID)).toBe(false);
   });
 
   // -------------------------------------------------------------------------

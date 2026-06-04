@@ -34,6 +34,16 @@ type ValidationStreamEvent = {
 // not the currently-active token for its session are ignored.
 const _activeSubscriptions = new Map<string, symbol>();
 
+/** @internal Test-only: returns the active subscriptions map for assertion. */
+export function _getActiveSubscriptionsForTesting(): ReadonlyMap<string, symbol> {
+  return _activeSubscriptions;
+}
+
+/** @internal Test-only: clears all active subscriptions (call in beforeEach). */
+export function _resetActiveSubscriptionsForTesting(): void {
+  _activeSubscriptions.clear();
+}
+
 /**
  * Open an EventSource against `GET /deals/{dealId}/validate/stream?sha={sha}`
  * and dispatch incoming SSE events into the store. Returns an `unsubscribe()`
