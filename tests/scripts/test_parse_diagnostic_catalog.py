@@ -102,3 +102,75 @@ def test_parser_fails_on_malformed_markdown_table(tmp_path: Path) -> None:
     mod = _import_parser()
     with pytest.raises(Exception, match=r"(?i)(malformed|invalid|missing|column|header|found)"):
         mod.parse_diagnostic_catalog(catalog_file)
+
+
+# ---------------------------------------------------------------------------
+# vpc-2 R1 hardening tests (Finding 1-3)
+# ---------------------------------------------------------------------------
+
+
+def test_malformed_separator_row_column_count_raises(tmp_path: Path) -> None:
+    """Finding 1: separator with wrong column count must raise MalformedCatalogError.
+
+    A 2-column separator passes the regex-only check in the original code because
+    ``| --- | --- |`` contains only ``|``, ``-``, and spaces.  The parser must
+    also verify that the separator has the same number of columns as the header.
+    """
+    md = textwrap.dedent("""\
+        # Diagnostic Catalog
+
+        ## Catalog Table
+
+        | code | severity | path schema | message template | owner | quick fix | owning validator file:line |
+        | --- | --- |
+        | MERGE_CONFLICT | error | deal.x | Conflict | backend | fix it | merge.py:17 |
+    """)
+    catalog_file = tmp_path / "diagnostic_catalog.md"
+    catalog_file.write_text(md)
+
+    mod = _import_parser()
+    with pytest.raises(mod.MalformedCatalogError):
+        mod.parse_diagnostic_catalog(catalog_file)
+
+
+def test_header_at_eof_raises_clean_error(tmp_path: Path) -> None:
+    """Finding 2: header as the final line (no separator follows) must raise
+    MalformedCatalogError, NOT IndexError.
+
+    The original code accesses ``lines[sep_idx]`` inside the error-message
+    f-string even when the bounds check already determined the index is out of
+    range, which produces an uncaught IndexError.
+    """
+    md = "| code | severity | path schema | message template | owner | quick fix | owning validator file:line |"
+    catalog_file = tmp_path / "diagnostic_catalog.md"
+    catalog_file.write_text(md)
+
+    mod = _import_parser()
+    with pytest.raises(mod.MalformedCatalogError):
+        mod.parse_diagnostic_catalog(catalog_file)
+
+
+def test_utf8_message_template_parses(tmp_path: Path) -> None:
+    """Finding 3: UTF-8 content in the message template column must parse
+    without UnicodeDecodeError.
+
+    The parser should use ``Path.read_text(encoding="utf-8")`` so behaviour is
+    deterministic on CI hosts whose locale may not default to UTF-8.
+    """
+    md = textwrap.dedent("""\
+        # Diagnostic Catalog
+
+        ## Catalog Table
+
+        | code | severity | path schema | message template | owner | quick fix | owning validator file:line |
+        | --- | --- | --- | --- | --- | --- | --- |
+        | ENCODING_TEST | warning | deal:{id} | Résumé \u2014 value \u00ab{val}\u00bb at path {path} | backend | Fix encoding. | validators.py:1 |
+    """)
+    catalog_file = tmp_path / "diagnostic_catalog.md"
+    catalog_file.write_text(md, encoding="utf-8")
+
+    mod = _import_parser()
+    records = mod.parse_diagnostic_catalog(catalog_file)
+    assert len(records) == 1
+    assert "Résumé" in records[0]["message"]
+    assert "\u2014" in records[0]["message"]
