@@ -325,6 +325,86 @@ def test_status_md_research_only_drift_against_waterfall_design(
     )
 
 
+def test_prospectus_patterns_documents_known_limitations() -> None:
+    """_PROSPECTUS_PATTERNS must have a comment block documenting its three
+    known limitations so future maintainers understand the heuristic's scope.
+
+    The comment must cover:
+      (a) it is an issuer-family inventory, NOT a source of truth;
+      (b) new issuer families (e.g., Hertz, BMW, vehicle leasing trusts)
+          require explicit pattern additions;
+      (c) names split across line breaks or with internal markdown formatting
+          are not detected.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    lines = source.splitlines()
+    # Locate the declaration line (not usages inside the list or function calls).
+    decl_indices = [
+        i
+        for i, line in enumerate(lines)
+        if "_PROSPECTUS_PATTERNS:" in line and "list[" in line
+    ]
+    assert decl_indices, (
+        "_PROSPECTUS_PATTERNS declaration not found in source — "
+        "the variable name or type annotation may have changed."
+    )
+    decl_line = decl_indices[0]
+    # Inspect the 20 lines immediately preceding the declaration for documentation.
+    window_start = max(0, decl_line - 20)
+    window = "\n".join(lines[window_start:decl_line])
+
+    assert "issuer-family inventory" in window, (
+        "_PROSPECTUS_PATTERNS must have a preceding comment stating it is an "
+        "'issuer-family inventory' (not a source of truth)."
+    )
+    assert (
+        "not a source of truth" in window.lower()
+        or "not the source of truth" in window.lower()
+    ), "_PROSPECTUS_PATTERNS comment must state it is NOT a source of truth."
+    assert (
+        "Hertz" in window
+        or "BMW" in window
+        or "vehicle leasing" in window.lower()
+    ), (
+        "_PROSPECTUS_PATTERNS comment must name example new issuer families "
+        "(e.g., Hertz, BMW, vehicle leasing trusts) that require pattern additions."
+    )
+    assert (
+        "line break" in window.lower()
+        or "line-break" in window.lower()
+        or "wrapped" in window.lower()
+        or "split across" in window.lower()
+    ), (
+        "_PROSPECTUS_PATTERNS comment must document that names split across "
+        "line breaks or with internal markdown formatting are not detected."
+    )
+
+
+def test_status_md_references_future_inventory_followup(status_md: str) -> None:
+    """STATUS.md must have a '## Follow-on tickets' section that names the
+    _PROSPECTUS_PATTERNS limitation and a future structured-inventory artifact."""
+    assert "## Follow-on tickets" in status_md, (
+        "STATUS.md must have a '## Follow-on tickets' section naming the "
+        "_PROSPECTUS_PATTERNS limitation and the future prospectus_inventory work."
+    )
+    followon_idx = status_md.find("## Follow-on tickets")
+    followon_section = status_md[followon_idx:]
+    assert (
+        "prospectus_inventory" in followon_section
+        or "prospectus inventory" in followon_section.lower()
+    ), (
+        "The '## Follow-on tickets' section must reference a future structured "
+        "prospectus inventory artifact (e.g., docs/architecture/prospectus_inventory.md)."
+    )
+    assert (
+        "_PROSPECTUS_PATTERNS" in followon_section
+        or "PROSPECTUS_PATTERNS" in followon_section
+    ), (
+        "The '## Follow-on tickets' section must name _PROSPECTUS_PATTERNS as "
+        "the heuristic to be replaced."
+    )
+
+
 def test_each_fixture_directory_appears_in_exactly_one_tier_row(
     status_md: str,
 ) -> None:
