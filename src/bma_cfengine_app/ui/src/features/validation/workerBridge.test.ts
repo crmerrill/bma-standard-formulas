@@ -164,3 +164,139 @@ describe("test_bridge_debounces_rapid_mutations", () => {
     bridge.unsubscribe();
   });
 });
+
+// ---------------------------------------------------------------------------
+// M1 fix tests: session attribution + stale-request guard
+// ---------------------------------------------------------------------------
+
+describe("test_bridge_routes_diagnostics_to_validated_session_not_active_session", () => {
+  it("routes diagnostics to the session that was validated, even if active session changes before response (M1)", () => {
+    vi.useFakeTimers();
+
+    const setDiagnostics = vi.fn();
+
+    const mockPostMessage = vi.fn();
+    const mockWorkerInstance = {
+      postMessage: mockPostMessage,
+      terminate: vi.fn(),
+      onmessage: null as ((e: MessageEvent) => void) | null,
+    };
+    vi.stubGlobal("Worker", function MockWorker() { return mockWorkerInstance; });
+
+    // Initial store state: session A is active.
+    let storeState = {
+      dispatch_revision: 0,
+      activeSessionId: "A",
+      sessions: {
+        A: { working_tree: { bonds: [] } },
+        B: { working_tree: { bonds: [] } },
+      },
+      setDiagnostics,
+    };
+
+    const subscribers: Array<(state: unknown, prev: unknown) => void> = [];
+    const mockStore = {
+      subscribe: vi.fn((cb: (state: unknown, prev: unknown) => void) => {
+        subscribers.push(cb);
+        return () => {
+          const idx = subscribers.indexOf(cb);
+          if (idx !== -1) subscribers.splice(idx, 1);
+        };
+      }),
+      getState: vi.fn(() => storeState),
+    };
+
+    const bridge = createWorkerBridge(mockStore);
+
+    // Trigger a revision change on session A.
+    const prevState = { ...storeState };
+    storeState = { ...storeState, dispatch_revision: 1 };
+    for (const cb of subscribers) cb(storeState, prevState);
+
+    // Advance past debounce → worker receives postMessage for session A.
+    vi.advanceTimersByTime(VALIDATION_DEBOUNCE_MS);
+    expect(mockPostMessage).toHaveBeenCalledTimes(1);
+
+    // Switch active session to B BEFORE the worker responds.
+    storeState = { ...storeState, activeSessionId: "B" };
+
+    // Worker responds with diagnostics tagged to session A (new protocol).
+    const diagnostics = [
+      { code: "E001", severity: "error" as const, path: "bond[0]", message: "test", payload: {} },
+    ];
+    mockWorkerInstance.onmessage!(
+      new MessageEvent("message", { data: { diagnostics, requestId: 1, sessionId: "A" } }),
+    );
+
+    // Diagnostics must land on session A — NOT on the currently-active session B.
+    expect(setDiagnostics).toHaveBeenCalledTimes(1);
+    expect(setDiagnostics).toHaveBeenCalledWith("A", diagnostics);
+    expect(setDiagnostics).not.toHaveBeenCalledWith("B", expect.anything());
+
+    bridge.unsubscribe();
+  });
+
+  it("ignores stale responses whose requestId is less than the latest for that session", () => {
+    vi.useFakeTimers();
+
+    const setDiagnostics = vi.fn();
+
+    const mockPostMessage = vi.fn();
+    const mockWorkerInstance = {
+      postMessage: mockPostMessage,
+      terminate: vi.fn(),
+      onmessage: null as ((e: MessageEvent) => void) | null,
+    };
+    vi.stubGlobal("Worker", function MockWorker() { return mockWorkerInstance; });
+
+    let storeState = {
+      dispatch_revision: 0,
+      activeSessionId: "A",
+      sessions: { A: { working_tree: { bonds: [] } } },
+      setDiagnostics,
+    };
+
+    const subscribers: Array<(state: unknown, prev: unknown) => void> = [];
+    const mockStore = {
+      subscribe: vi.fn((cb: (state: unknown, prev: unknown) => void) => {
+        subscribers.push(cb);
+        return () => {};
+      }),
+      getState: vi.fn(() => storeState),
+    };
+
+    const bridge = createWorkerBridge(mockStore);
+
+    // First mutation → debounce fires → postMessage with requestId=1.
+    const prev0 = { ...storeState };
+    storeState = { ...storeState, dispatch_revision: 1 };
+    for (const cb of subscribers) cb(storeState, prev0);
+    vi.advanceTimersByTime(VALIDATION_DEBOUNCE_MS);
+    expect(mockPostMessage).toHaveBeenCalledTimes(1);
+
+    // Second mutation → debounce fires → postMessage with requestId=2.
+    const prev1 = { ...storeState };
+    storeState = { ...storeState, dispatch_revision: 2 };
+    for (const cb of subscribers) cb(storeState, prev1);
+    vi.advanceTimersByTime(VALIDATION_DEBOUNCE_MS);
+    expect(mockPostMessage).toHaveBeenCalledTimes(2);
+
+    const stalePayload = [{ code: "E001", severity: "error" as const, path: "a", message: "stale", payload: {} }];
+    const freshPayload = [{ code: "E002", severity: "warning" as const, path: "b", message: "fresh", payload: {} }];
+
+    // Stale response (requestId=1, latest is 2) → must be ignored.
+    mockWorkerInstance.onmessage!(
+      new MessageEvent("message", { data: { diagnostics: stalePayload, requestId: 1, sessionId: "A" } }),
+    );
+    expect(setDiagnostics).not.toHaveBeenCalled();
+
+    // Fresh response (requestId=2) → must be applied.
+    mockWorkerInstance.onmessage!(
+      new MessageEvent("message", { data: { diagnostics: freshPayload, requestId: 2, sessionId: "A" } }),
+    );
+    expect(setDiagnostics).toHaveBeenCalledTimes(1);
+    expect(setDiagnostics).toHaveBeenCalledWith("A", freshPayload);
+
+    bridge.unsubscribe();
+  });
+});
