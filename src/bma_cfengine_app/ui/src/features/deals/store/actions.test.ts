@@ -530,6 +530,45 @@ describe("deal actions (sds-1 scaffolding)", () => {
     expect(afterAction.pending_commit_message).toBeNull();
   });
 
+  test("test_canonicalize_consolidate_rule_run_uses_order_sorted_indices", () => {
+    // Rules authored with array positions that do NOT match their order values:
+    //   array[0]=order3/T3, array[1]=order1/T1, array[2]=order2/T2, array[3]=order4/T4
+    // The detector emits indices into the ORDER-SORTED view:
+    //   sorted[0]={order:1,T1}, sorted[1]={order:2,T2}, sorted[2]={order:3,T3}, sorted[3]={order:4,T4}
+    // Dispatching start_index=0,end_index=1 must consolidate order=1+order=2 → ["T1","T2"],
+    // NOT array positions 0+1 which would yield the wrong ["T3","T1"].
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("r_order3", 3, "T3"),
+              makeCanonicalizableRule("r_order1", 1, "T1"),
+              makeCanonicalizableRule("r_order2", 2, "T2"),
+              makeCanonicalizableRule("r_order4", 4, "T4"),
+            ],
+          },
+        },
+      },
+    }));
+
+    dispatchCanonicalizeConsolidateRuleRun(0, 1);
+
+    const rules = useDealStore.getState().sessions.main.working_tree.waterfall_rules;
+    // Sorted indices [0,1] → order=1 and order=2 consolidated; 4−1 = 3 rules remain.
+    expect(rules).toHaveLength(3);
+    // Consolidated rule must carry targets from the order=1 and order=2 rules.
+    const consolidated = rules.find((r) => r.to_targets.length > 1);
+    expect(consolidated?.to_targets).toEqual(["T1", "T2"]);
+    expect(consolidated?.rule_id).toBe("r_order1");
+    // order=3 and order=4 rules must survive untouched.
+    expect(rules.some((r) => r.rule_id === "r_order3")).toBe(true);
+    expect(rules.some((r) => r.rule_id === "r_order4")).toBe(true);
+  });
+
   test("test_canonicalize_consolidate_rule_run_preserves_surrounding_rules", () => {
     useDealStore.setState((state) => ({
       sessions: {
