@@ -175,9 +175,11 @@ export function subscribeAutosave(store: Store): () => void {
       const currentSession = current.sessions[activeSessionId];
       if (!currentSession) return;
 
+      const commitMessage = currentSession.pending_commit_message ?? "autosave";
+
       const body = {
         author: "autosave",
-        message: "autosave",
+        message: commitMessage,
         parent_sha: currentSession.base_sha,
         branch: currentSession.branch_name,
         payload: JSON.parse(compileToIR(currentSession.working_tree)) as DealState,
@@ -217,6 +219,7 @@ export function subscribeAutosave(store: Store): () => void {
                 [activeSessionId]: {
                   ...s.sessions[activeSessionId],
                   base_sha: result.sha,
+                  pending_commit_message: null,
                 },
               },
             };
@@ -224,6 +227,15 @@ export function subscribeAutosave(store: Store): () => void {
         })
         .catch(() => {
           // Conflict written to conflictState by commitWithConflictHandling.
+          store.setState((s) => ({
+            sessions: {
+              ...s.sessions,
+              [activeSessionId]: {
+                ...s.sessions[activeSessionId],
+                pending_commit_message: null,
+              },
+            },
+          }));
         });
     }, 2000);
   });

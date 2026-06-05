@@ -34,4 +34,5 @@ export type DocumentSession = {
   zundo_history: TemporalState<DealState>;
   ui_role: "primary" | "preview";
   diagnostics: DiagnosticPayload[];
+  pending_commit_message: string | null;
 };

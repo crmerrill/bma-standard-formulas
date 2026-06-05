@@ -66,6 +66,11 @@ _REGISTRY: dict[str, DispatchQuickFix | ManualQuickFix] = {
             "Rename one of the duplicates to make all bond names unique."
         ),
     ),
+    "canonicalize_consolidate_rule_run": DispatchQuickFix(
+        kind="dispatch",
+        action_type="canonicalizeConsolidateRuleRun",
+        description="Consolidate fragmented rules into a single multi-target rule.",
+    ),
 }
 
 

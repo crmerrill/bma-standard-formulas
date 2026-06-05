@@ -179,6 +179,7 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
       zundo_history: createPerSessionTemporal("main", set, get),
       ui_role: "primary",
       diagnostics: [],
+      pending_commit_message: null,
     },
   },
   activeSessionId: "main",
@@ -241,6 +242,7 @@ export const useDealStore = create<DealStoreState>()((set, get) => ({
           zundo_history: createPerSessionTemporal(session_id, set, get),
           ui_role,
           diagnostics: [],
+          pending_commit_message: null,
         },
       },
     }));

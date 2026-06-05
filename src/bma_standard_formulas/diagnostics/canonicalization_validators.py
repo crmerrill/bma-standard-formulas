@@ -77,3 +77,20 @@ def detect_rule_fragmentation(deal: dict[str, Any]) -> list[DiagnosticPayload]:
         i = end + 1
 
     return results
+
+
+@diagnostic_code(
+    "STALE_QUICKFIX",
+    severity=Severity.warning,
+    path_schema="deal.waterfall_rules",
+    owner=Owner.both,
+)
+def _stale_quickfix_sentinel(deal: dict[str, Any]) -> list[DiagnosticPayload]:
+    """Sentinel for STALE_QUICKFIX diagnostic.
+
+    Emitted by the ``canonicalizeConsolidateRuleRun`` reducer in TypeScript
+    when a QuickFix range is invalid or stale. This Python decorator exists
+    only to satisfy the vpc-4 same-commit catalog parity guard. Returns an
+    empty list for any input — never produces diagnostics from the worker.
+    """
+    return []

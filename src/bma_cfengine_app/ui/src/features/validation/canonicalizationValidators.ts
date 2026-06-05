@@ -70,3 +70,19 @@ registerDiagnosticValidator({
     return results;
   },
 });
+
+// STALE_QUICKFIX sentinel — emitted by the TS reducer in actions.ts when a
+// canonicalize quick-fix range is invalid or no longer consolidatable. This
+// no-op validator registration exists only to satisfy the vpc-4 catalog parity
+// guard (catalog row has owner=both, which requires both Python @diagnostic_code
+// and a TS registerDiagnosticValidator). Mirrors the Python sentinel pattern in
+// canonicalization_validators.py.
+registerDiagnosticValidator({
+  code: "STALE_QUICKFIX",
+  severity: "warning",
+  pathSchema: "deal.waterfall_rules",
+  owner: "both",
+  fn(): DiagnosticPayload[] {
+    return [];
+  },
+});

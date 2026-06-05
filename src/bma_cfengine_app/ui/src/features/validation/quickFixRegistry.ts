@@ -45,6 +45,11 @@ const _REGISTRY: Record<string, QuickFixDescriptor> = {
       "Two or more bonds share the same name. " +
       "Rename one of the duplicates to make all bond names unique.",
   },
+  canonicalize_consolidate_rule_run: {
+    kind: "dispatch",
+    actionType: "canonicalizeConsolidateRuleRun",
+    description: "Consolidate fragmented rules into a single multi-target rule.",
+  },
 };
 
 /**
