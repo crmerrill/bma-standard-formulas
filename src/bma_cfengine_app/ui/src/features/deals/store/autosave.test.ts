@@ -685,6 +685,24 @@ describe("sds-5 autosave and draft persistence", () => {
     expect(commitBody.message).toBe("autosave");
   });
 
+  test("test_autosave_uses_studio_autosave_author", async () => {
+    await subscribeAutosaveForTests();
+
+    useDealStore.getState().dispatch({
+      type: "addBond",
+      payload: makeBond("AUTHOR_CHECK_BOND"),
+    });
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const commitCalls = getCommitCalls(fetchSpy);
+    expect(commitCalls).toHaveLength(1);
+    const commitBody = JSON.parse(String((commitCalls[0][1] as RequestInit).body)) as {
+      author: string;
+    };
+    expect(commitBody.author).toBe("studio:autosave");
+  });
+
   test("test_autosave_last_write_wins_when_two_actions_within_debounce_window", async () => {
     await subscribeAutosaveForTests();
 

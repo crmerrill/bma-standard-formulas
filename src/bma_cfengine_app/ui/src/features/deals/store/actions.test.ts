@@ -427,6 +427,109 @@ describe("deal actions (sds-1 scaffolding)", () => {
     ).toBe(true);
   });
 
+  test("test_add_bond_after_canonicalize_clears_pending_commit_message", () => {
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("clear_r0", 0, "A0"),
+              makeCanonicalizableRule("clear_r1", 1, "A1"),
+            ],
+          },
+        },
+      },
+    }));
+
+    dispatchCanonicalizeConsolidateRuleRun(0, 1);
+
+    const afterCanon = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(afterCanon.pending_commit_message).not.toBeNull();
+
+    useDealStore.getState().dispatch({ type: "addBond", payload: makeBond("CLEAR_SLOT_BOND") });
+
+    const afterAction = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(afterAction.pending_commit_message).toBeNull();
+  });
+
+  test("test_set_bond_kind_after_canonicalize_clears_pending_commit_message", () => {
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            bonds: [makeBond("KIND_CLEAR_BOND")],
+            waterfall_rules: [
+              makeCanonicalizableRule("kind_r0", 0, "A0"),
+              makeCanonicalizableRule("kind_r1", 1, "A1"),
+            ],
+          },
+        },
+      },
+    }));
+
+    dispatchCanonicalizeConsolidateRuleRun(0, 1);
+
+    const afterCanon = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(afterCanon.pending_commit_message).not.toBeNull();
+
+    useDealStore.getState().dispatch({
+      type: "setBondKind",
+      payload: { bond_id: "KIND_CLEAR_BOND", kind: "PAC" },
+    });
+
+    const afterAction = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(afterAction.pending_commit_message).toBeNull();
+  });
+
+  test("test_set_rule_priority_after_canonicalize_clears_pending_commit_message", () => {
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("prio_r0", 0, "A0"),
+              makeCanonicalizableRule("prio_r1", 1, "A1"),
+            ],
+          },
+        },
+      },
+    }));
+
+    dispatchCanonicalizeConsolidateRuleRun(0, 1);
+
+    const afterCanon = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(afterCanon.pending_commit_message).not.toBeNull();
+
+    useDealStore.getState().dispatch({
+      type: "setRulePriority",
+      payload: { rule_id: "prio_r0", priority: 9 },
+    });
+
+    const afterAction = useDealStore.getState().sessions.main as unknown as {
+      pending_commit_message?: string | null;
+    };
+    expect(afterAction.pending_commit_message).toBeNull();
+  });
+
   test("test_canonicalize_consolidate_rule_run_preserves_surrounding_rules", () => {
     useDealStore.setState((state) => ({
       sessions: {
