@@ -178,7 +178,7 @@ export function subscribeAutosave(store: Store): () => void {
       const commitMessage = currentSession.pending_commit_message ?? "autosave";
 
       const body = {
-        author: "autosave",
+        author: "studio:autosave",
         message: commitMessage,
         parent_sha: currentSession.base_sha,
         branch: currentSession.branch_name,

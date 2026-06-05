@@ -37,6 +37,7 @@ export function applyAction(
           ...state.sessions,
           [sessionId]: {
             ...session,
+            pending_commit_message: null,
             working_tree: {
               ...wt,
               bonds: [...wt.bonds, action.payload],
@@ -51,6 +52,7 @@ export function applyAction(
           ...state.sessions,
           [sessionId]: {
             ...session,
+            pending_commit_message: null,
             working_tree: {
               ...wt,
               bonds: wt.bonds.map((b) =>
@@ -69,6 +71,7 @@ export function applyAction(
           ...state.sessions,
           [sessionId]: {
             ...session,
+            pending_commit_message: null,
             working_tree: {
               ...wt,
               waterfall_rules: wt.waterfall_rules.map((r) =>

@@ -236,7 +236,7 @@ describe("sds-5 autosave and draft persistence", () => {
       payload: DealState;
     };
 
-    expect(commitBody.author).toEqual(expect.any(String));
+    expect(commitBody.author).toBe("studio:autosave");
     expect(commitBody.message).toEqual(expect.any(String));
     expect(commitBody.parent_sha).toBe(BASE_SHA);
     expect(commitBody.branch).toBe("main");
@@ -627,25 +627,27 @@ describe("sds-5 autosave and draft persistence", () => {
   });
 
   test("test_autosave_consumes_pending_commit_message_and_clears_slot", async () => {
+    // Seed two canonicalizable rules so the dispatch succeeds and sets pending_commit_message.
+    useDealStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        main: {
+          ...state.sessions.main,
+          working_tree: {
+            ...state.sessions.main.working_tree,
+            waterfall_rules: [
+              makeCanonicalizableRule("consume_r0", 0, "A0"),
+              makeCanonicalizableRule("consume_r1", 1, "A1"),
+            ],
+          },
+        },
+      },
+    }));
+
     await subscribeAutosaveForTests();
 
-    useDealStore.setState((state) => {
-      const mainWithPending = {
-        ...state.sessions.main,
-        pending_commit_message: "Canonicalize consolidate rule run [2..3]",
-      } as typeof state.sessions.main;
-      return {
-        sessions: {
-          ...state.sessions,
-          main: mainWithPending,
-        },
-      };
-    });
-
-    useDealStore.getState().dispatch({
-      type: "addBond",
-      payload: makeBond("PENDING_MESSAGE_CONSUMED"),
-    });
+    // Dispatch canonicalize — sets pending_commit_message AND triggers the autosave debounce.
+    dispatchCanonicalizeConsolidateRuleRun(0, 1);
 
     await vi.advanceTimersByTimeAsync(2000);
 
@@ -654,7 +656,7 @@ describe("sds-5 autosave and draft persistence", () => {
     const commitBody = JSON.parse(String((commitCalls[0][1] as RequestInit).body)) as {
       message: string;
     };
-    expect(commitBody.message).toBe("Canonicalize consolidate rule run [2..3]");
+    expect(commitBody.message).toBe("Canonicalize consolidate rule run [0..1]");
 
     const mainSession = useDealStore.getState().sessions.main as unknown as {
       pending_commit_message?: string | null;
