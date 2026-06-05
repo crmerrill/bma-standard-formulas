@@ -86,7 +86,10 @@ export function applyAction(
     }
     case "canonicalizeConsolidateRuleRun": {
       const { start_index, end_index } = action.payload;
-      const rules = wt.waterfall_rules;
+      // Sort by order to match the detector's sorted-index view (rcf-2 and the
+      // Python apply helper both sort before slicing; the authored array order
+      // is irrelevant — only the `order` field determines waterfall position).
+      const sorted = [...wt.waterfall_rules].sort((a, b) => a.order - b.order);
 
       const emitStale = (reason: string): Partial<DealStoreState> => ({
         sessions: {
@@ -110,29 +113,29 @@ export function applyAction(
       if (start_index >= end_index) {
         return emitStale("start_index >= end_index");
       }
-      if (start_index < 0 || end_index >= rules.length) {
+      if (start_index < 0 || end_index >= sorted.length) {
         return emitStale("indices out of bounds");
       }
 
       for (let i = start_index; i < end_index; i++) {
-        if (!isConsolidatable(rules[i], rules[i + 1], [])) {
+        if (!isConsolidatable(sorted[i], sorted[i + 1], [])) {
           return emitStale("rules no longer consolidatable");
         }
       }
 
       const consolidatedTargets: string[] = [];
       for (let i = start_index; i <= end_index; i++) {
-        consolidatedTargets.push(...rules[i].to_targets);
+        consolidatedTargets.push(...sorted[i].to_targets);
       }
       const consolidated: RuleNodeIR = {
-        ...rules[start_index],
+        ...sorted[start_index],
         to_targets: consolidatedTargets,
       };
 
       const newRules = [
-        ...rules.slice(0, start_index),
+        ...sorted.slice(0, start_index),
         consolidated,
-        ...rules.slice(end_index + 1),
+        ...sorted.slice(end_index + 1),
       ];
 
       return {
