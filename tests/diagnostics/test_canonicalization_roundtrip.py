@@ -171,6 +171,9 @@ def _assert_cashflow_equivalence(pre_result: Any, post_result: Any) -> None:
     pre_rows = pre_result.bond_cashflows
     post_rows = post_result.bond_cashflows
 
+    assert len(pre_rows) > 0, "Pre-fix run produced empty bond_cashflows"
+    assert len(post_rows) > 0, "Post-fix run produced empty bond_cashflows"
+
     pre_tranches = {row.tranche_id for row in pre_rows}
     post_tranches = {row.tranche_id for row in post_rows}
     assert pre_tranches == post_tranches, (
@@ -322,7 +325,12 @@ def test_apply_consolidation_quickfix_helper_matches_ts_reducer_byte_equivalent(
     assert actual_json == expected_json
 
 
-def test_roundtrip_quantitative_tie_out_governance_unchanged() -> None:
+def test_governance_module_imports_unchanged() -> None:
+    # Smoke-sentinel: confirms the FNR 2006-018 staged tie-out module still exists
+    # and is importable. This test does NOT run or assert tie-out behaviour — the
+    # actual WAL/yield/trustee governance is enforced by CI running both suites
+    # (test_fnr_2006_018_staged_tieout and this module) in the same job. See rcf-5
+    # AC-5 and the rcf-5 R1 review (Finding 2) for rationale.
     fnr_tieout_module = importlib.import_module("tests.test_fnr_2006_018_staged_tieout")
     assert fnr_tieout_module is not None
 
