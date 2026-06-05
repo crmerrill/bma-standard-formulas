@@ -1,9 +1,12 @@
 /**
- * Phase 1 rule fragmentation detector (rcf-2).
+ * Phase 1 rule canonicalization validators (rcf-2, rcf-4).
  *
- * Walks deal.waterfall_rules (sorted by order) and identifies maximal
+ * rcf-2: Walks deal.waterfall_rules (sorted by order) and identifies maximal
  * consecutive runs of length >= 2 where every adjacent pair is consolidatable
  * via the rcf-1 isConsolidatable predicate with an empty intervening set.
+ *
+ * rcf-4: Groups rules by (rule_type, source, payment_style) and flags groups
+ * whose members are interleaved with a source-mutating intervening rule.
  *
  * Mirrors src/bma_standard_formulas/diagnostics/canonicalization_validators.py.
  */
@@ -11,7 +14,7 @@
 import type { RuleNodeIR } from "../deals/ir-types";
 import type { DiagnosticPayload } from "../deals/store/diagnostics-types";
 import { registerDiagnosticValidator } from "./diagnosticRegistry";
-import { isConsolidatable } from "./canonicalizationHelpers";
+import { isConsolidatable, mutatesSource } from "./canonicalizationHelpers";
 
 registerDiagnosticValidator({
   code: "RULE_FRAGMENTATION_CONSOLIDATABLE",
@@ -84,5 +87,71 @@ registerDiagnosticValidator({
   owner: "both",
   fn(): DiagnosticPayload[] {
     return [];
+  },
+});
+
+// rcf-4: interleaved-info detector. Groups rules by (rule_type, source, payment_style)
+// and emits one info-only diagnostic (no fix) per group whose members are interleaved
+// with a rule that mutates the shared source. Mirrors detect_interleaved_rules in Python.
+registerDiagnosticValidator({
+  code: "INTERLEAVED_RULES_FACTORABLE",
+  severity: "info",
+  pathSchema: "deal.waterfall_rules[{indices}]",
+  owner: "both",
+  fn(deal: unknown): DiagnosticPayload[] {
+    const d = deal as Record<string, unknown>;
+    const rawRules = Array.isArray(d.waterfall_rules) ? d.waterfall_rules : [];
+    if (rawRules.length < 2) return [];
+
+    const rulesSorted = [...rawRules].sort(
+      (a: Record<string, unknown>, b: Record<string, unknown>) =>
+        ((a.order as number) ?? 0) - ((b.order as number) ?? 0),
+    ) as RuleNodeIR[];
+
+    // Build groups: composite key of (rule_type, from_sources[0], payment_style)
+    const groups = new Map<string, number[]>();
+    for (let idx = 0; idx < rulesSorted.length; idx++) {
+      const rule = rulesSorted[idx];
+      if (!Array.isArray(rule.from_sources) || rule.from_sources.length === 0) continue;
+      const key = `${rule.rule_type}\x00${rule.from_sources[0]}\x00${rule.payment_style}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(idx);
+    }
+
+    const results: DiagnosticPayload[] = [];
+    for (const [key, indices] of groups) {
+      if (indices.length < 2) continue;
+
+      const minIdx = Math.min(...indices);
+      const maxIdx = Math.max(...indices);
+      const groupSet = new Set(indices);
+      const [rt, src, ps] = key.split("\x00");
+      const sharedGroupId = rulesSorted[indices[0]].group_id ?? null;
+
+      let hasMutator = false;
+      for (let i = minIdx + 1; i < maxIdx; i++) {
+        if (!groupSet.has(i) && mutatesSource(rulesSorted[i], src, sharedGroupId)) {
+          hasMutator = true;
+          break;
+        }
+      }
+      if (!hasMutator) continue;
+
+      const sortedIndices = [...indices].sort((a, b) => a - b);
+      results.push({
+        code: "INTERLEAVED_RULES_FACTORABLE",
+        severity: "info",
+        path: `deal.waterfall_rules[${sortedIndices.join(",")}]`,
+        message: `Rules at ${JSON.stringify(sortedIndices)} share (rule_type, source, payment_style) but are interleaved with a source mutation; manual review recommended.`,
+        payload: {
+          indices: sortedIndices,
+          rule_type: rt,
+          source: src,
+          payment_style: ps,
+        },
+      });
+    }
+
+    return results;
   },
 });

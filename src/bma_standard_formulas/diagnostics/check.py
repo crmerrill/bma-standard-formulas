@@ -160,10 +160,11 @@ def collect_python_diagnostics(src_dirs: list[Path]) -> dict[str, PyDiagnostic]:
 # ---------------------------------------------------------------------------
 
 # Matches the opening brace of a registerDiagnosticValidator({ … }) call.
-# The body is captured non-greedily up to the first closing brace — which is
-# intentionally NOT the function-definition line (``export function …``).
+# The body alternation handles quoted string literals (including pathSchema values
+# that contain curly-brace template placeholders like {indices}) so the capture
+# does not stop prematurely at a } inside a string value.
 _TS_CALL_RE = re.compile(
-    r"registerDiagnosticValidator\s*\(\s*\{(?P<body>[^}]+)\}",
+    r'registerDiagnosticValidator\s*\(\s*\{(?P<body>(?:[^}"\'`]|"[^"]*"|\'[^\']*\'|`[^`]*`)+)\}',
     re.DOTALL,
 )
 _TS_CODE_RE = re.compile(r"""code\s*:\s*["'](?P<v>[A-Z_][A-Z0-9_]*)["']""")
