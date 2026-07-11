@@ -30,7 +30,9 @@ import numpy as np
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
-    from .rate_index import RateIndex
+    from collections.abc import Callable
+
+    from .rates import RateDeck, RateIndex
     from .portfolio import PortfolioCashflow
 
 from bma_standard_formulas.formulas.cashflows import (
@@ -287,7 +289,7 @@ class Loan:
         elif not isinstance(nrd, date):
             nrd = np.datetime64(nrd, 'D').astype('datetime64[D]').item()
 
-        from .rate_index import RateIndex as _RI
+        from .rates import RateIndex as _RI
         index_rates = _RI.get_rate_vector(
             rate_index,
             next_payment_date=fpd,
@@ -671,9 +673,41 @@ def _resolve_curve(
         )
 
 
+def _rate_resolver(
+    loans: list[Loan],
+    rates: "RateIndex | RateDeck | None",
+) -> "Callable[[Loan], RateIndex | None]":
+    """Build the per-loan curve lookup for a portfolio run.
+
+    A RateIndex applies to every floating loan (the single-index case).  A
+    RateDeck routes each loan to the curve named by its ``index_type`` — without
+    which a Prime loan would silently price off whatever curve it was handed.
+
+    Deck coverage is validated once, up front, against the distinct set of
+    indexes the tape references, so a tape missing curves fails with the full
+    list rather than dying on the first bad loan partway through a run.
+    """
+    from .rates import RateDeck, RateDeckError
+
+    if not isinstance(rates, RateDeck):
+        return lambda loan: rates
+
+    if missing := rates.missing_for(loans):
+        detail = ", ".join(
+            f"{name or '<no index_type>'} ({count} loan(s))"
+            for name, count in sorted(missing.items(), key=lambda kv: (kv[0] is None, kv[0]))
+        )
+        raise RateDeckError(
+            f"Rate deck cannot price this portfolio. Missing curves: {detail}. "
+            f"Deck carries: {', '.join(sorted(rates)) or '<empty deck>'}"
+        )
+
+    return lambda loan: None if loan.is_fixed_rate() else rates[loan.index_type]
+
+
 def run_scheduled_portfolio(
     loans: list[Loan],
-    rate_index: RateIndex | None = None,
+    rate_index: "RateIndex | RateDeck | None" = None,
     flush: bool = False,
 ) -> "PortfolioCashflow":
     """Run scheduled cashflows for every loan and return an aggregated portfolio.
@@ -710,9 +744,11 @@ def run_scheduled_portfolio(
     # Lazy import to avoid circular dependency: loan.py → portfolio.py → cashflows.py
     from .portfolio import PortfolioCashflow, PortfolioMode
 
+    resolve = _rate_resolver(loans, rate_index)
+
     portfolio = PortfolioCashflow([], mode=PortfolioMode.SCHEDULED_ONLY)
     for loan in loans:
-        portfolio += scheduled_cashflow_from_loan(loan, rate_index=rate_index)
+        portfolio += scheduled_cashflow_from_loan(loan, rate_index=resolve(loan))
 
     if flush:
         portfolio.flush()
@@ -725,7 +761,7 @@ def run_actual_portfolio(
     smm_curves: np.ndarray | dict[int, np.ndarray],
     mdr_curves: np.ndarray | dict[int, np.ndarray],
     severity_curves: np.ndarray | dict[int, np.ndarray],
-    rate_index: RateIndex | None = None,
+    rate_index: "RateIndex | RateDeck | None" = None,
     severity_lag: int = 12,
     months_to_liquidation: int = 12,
     flush: bool = False,
@@ -782,9 +818,12 @@ def run_actual_portfolio(
 
     from .portfolio import PortfolioCashflow, PortfolioMode
 
+    resolve = _rate_resolver(loans, rate_index)
+
     portfolio = PortfolioCashflow([], mode=PortfolioMode.ACTUAL_ONLY)
     for loan in loans:
-        sch = scheduled_cashflow_from_loan(loan, rate_index=rate_index)
+        loan_rates = resolve(loan)
+        sch = scheduled_cashflow_from_loan(loan, rate_index=loan_rates)
         act = actual_cashflow_from_loan(
             loan=loan,
             scheduled_cf=sch,
@@ -793,7 +832,7 @@ def run_actual_portfolio(
             severity_curve=_resolve_curve(severity_curves, loan.loan_id),
             severity_lag=severity_lag,
             months_to_liquidation=months_to_liquidation,
-            rate_index=rate_index,
+            rate_index=loan_rates,
         )
         portfolio += act
 
@@ -808,7 +847,7 @@ def run_paired_portfolio(
     smm_curves: np.ndarray | dict[int, np.ndarray],
     mdr_curves: np.ndarray | dict[int, np.ndarray],
     severity_curves: np.ndarray | dict[int, np.ndarray],
-    rate_index: RateIndex | None = None,
+    rate_index: "RateIndex | RateDeck | None" = None,
     severity_lag: int = 12,
     months_to_liquidation: int = 12,
     flush: bool = False,
@@ -847,9 +886,12 @@ def run_paired_portfolio(
     from .portfolio import PortfolioCashflow, PortfolioMode
     from bma_standard_formulas.formulas.cashflows import CashFlowPair
 
+    resolve = _rate_resolver(loans, rate_index)
+
     portfolio = PortfolioCashflow([], mode=PortfolioMode.PAIRED)
     for loan in loans:
-        sch = scheduled_cashflow_from_loan(loan, rate_index=rate_index)
+        loan_rates = resolve(loan)
+        sch = scheduled_cashflow_from_loan(loan, rate_index=loan_rates)
         act = actual_cashflow_from_loan(
             loan=loan,
             scheduled_cf=sch,
@@ -858,7 +900,7 @@ def run_paired_portfolio(
             severity_curve=_resolve_curve(severity_curves, loan.loan_id),
             severity_lag=severity_lag,
             months_to_liquidation=months_to_liquidation,
-            rate_index=rate_index,
+            rate_index=loan_rates,
         )
         portfolio += CashFlowPair(scheduled=sch, actual=act)
 
