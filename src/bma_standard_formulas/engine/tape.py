@@ -52,6 +52,11 @@ import pandas as pd
 
 from .loan import Loan
 
+# Shared with the rates module so that a tape's index_type cell and a rate
+# file's column header normalize identically.  rates.py sits below loan.py in
+# the import graph, so this does not cycle.
+from .rates import _normalize_col
+
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -65,27 +70,6 @@ class TapeReadError(ValueError):
     can fix them together.  The first five errors are shown inline; additional
     errors are summarised by count.
     """
-
-
-# ---------------------------------------------------------------------------
-# Column name normalization
-# ---------------------------------------------------------------------------
-
-
-def _normalize_col(name: str) -> str:
-    """Normalize a column label to lowercase snake_case for alias lookup.
-
-    Strips leading/trailing whitespace, converts to lowercase, and replaces
-    spaces, hyphens, and dots with underscores.  This is a module-level utility
-    used by TapeSchema internally.
-
-    Examples::
-
-        "Note Rate"  → "note_rate"
-        "orig-bal"   → "orig_bal"
-        "LOAN.ID"    → "loan_id"
-    """
-    return name.strip().lower().replace(" ", "_").replace("-", "_").replace(".", "_")
 
 
 # ---------------------------------------------------------------------------

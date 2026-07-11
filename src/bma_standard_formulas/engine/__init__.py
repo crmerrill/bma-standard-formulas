@@ -53,8 +53,16 @@ from bma_standard_formulas.engine.tape import (
     loans_to_dataframe,
 )
 
-# Market rate index
-from bma_standard_formulas.engine.rate_index import RateIndex
+# Market rate curves
+from bma_standard_formulas.engine.rates import (
+    RateIndex,
+    RateDeck,
+    RateDeckError,
+    RateDataError,
+    CANONICAL_INDEXES,
+    INDEX_ALIASES,
+    canonicalize_index_name,
+)
 
 # Cashflow persistence
 from bma_standard_formulas.engine.cashflow_persistence import (
@@ -111,8 +119,14 @@ __all__ = [
     "CRT_FILE_LAYOUT_COLUMN_MAP",
     "read_loan_tape",
     "loans_to_dataframe",
-    # Rate index
+    # Rate curves
     "RateIndex",
+    "RateDeck",
+    "RateDeckError",
+    "RateDataError",
+    "CANONICAL_INDEXES",
+    "INDEX_ALIASES",
+    "canonicalize_index_name",
     # Persistence
     "write_cashflow",
     "read_scheduled",
