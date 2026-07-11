@@ -40,7 +40,7 @@ from ..storage import run_store
 from .assumptions_resolver import resolve_portfolio_curves
 from .grouping import compute_group_ids
 from .mapping import apply_mapping, sanitize_field_mappings
-from .rates import build_rate_index_from_file, rates_preflight
+from .rates import build_rate_deck_from_file, rates_preflight
 
 INT_FIELDS = {
     "loan_id", "original_term", "remaining_term",
@@ -602,10 +602,12 @@ def execute_run(
                 groups_by_id.setdefault(gid, []).append(loan)
             group_count = len(groups_by_id)
 
+        # A RateDeck, not a single curve: each loan prices off the curve named by
+        # its index_type. The runners raise if the deck can't cover the tape.
         rate_index = None
         pf = rates_preflight(upload_id)
         if not pf.all_fixed and pf.resolved_mapping:
-            rate_index = build_rate_index_from_file(upload_id, pf.resolved_mapping)
+            rate_index = build_rate_deck_from_file(upload_id, pf.resolved_mapping)
 
         scenario_list = scenario_list_early
 
