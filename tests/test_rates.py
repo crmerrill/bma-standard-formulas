@@ -1,7 +1,8 @@
 """
-Unit tests for RateIndex — construction, factory methods, and rate vector generation.
+Unit tests for RateIndex and RateDeck — construction, factory methods, rate
+vector generation, and per-loan curve routing.
 
-Covers:
+Covers RateIndex:
   - __post_init__ validation (length mismatch, empty, sorting)
   - from_arrays (str dates, date objects, custom format, auto-sort)
   - from_constant (always-available single rate)
@@ -12,15 +13,40 @@ Covers:
     vector length, and the period-0 initialisation path.
   - get_rate_vector with real SOFR data: annual and monthly ARM resets
 
-BMA Reference: engine/rate_index.py
+Covers RateDeck:
+  - shared_dates layout (one date column, N rate columns) and per_index_dates
+    layout (date/rate column pairs, positionally bound, independent date grids)
+  - layout inference, and refusal to guess when ambiguous
+  - canonicalizing lookup (tape "wsj_prime" → file header "WSJ Prime")
+  - per-loan routing in the portfolio runners, and the regression guard for the
+    RateIndex.merge() collapse that put every loan on a single curve
+
+Covers rates-file strictness:
+  - blank cells are gaps (market holidays; short curves in a per_index_dates
+    file) and are dropped
+  - non-blank unparseable cells are corruption and raise RateDataError
+  - a curve with zero observations is rejected rather than sitting in the deck
+    masquerading as coverage
+
+BMA Reference: engine/rates.py
 """
 
+import io
 import unittest
 from datetime import date
 
 import numpy as np
+import pandas as pd
 
-from bma_standard_formulas.engine import RateIndex
+from bma_standard_formulas.engine import (
+    RateDataError,
+    Loan,
+    RateDeck,
+    RateDeckError,
+    RateIndex,
+    run_scheduled_portfolio,
+    scheduled_cashflow_from_loan,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -670,6 +696,260 @@ class TestGetRateVectorSOFR(unittest.TestCase):
         self.assertTrue(np.all(vec <= 5.0))
         # First 12 months should be constant (annual reset)
         self.assertEqual(len(np.unique(vec[:12])), 1)
+
+
+# ---------------------------------------------------------------------------
+# RateDeck — readers
+# ---------------------------------------------------------------------------
+
+SHARED_DATES_CSV = """Date,SOFR,WSJ Prime,Notes
+2024-01-01,5.33,8.50%,sourced from FRED
+2024-02-01,5.31,8.50%,sourced from FRED
+2024-03-01,5.35,8.75%,sourced from FRED
+"""
+
+# Duplicate "Date" headers — pandas mangles these to Date, Date.1. Real paired
+# files look exactly like this, which is why pairing must be positional.
+PER_INDEX_DATES_CSV = """Date,SOFR,Date,PRIME
+2024-01-01,5.33,2024-01-15,8.50
+2024-02-01,5.31,,
+2024-03-01,5.35,,
+"""
+
+
+class TestRateDeckReaders(unittest.TestCase):
+    def test_shared_dates_layout_builds_one_curve_per_index(self):
+        deck = RateDeck.from_frame(pd.read_csv(io.StringIO(SHARED_DATES_CSV)))
+        self.assertEqual(sorted(deck.keys()), ["PRIME", "SOFR"])
+        self.assertEqual(deck["SOFR"].rates, (5.33, 5.31, 5.35))
+
+    def test_shared_dates_layout_strips_percent_suffix(self):
+        deck = RateDeck.from_frame(pd.read_csv(io.StringIO(SHARED_DATES_CSV)))
+        self.assertEqual(deck["PRIME"].rates, (8.50, 8.50, 8.75))
+
+    def test_shared_dates_layout_ignores_unrecognized_columns(self):
+        """Rates files carry notes/source columns. Same convention as TapeSchema."""
+        deck = RateDeck.from_frame(pd.read_csv(io.StringIO(SHARED_DATES_CSV)))
+        self.assertNotIn("NOTES", deck)
+        self.assertEqual(len(deck), 2)
+
+    def test_per_index_dates_layout_pairs_positionally_despite_mangled_headers(self):
+        df = pd.read_csv(io.StringIO(PER_INDEX_DATES_CSV))
+        self.assertEqual(list(df.columns), ["Date", "SOFR", "Date.1", "PRIME"])
+        deck = RateDeck.from_frame(df)
+        self.assertEqual(sorted(deck.keys()), ["PRIME", "SOFR"])
+
+    def test_per_index_dates_layout_preserves_independent_date_grids(self):
+        """Each curve keeps its own dates — no shared grid, no padding to match."""
+        deck = RateDeck.from_frame(pd.read_csv(io.StringIO(PER_INDEX_DATES_CSV)))
+        self.assertEqual(len(deck["SOFR"]), 3)
+        self.assertEqual(len(deck["PRIME"]), 1)          # ragged: blanks dropped
+        self.assertEqual(deck["PRIME"].dates, (date(2024, 1, 15),))
+        self.assertEqual(deck["SOFR"].dates[0], date(2024, 1, 1))
+
+    def test_lookup_canonicalizes(self):
+        """The tape says 'wsj_prime'; the file header said 'WSJ Prime'."""
+        deck = RateDeck.from_frame(pd.read_csv(io.StringIO(SHARED_DATES_CSV)))
+        self.assertIs(deck["wsj_prime"], deck["PRIME"])
+        self.assertIs(deck["sofr"], deck["SOFR"])
+
+    def test_ambiguous_layout_raises_rather_than_guessing(self):
+        df = pd.DataFrame(
+            {"Date": [1], "SOFR": [1.0], "Date.1": [1], "PRIME": [1.0], "extra": [1]}
+        )
+        with self.assertRaises(RateDeckError) as cm:
+            RateDeck.from_frame(df)
+        self.assertIn("Ambiguous", str(cm.exception))
+
+    def test_explicit_layout_overrides_inference(self):
+        df = pd.read_csv(io.StringIO(PER_INDEX_DATES_CSV))
+        deck = RateDeck.from_frame(df, layout="per_index_dates")
+        self.assertEqual(len(deck), 2)
+
+    def test_no_date_column_raises(self):
+        with self.assertRaises(RateDeckError):
+            RateDeck.from_frame(pd.DataFrame({"SOFR": [5.0], "PRIME": [8.0]}))
+
+    def test_duplicate_canonical_names_raise(self):
+        df = pd.DataFrame({"Date": ["2024-01-01"], "SOFR": [5.0], "sofr": [5.1]})
+        with self.assertRaises(RateDeckError):
+            RateDeck.from_frame(df)
+
+    def test_deck_of_none_index_type_raises(self):
+        deck = RateDeck.from_curves({"SOFR": RateIndex.from_constant(5.0)})
+        with self.assertRaises(RateDeckError):
+            deck[None]
+
+    def test_unknown_index_raises_listing_what_the_deck_has(self):
+        deck = RateDeck.from_curves({"SOFR": RateIndex.from_constant(5.0)})
+        with self.assertRaises(RateDeckError) as cm:
+            deck["CMT1Y"]
+        self.assertIn("SOFR", str(cm.exception))
+
+
+# ---------------------------------------------------------------------------
+# RateDeck — per-loan routing
+#
+# Regression guard for the bug where build_rate_index_from_file merged every
+# index into one RateIndex via RateIndex.merge().  merge() keys on date, so
+# curves sharing a date grid collapsed to whichever was merged last, and every
+# loan then priced off that single surviving curve.
+# ---------------------------------------------------------------------------
+
+def _arm(loan_id: int, index_type: str | None) -> Loan:
+    """A 3y annual-reset ARM with a 2% margin."""
+    return Loan(
+        loan_id=loan_id,
+        origination_date=date(2024, 1, 1),
+        asof_date=date(2024, 1, 1),
+        original_balance=300_000.0,
+        current_balance=300_000.0,
+        rate_margin=2.0,
+        original_term=36,
+        remaining_term=36,
+        reset_frequency=12,
+        index_type=index_type,
+        first_payment_date=date(2024, 1, 1),
+        next_reset_date=date(2024, 1, 1),
+    )
+
+
+class TestRateDeckRouting(unittest.TestCase):
+    def setUp(self):
+        self.deck = RateDeck.from_curves({
+            "SOFR": RateIndex.from_constant(5.0, name="SOFR"),
+            "PRIME": RateIndex.from_constant(8.0, name="PRIME"),
+        })
+        self.sofr_loan = _arm(1, "SOFR")
+        self.prime_loan = _arm(2, "wsj_prime")     # alias — resolves to PRIME
+
+    def test_each_loan_prices_off_its_own_curve(self):
+        portfolio = run_scheduled_portfolio(
+            [self.sofr_loan, self.prime_loan], self.deck
+        )
+
+        expected = (
+            scheduled_cashflow_from_loan(self.sofr_loan, rate_index=self.deck["SOFR"]).interest_billed
+            + scheduled_cashflow_from_loan(self.prime_loan, rate_index=self.deck["PRIME"]).interest_billed
+        )
+        np.testing.assert_allclose(portfolio.scheduled.interest_billed, expected, atol=1e-9)
+
+    def test_loans_do_not_all_collapse_onto_one_curve(self):
+        """The precise failure mode of the old merge(): every loan on the last curve."""
+        portfolio = run_scheduled_portfolio(
+            [self.sofr_loan, self.prime_loan], self.deck
+        )
+
+        both_on_prime = (
+            scheduled_cashflow_from_loan(self.sofr_loan, rate_index=self.deck["PRIME"]).interest_billed
+            + scheduled_cashflow_from_loan(self.prime_loan, rate_index=self.deck["PRIME"]).interest_billed
+        )
+        # 7% coupon vs 10% on a 300k loan — the difference is not a rounding artifact.
+        self.assertGreater(
+            np.abs(portfolio.scheduled.interest_billed - both_on_prime).sum(), 1000.0
+        )
+
+    def test_missing_curve_fails_up_front_listing_every_gap(self):
+        loans = [self.sofr_loan, _arm(3, "CMT1Y"), _arm(4, "CMT1Y"), _arm(5, "CODI")]
+        with self.assertRaises(RateDeckError) as cm:
+            run_scheduled_portfolio(loans, self.deck)
+        msg = str(cm.exception)
+        self.assertIn("CMT1Y (2 loan(s))", msg)
+        self.assertIn("CODI (1 loan(s))", msg)      # reported together, not one at a time
+
+    def test_floating_loan_with_no_index_type_is_reported(self):
+        orphan = _arm(6, None)
+        with self.assertRaises(RateDeckError) as cm:
+            run_scheduled_portfolio([orphan], self.deck)
+        self.assertIn("no index_type", str(cm.exception))
+
+    def test_fixed_rate_loans_need_no_curve(self):
+        fixed = _arm(7, None)
+        fixed.reset_frequency = 0                    # fixed → never hits the deck
+        portfolio = run_scheduled_portfolio([fixed], self.deck)
+        self.assertEqual(len(portfolio.scheduled.interest_billed), 37)
+
+    def test_missing_for_is_empty_when_deck_covers_the_tape(self):
+        self.assertEqual(self.deck.missing_for([self.sofr_loan, self.prime_loan]), {})
+
+    def test_bare_rate_index_still_applies_to_every_loan(self):
+        """Back-compat: the single-index API is unchanged."""
+        curve = RateIndex.from_constant(5.0)
+        portfolio = run_scheduled_portfolio([self.sofr_loan, self.prime_loan], curve)
+
+        expected = (
+            scheduled_cashflow_from_loan(self.sofr_loan, rate_index=curve).interest_billed
+            + scheduled_cashflow_from_loan(self.prime_loan, rate_index=curve).interest_billed
+        )
+        np.testing.assert_allclose(portfolio.scheduled.interest_billed, expected, atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Blank vs corrupt — the two are different things
+#
+# The real SOFR_historical.csv fixture carries 90 NaN rates. They are US market
+# holidays (Memorial Day, July 4, Labor Day, Thanksgiving, Christmas — 51 of the
+# 90 fall on a Monday). No SOFR is published on a holiday, so a blank is an
+# expected gap in the observation calendar, not corruption.
+# ---------------------------------------------------------------------------
+
+class TestBlankVersusCorrupt(unittest.TestCase):
+
+    def test_blank_cells_are_dropped_as_gaps(self):
+        df = pd.read_csv(io.StringIO(
+            "Date,SOFR\n2024-01-01,5.33\n2024-01-02,\n2024-01-03,5.35\n"
+        ))
+        idx = RateIndex.from_frame(df, "Date", "SOFR")
+        self.assertEqual(idx.rates, (5.33, 5.35))
+        self.assertEqual(idx.dates, (date(2024, 1, 1), date(2024, 1, 3)))
+
+    def test_real_sofr_fixture_holidays_are_gaps_not_errors(self):
+        """The 90 holiday NaNs must read cleanly, not raise."""
+        df = pd.read_csv("tests/fixtures/SOFR_historical.csv")
+        self.assertEqual(int(df["rate"].isna().sum()), 90)
+
+        idx = RateIndex.from_frame(df, "date", "rate", name="SOFR")
+        self.assertEqual(len(idx), len(df) - 90)
+        self.assertTrue(all(np.isfinite(idx.rates)))
+
+    def test_non_blank_junk_raises_rather_than_vanishing(self):
+        df = pd.read_csv(io.StringIO(
+            "Date,SOFR\n2024-01-01,5.33\n2024-01-02,5.2x\n2024-01-03,5.35\n"
+        ))
+        with self.assertRaises(RateDataError) as cm:
+            RateIndex.from_frame(df, "Date", "SOFR", name="SOFR")
+        msg = str(cm.exception)
+        self.assertIn("5.2x", msg)
+        self.assertIn("SOFR", msg)
+
+    def test_european_decimal_column_raises_instead_of_emptying(self):
+        """The old coerce silently produced a zero-observation curve."""
+        df = pd.read_csv(io.StringIO(
+            'Date,SOFR\n2024-01-01,"5,33"\n2024-02-01,"5,31"\n'
+        ))
+        with self.assertRaises(RateDataError):
+            RateIndex.from_frame(df, "Date", "SOFR")
+
+    def test_unparseable_date_raises(self):
+        df = pd.read_csv(io.StringIO(
+            "Date,SOFR\n2024-01-01,5.33\nnot-a-date,5.31\n"
+        ))
+        with self.assertRaises(RateDataError):
+            RateIndex.from_frame(df, "Date", "SOFR")
+
+    def test_empty_curve_is_rejected_from_the_deck(self):
+        """An all-blank column must not sit in the deck pretending to be coverage."""
+        empty = RateIndex(dates=(), rates=(), name="SOFR")
+        with self.assertRaises(RateDeckError) as cm:
+            RateDeck.from_curves({"SOFR": empty})
+        self.assertIn("zero observations", str(cm.exception))
+
+    def test_all_blank_column_in_a_file_is_rejected(self):
+        df = pd.read_csv(io.StringIO(
+            "Date,SOFR,PRIME\n2024-01-01,5.33,\n2024-02-01,5.31,\n"
+        ))
+        with self.assertRaises(RateDeckError):
+            RateDeck.from_frame(df)
 
 
 if __name__ == "__main__":
