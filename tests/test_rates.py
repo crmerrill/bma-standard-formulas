@@ -462,7 +462,13 @@ class TestMerge(unittest.TestCase):
         self.assertEqual(merged.dates[-1], date(2024, 6, 1))
 
     def test_later_argument_wins_on_overlap(self):
-        """When dates overlap, the later argument's rate takes precedence."""
+        """When dates overlap, the later argument's rate takes precedence.
+
+        These two inputs overlap completely, which merge() now rejects by default
+        (it would discard one of them wholesale — the collapse that put every loan
+        on a single curve). Opting in is what makes the precedence rule reachable,
+        and the precedence rule is what this test pins.
+        """
         hist = RateIndex.from_arrays(
             dates=["2024-01-01"],
             rates=[5.0],
@@ -471,7 +477,7 @@ class TestMerge(unittest.TestCase):
             dates=["2024-01-01"],   # same date, different rate
             rates=[4.80],
         )
-        merged = RateIndex.merge(hist, fwd)
+        merged = RateIndex.merge(hist, fwd, allow_overlap=True)
         self.assertEqual(len(merged), 1)
         self.assertAlmostEqual(merged.rates[0], 4.80,
                                msg="Forward (fwd) rate should override historical")
@@ -936,6 +942,45 @@ class TestBlankVersusCorrupt(unittest.TestCase):
         ))
         with self.assertRaises(RateDataError):
             RateIndex.from_frame(df, "Date", "SOFR")
+
+    def test_merging_indexes_on_a_shared_grid_is_refused(self):
+        """The original bug, now unreachable.
+
+        merge() keys on date. SOFR and PRIME on the same date grid collapse to
+        whichever came last — exactly what build_rate_index_from_file did.
+        """
+        dates = ["2024-01-01", "2024-02-01", "2024-03-01"]
+        sofr = RateIndex.from_arrays(dates=dates, rates=[5.3, 5.2, 5.1], name="SOFR")
+        prime = RateIndex.from_arrays(dates=dates, rates=[8.5, 8.5, 8.75], name="PRIME")
+
+        with self.assertRaises(ValueError) as cm:
+            RateIndex.merge(sofr, prime, name="merged")
+        msg = str(cm.exception)
+        self.assertIn("RateDeck", msg)
+        self.assertIn("100%", msg)
+
+    def test_history_forward_splice_still_works(self):
+        """The legitimate use — near-disjoint vintages of ONE index.
+
+        Note the two carry different names ("SOFR" / "SOFR3M_FWD"), which is why
+        the guard keys on date overlap rather than on naming.
+        """
+        hist = RateIndex.from_arrays(
+            dates=["2024-01-01", "2024-02-01"], rates=[5.3, 5.2], name="SOFR"
+        )
+        fwd = RateIndex.from_arrays(
+            dates=["2024-02-01", "2024-03-01"], rates=[5.25, 5.1], name="SOFR3M_FWD"
+        )
+        merged = RateIndex.merge(hist, fwd, name="SOFR")
+        self.assertEqual(len(merged), 3)
+        self.assertEqual(merged.rates, (5.3, 5.25, 5.1))   # forward wins at the seam
+
+    def test_deliberate_restatement_can_opt_in(self):
+        dates = ["2024-01-01", "2024-02-01"]
+        orig = RateIndex.from_arrays(dates=dates, rates=[5.3, 5.2], name="SOFR")
+        fixed = RateIndex.from_arrays(dates=dates, rates=[5.31, 5.21], name="SOFR")
+        merged = RateIndex.merge(orig, fixed, name="SOFR", allow_overlap=True)
+        self.assertEqual(merged.rates, (5.31, 5.21))
 
     def test_empty_curve_is_rejected_from_the_deck(self):
         """An all-blank column must not sit in the deck pretending to be coverage."""

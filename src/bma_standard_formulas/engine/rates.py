@@ -84,6 +84,37 @@ def _reject_unparseable(
     )
 
 
+#: A history/forward splice meets at a seam, so its inputs barely overlap. Two
+#: curves on a shared date grid overlap completely. Half is comfortably clear of
+#: the former and catches the latter.
+MAX_MERGE_OVERLAP = 0.5
+
+
+def _reject_collapsing_overlap(indexes: tuple["RateIndex", ...]) -> None:
+    """Raise if merging these inputs would discard most of one of them."""
+    for i, a in enumerate(indexes):
+        for b in indexes[i + 1:]:
+            if not a.dates or not b.dates:
+                continue
+            shared = set(a.dates) & set(b.dates)
+            smaller = min(len(a.dates), len(b.dates))
+            if len(shared) / smaller <= MAX_MERGE_OVERLAP:
+                continue
+            raise ValueError(
+                f"RateIndex.merge() would discard data: {a.name or '<unnamed>'} "
+                f"({len(a)} obs) and {b.name or '<unnamed>'} ({len(b)} obs) share "
+                f"{len(shared)} date(s) — {len(shared) / smaller:.0%} of the smaller "
+                f"series. merge() keys on date, so the later argument overwrites the "
+                f"earlier one wherever they coincide.\n"
+                f"  • To hold several indexes (SOFR, PRIME, ...), use RateDeck — "
+                f"merging them collapses every curve into the last one.\n"
+                f"  • To splice one index's history onto its forward curve, the two "
+                f"should barely overlap; check you passed the right files.\n"
+                f"  • To restate a series with corrected values on purpose, pass "
+                f"allow_overlap=True."
+            )
+
+
 @dataclass(frozen=True)
 class RateIndex:
     """Immutable time series of interest rates indexed by date.
@@ -407,20 +438,40 @@ class RateIndex:
         )
 
     @classmethod
-    def merge(cls, *indexes: RateIndex, name: str | None = None) -> RateIndex:
-        """Merge multiple RateIndex objects into one, sorted by date.
+    def merge(
+        cls,
+        *indexes: RateIndex,
+        name: str | None = None,
+        allow_overlap: bool = False,
+    ) -> RateIndex:
+        """Splice one index's vintages into a single curve, sorted by date.
 
-        Combines dates and rates from all inputs.  When the same date appears
-        in more than one source, the **later argument wins** — so pass the
-        historical series first and the forward curve second to let forward
-        projections override any overlap at the splice point.
+        This is for stitching **one** index's history onto its own forward curve.
+        It is *not* a container for several indexes — that is RateDeck.
+
+        Combines dates and rates from all inputs.  When the same date appears in
+        more than one source, the **later argument wins** — so pass the historical
+        series first and the forward curve second to let forward projections
+        override any overlap at the splice point.
+
+        Because it keys on date, merging inputs that share a date grid discards
+        all but the last.  Substantially-overlapping inputs are therefore rejected
+        (see ``allow_overlap``).
 
         Args:
-            *indexes:  One or more RateIndex objects to combine.
-            name:      Optional label for the merged index.
+            *indexes:       One or more RateIndex objects to combine.
+            name:           Optional label for the merged index.
+            allow_overlap:  Permit inputs whose dates substantially overlap,
+                            accepting that later arguments overwrite earlier ones.
+                            Use when deliberately restating a series with corrected
+                            values.
 
         Returns:
             A new RateIndex spanning the union of all input date ranges.
+
+        Raises:
+            ValueError: If inputs substantially overlap and ``allow_overlap`` is
+                False — the merged result would silently discard data.
 
         Example::
 
@@ -428,6 +479,17 @@ class RateIndex:
             fwd  = RateIndex.from_csv("SOFR_fwd.csv", date_col="ResetDate", rate_col="Rate")
             sofr = RateIndex.merge(hist, fwd, name="SOFR")
         """
+        # merge() keys on date, so wherever two inputs carry the same date the
+        # later one wins and the earlier is discarded. A history/forward splice is
+        # near-disjoint (the two meet at a seam), so it loses nothing. Two curves
+        # sharing a date grid, though, collapse to whichever came last — which is
+        # what build_rate_index_from_file did, leaving every loan priced off the
+        # single survivor. Overlap, not naming, is what separates the two: the
+        # legitimate splice routinely has differently-named vintages ("SOFR_HIST"
+        # and "SOFR_FWD").
+        if not allow_overlap and len(indexes) > 1:
+            _reject_collapsing_overlap(indexes)
+
         combined: dict[date, float] = {}
         for idx in indexes:
             for d, r in zip(idx.dates, idx.rates):
